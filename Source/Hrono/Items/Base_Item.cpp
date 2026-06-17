@@ -40,37 +40,33 @@ void ABase_Item::UpdateMeshForLocalPlayer()
 
 	EItemTimeline TargetTimeline = Character->GetTimeline();
 
-	// FIX: Only switch static meshes if the player's timeline state actually shifted!
+	// Only switch when the local player's timeline actually changed.
 	if (CurrentCachedTimeline == TargetTimeline)
 	{
 		return;
 	}
 
-	if (TargetTimeline == EItemTimeline::Past)
-	{
-		ItemMesh->SetStaticMesh(PastMesh);
-		UpdateVisibilityForLocalPlayer(TargetTimeline);
-	}
-	else
-	{
-		ItemMesh->SetStaticMesh(FutureMesh);
-		UpdateVisibilityForLocalPlayer(TargetTimeline);
-	}
-
-	
-
+	// IMPORTANT: Do NOT swap the collision mesh here. This runs on the server too,
+	// and swapping ItemMesh (especially to a null FutureMesh/PastMesh) rebuilds and
+	// destroys the authoritative collision geometry, letting players walk through.
+	// The mesh is assigned once in BeginPlay based on this item's own timeline.
+	// Here we only update LOCAL visibility.
+	UpdateVisibilityForLocalPlayer(TargetTimeline);
 
 	CurrentCachedTimeline = TargetTimeline;
 }
 
 void ABase_Item::UpdateVisibilityForLocalPlayer(EItemTimeline ViewerTimeline)
 {
-
+	// Cosmetic, LOCAL-only hiding for the "other timeline" item.
+	// Uses component visibility (NOT SetActorHiddenInGame, which replicates bHidden
+	// and would wrongly hide the item on other machines). Collision is untouched and
+	// stays server-authoritative via collision channels.
 	const bool bShouldBeVisible = (ItemTimeline == EItemTimeline::Both || ItemTimeline == ViewerTimeline);
-	SetActorHiddenInGame(!bShouldBeVisible);
-	if (!bShouldBeVisible)
+
+	if (USceneComponent* Root = GetRootComponent())
 	{
-		SetActorEnableCollision(false);
+		Root->SetVisibility(bShouldBeVisible, /*bPropagateToChildren=*/true);
 	}
 }
 
@@ -220,7 +216,19 @@ void ABase_Item::DetachFromCharacter()
 void ABase_Item::BeginPlay()
 {
 	Super::BeginPlay();
-	
+
+	// Assign the collision/visual mesh ONCE based on this item's OWN timeline.
+	// This keeps the collision geometry stable and identical on the server and all
+	// clients, which is required for correct server-authoritative movement.
+	// It must never be swapped per-viewer (see UpdateMeshForLocalPlayer).
+	if (ItemTimeline == EItemTimeline::Future && FutureMesh)
+	{
+		ItemMesh->SetStaticMesh(FutureMesh);
+	}
+	else if (ItemTimeline == EItemTimeline::Past && PastMesh)
+	{
+		ItemMesh->SetStaticMesh(PastMesh);
+	}
 }
 
 // Called every frame

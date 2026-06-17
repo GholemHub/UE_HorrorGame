@@ -55,8 +55,4 @@ public:
 	float RotationSpeed = 4.f;
 
 	bool bIsOpen = false;
-
-protected:
-	// Чи знає вже сервер, що ці двері треба ігнорувати для нас?
-	bool bServerCollisionIgnored = false;
 };

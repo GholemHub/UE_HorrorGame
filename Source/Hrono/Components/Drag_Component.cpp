@@ -101,31 +101,24 @@ void UDrag_Component::XDrag()
 		0.f
 	);
 
-	AHronoCharacter* HronoChar = Cast<AHronoCharacter>(PlayerPawn);
-
-	// Якщо рух блокується гравцем (твоя перевірка Overlap)
 	bool bOverlappingPlayer = Door->ItemMesh->IsOverlappingActor(PlayerPawn);
 	if (bOverlappingPlayer)
 	{
-		NewRotation = OldRotation; // скасовуємо рух
+		NewRotation = OldRotation;
 	}
 
-	// Застосовуємо локально для миттєвого відгуку (Prediction)
+	// Apply rotation locally for immediate feedback (prediction)
 	Door->ItemMesh->SetRelativeRotation(NewRotation);
 	Door->DoorRotation = NewRotation;
 
-	// --- НОВИЙ КОД ДИНАМІЧНОЇ КОЛІЗІЇ ---
-	if (HronoChar && !HronoChar->HasAuthority())
+	// Send the new rotation to the server so it updates the authoritative collision
+	// body and replicates it to every other client. The door is a level actor and
+	// cannot receive client RPCs directly, so we route through the owning character.
+	if (AHronoCharacter* Character = Cast<AHronoCharacter>(RotatingController->GetPawn()))
 	{
-		// Якщо Yaw менше -5.0, вважаємо, що двері прочинені і крізь них можна йти.
-		// Якщо Yaw від 0 до -5.0, вважаємо двері закритими (треба блокувати).
-		bool bShouldIgnoreOnServer = (NewRotation.Yaw < -45.f);
-
-		// Відправляємо RPC тільки тоді, коли стан реально змінився (захист від спаму)
-		if (bServerCollisionIgnored != bShouldIgnoreOnServer)
+		if (!Character->HasAuthority())
 		{
-			bServerCollisionIgnored = bShouldIgnoreOnServer;
-			HronoChar->Server_SetDoorCollisionIgnored(Door, bShouldIgnoreOnServer);
+			Character->Server_SetDoorRotation(Door, NewRotation);
 		}
 	}
 }

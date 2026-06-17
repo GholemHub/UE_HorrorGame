@@ -4,6 +4,7 @@
 #include "GameFramework/Character.h"
 #include "Logging/LogMacros.h"
 #include "HronoSharedTools.h"
+#include "HronoCollisionChannels.h"
 #include "Components/InventoryComponent.h"
 
 #include "HronoCharacter.generated.h"
@@ -104,7 +105,7 @@ protected:
 	UFUNCTION(BlueprintCallable, Category="Input")
 	virtual void DoJumpEnd();
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Replicated, Category = "Timeline")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, ReplicatedUsing = OnRep_CharacterTimeline, Category = "Timeline")
 	EItemTimeline CharacterTimeline = EItemTimeline::Past;
 
 	UPROPERTY(EditAnywhere, Category = "Input", meta = (ClampMin = 0, Units = "cm"))
@@ -155,10 +156,12 @@ protected:
 	void ServerDropCurrentItem();
 
 public:
-	
-	// RPC для динамічної зміни колізії дверей per-player
-	UFUNCTION(Server, Reliable)
-	void Server_SetDoorCollisionIgnored(ADrag_Item* Door, bool bIgnore);
+	/** Server-authoritative door rotation. Routed through the Character because the
+	 *  door is a level actor not owned by the client and cannot receive client RPCs directly.
+	 *  Unreliable: this streams during a drag like movement input. */
+	UFUNCTION(Server, Unreliable)
+	void Server_SetDoorRotation(ADrag_Item* Door, FRotator NewRotation);
+
 	/** Returns the first person mesh **/
 	USkeletalMeshComponent* GetFirstPersonMesh() const { return FirstPersonMesh; }
 

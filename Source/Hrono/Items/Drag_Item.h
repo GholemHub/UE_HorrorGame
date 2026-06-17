@@ -19,6 +19,7 @@ public:
 	// Sets default values for this actor's properties
 	ADrag_Item();
 
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Components")
 	UStaticMeshComponent* FrameMesh;
@@ -39,7 +40,13 @@ public:
 	// Called every frame
 	virtual void Tick(float DeltaTime) override;
 
-	UPROPERTY()
+	/** Server-authoritative door panel rotation. Replicated so every machine
+	 *  (especially the server that validates movement) keeps the door's collision
+	 *  geometry in the same open/closed state as the player who opened it. */
+	UPROPERTY(ReplicatedUsing = OnRep_DoorRotation)
 	FRotator DoorRotation;
+
+	UFUNCTION()
+	void OnRep_DoorRotation();
 
 };

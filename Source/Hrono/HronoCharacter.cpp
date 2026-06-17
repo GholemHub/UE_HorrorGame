@@ -1,6 +1,7 @@
 ﻿// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "HronoCharacter.h"
+#include "HronoCollisionChannels.h"
 #include "Animation/AnimInstance.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
@@ -75,15 +76,15 @@ void AHronoCharacter::ApplyTimelineCollision()
 {
 	if (CharacterTimeline == EItemTimeline::Past)
 	{
-		GetCapsuleComponent()->SetCollisionObjectType(ECC_GameTraceChannel1);
-		GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_GameTraceChannel3, ECR_Block);
-		GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_GameTraceChannel4, ECR_Ignore);
+		GetCapsuleComponent()->SetCollisionObjectType(COLLISION_CHANNEL_PAWN_PAST);
+		GetCapsuleComponent()->SetCollisionResponseToChannel(COLLISION_CHANNEL_DOOR_PAST, ECR_Block);
+		GetCapsuleComponent()->SetCollisionResponseToChannel(COLLISION_CHANNEL_DOOR_FUTURE, ECR_Ignore);
 	}
 	else
 	{
-		GetCapsuleComponent()->SetCollisionObjectType(ECC_GameTraceChannel2);
-		GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_GameTraceChannel4, ECR_Block);
-		GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_GameTraceChannel3, ECR_Ignore);
+		GetCapsuleComponent()->SetCollisionObjectType(COLLISION_CHANNEL_PAWN_FUTURE);
+		GetCapsuleComponent()->SetCollisionResponseToChannel(COLLISION_CHANNEL_DOOR_FUTURE, ECR_Block);
+		GetCapsuleComponent()->SetCollisionResponseToChannel(COLLISION_CHANNEL_DOOR_PAST, ECR_Ignore);
 	}
 }
 
@@ -127,48 +128,27 @@ void AHronoCharacter::BeginPlay()
 {
 	Super::BeginPlay();
 
-	// Set timeline based on server/client authority
+	// Server assigns timeline: its own local player = Future, remote players = Past.
+	// On a dedicated server (no local player), all characters default to Past
+	// unless overridden by GameMode logic.
 	if (HasAuthority())
 	{
-		CharacterTimeline = EItemTimeline::Future;
-	}
-	else
-	{
-		CharacterTimeline = EItemTimeline::Past;
-	}
-
-	// AHronoCharacter::BeginPlay, right after your existing timeline/capsule setup
-	if (CharacterTimeline == EItemTimeline::Past)
-	{
-		GetCapsuleComponent()->SetCollisionObjectType(ECC_GameTraceChannel1);
-		GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_GameTraceChannel3, ECR_Block);
-		GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_GameTraceChannel4, ECR_Ignore);
-	}
-	else
-	{
-		GetCapsuleComponent()->SetCollisionObjectType(ECC_GameTraceChannel2);
-		GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_GameTraceChannel4, ECR_Block);
-		GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_GameTraceChannel3, ECR_Ignore);
+		if (IsLocallyControlled())
+		{
+			CharacterTimeline = EItemTimeline::Future;
+		}
+		else
+		{
+			CharacterTimeline = EItemTimeline::Past;
+		}
 	}
 
-	const FString Role1 = HasAuthority() ? TEXT("SERVER") : TEXT("CLIENT");
-	UE_LOG(LogTemp, Warning,
-		TEXT("[PawnCollision][%s] %s | LocallyControlled=%s | Timeline=%s | ObjType=%d | RespVsItemPast=%d | RespVsItemFuture=%d"),
-		*Role1, *GetName(), IsLocallyControlled() ? TEXT("true") : TEXT("false"),
-		*UEnum::GetValueAsString(CharacterTimeline),
-		(int32)GetCapsuleComponent()->GetCollisionObjectType(),
-		(int32)GetCapsuleComponent()->GetCollisionResponseToChannel(ECC_GameTraceChannel3),
-		(int32)GetCapsuleComponent()->GetCollisionResponseToChannel(ECC_GameTraceChannel4));
+	// Apply collision channels based on assigned timeline.
+	// This runs on both server and client to ensure server-side movement
+	// validation uses the correct collision filtering.
+	ApplyTimelineCollision();
 }
 
-void AHronoCharacter::Server_SetDoorCollisionIgnored_Implementation(ADrag_Item* Door, bool bIgnore)
-{
-	if (Door && GetCapsuleComponent())
-	{
-		// Сервер вмикає або вимикає колізію дверей індивідуально для цього гравця
-		GetCapsuleComponent()->IgnoreActorWhenMoving(Door, bIgnore);
-	}
-}
 void AHronoCharacter::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
@@ -356,6 +336,17 @@ void AHronoCharacter::DoUnDrag()
 
 	CurrentDraggedComponent->StopDrag();
 	CurrentDraggedComponent = nullptr;
+}
+
+void AHronoCharacter::Server_SetDoorRotation_Implementation(ADrag_Item* Door, FRotator NewRotation)
+{
+	if (!Door || !Door->ItemMesh) return;
+
+	// Server is authoritative: apply the rotation to the door's collision body so the
+	// movement validation sees the same open/closed state as the requesting client,
+	// then replicate it (DoorRotation -> OnRep_DoorRotation) to every other machine.
+	Door->ItemMesh->SetRelativeRotation(NewRotation);
+	Door->DoorRotation = NewRotation;
 }
 
 void AHronoCharacter::ServerDropCurrentItem_Implementation()

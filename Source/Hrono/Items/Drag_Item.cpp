@@ -3,6 +3,7 @@
 
 #include "Items/Drag_Item.h"
 #include "Components/Drag_Component.h"
+#include "HronoCollisionChannels.h"
 #include "Net/UnrealNetwork.h"
 
 
@@ -10,18 +11,40 @@
 // Sets default values
 ADrag_Item::ADrag_Item()
 {
- 	// Set this actor to call Tick() every frame.  You can turn this off to improve performance if you don't need it.
+	// Set this actor to call Tick() every frame.  You can turn this off to improve performance if you don't need it.
 	PrimaryActorTick.bCanEverTick = true;
-    bReplicates = false;
+	bReplicates = true; // Door open/closed state must replicate so server collision matches clients
 
 	FrameMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("FrameMesh"));
 	RootComponent = FrameMesh;
 
-   
-    ItemMesh->SetupAttachment(FrameMesh);
+
+	ItemMesh->SetupAttachment(FrameMesh);
 
 	DragComponent = CreateDefaultSubobject<UDrag_Component>(TEXT("DragComponent"));
 
+}
+
+void ADrag_Item::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+
+	DOREPLIFETIME(ADrag_Item, DoorRotation);
+}
+
+void ADrag_Item::OnRep_DoorRotation()
+{
+	// The client that is actively dragging trusts its own local prediction; every
+	// other machine (and the server visuals) applies the replicated authoritative value.
+	if (DragComponent && DragComponent->bIsRotating)
+	{
+		return;
+	}
+
+	if (ItemMesh)
+	{
+		ItemMesh->SetRelativeRotation(DoorRotation);
+	}
 }
 
 void ADrag_Item::UpdateMeshForLocalPlayer()
@@ -35,26 +58,38 @@ void ADrag_Item::BeginPlay()
 {
     Super::BeginPlay();
 
+    // Configure collision channels so the server (and client) physics correctly
+    // filters which pawns can collide with this door based on timeline.
     if (ItemTimeline == EItemTimeline::Future)
     {
-        FrameMesh->SetCollisionObjectType(ECC_GameTraceChannel4);
-        FrameMesh->SetCollisionResponseToChannel(ECC_GameTraceChannel2, ECR_Block);
-        FrameMesh->SetCollisionResponseToChannel(ECC_GameTraceChannel1, ECR_Ignore);
+        FrameMesh->SetCollisionObjectType(COLLISION_CHANNEL_DOOR_FUTURE);
+        FrameMesh->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_FUTURE, ECR_Block);
+        FrameMesh->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_PAST, ECR_Ignore);
+
+        ItemMesh->SetCollisionObjectType(COLLISION_CHANNEL_DOOR_FUTURE);
+        ItemMesh->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_FUTURE, ECR_Block);
+        ItemMesh->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_PAST, ECR_Ignore);
     }
     else if (ItemTimeline == EItemTimeline::Past)
     {
-        FrameMesh->SetCollisionObjectType(ECC_GameTraceChannel3);
-        FrameMesh->SetCollisionResponseToChannel(ECC_GameTraceChannel1, ECR_Block);
-        FrameMesh->SetCollisionResponseToChannel(ECC_GameTraceChannel2, ECR_Ignore);
-    }
+        FrameMesh->SetCollisionObjectType(COLLISION_CHANNEL_DOOR_PAST);
+        FrameMesh->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_PAST, ECR_Block);
+        FrameMesh->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_FUTURE, ECR_Ignore);
 
-    const FString Role1 = HasAuthority() ? TEXT("SERVER") : TEXT("CLIENT");
-    UE_LOG(LogTemp, Warning,
-        TEXT("[DoorCollision][%s] %s | Timeline=%s | ObjType=%d | RespVsPast=%d | RespVsFuture=%d"),
-        *Role1, *GetName(), *UEnum::GetValueAsString(ItemTimeline),
-        (int32)FrameMesh->GetCollisionObjectType(),
-        (int32)FrameMesh->GetCollisionResponseToChannel(ECC_GameTraceChannel1),
-        (int32)FrameMesh->GetCollisionResponseToChannel(ECC_GameTraceChannel2));
+        ItemMesh->SetCollisionObjectType(COLLISION_CHANNEL_DOOR_PAST);
+        ItemMesh->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_PAST, ECR_Block);
+        ItemMesh->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_FUTURE, ECR_Ignore);
+    }
+    else // EItemTimeline::Both — blocks all pawns
+    {
+        FrameMesh->SetCollisionObjectType(COLLISION_CHANNEL_DOOR_PAST);
+        FrameMesh->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_PAST, ECR_Block);
+        FrameMesh->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_FUTURE, ECR_Block);
+
+        ItemMesh->SetCollisionObjectType(COLLISION_CHANNEL_DOOR_PAST);
+        ItemMesh->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_PAST, ECR_Block);
+        ItemMesh->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_FUTURE, ECR_Block);
+    }
 }
 
 // Called every frame
