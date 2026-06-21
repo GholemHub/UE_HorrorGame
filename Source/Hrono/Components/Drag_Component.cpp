@@ -36,7 +36,6 @@ void UDrag_Component::TickComponent(float DeltaTime, ELevelTick TickType, FActor
 		return;
 
 	XDrag();
-	//YDrag();
 }
 
 void UDrag_Component::StartDrag(APlayerController* PC)
@@ -46,7 +45,7 @@ void UDrag_Component::StartDrag(APlayerController* PC)
 	bIsRotating = true;
 	RotatingController = PC;
 
-	UE_LOG(LogTemp, Log, TEXT("Drag started"));
+	//UE_LOG(LogTemp, Log, TEXT("Drag started"));
 }
 
 void UDrag_Component::StopDrag()
@@ -54,7 +53,7 @@ void UDrag_Component::StopDrag()
 	bIsRotating = false;
 	RotatingController = nullptr;
 
-	UE_LOG(LogTemp, Log, TEXT("Drag stopped"));
+	//UE_LOG(LogTemp, Log, TEXT("Drag stopped"));
 }
 
 void UDrag_Component::XDrag()
@@ -119,6 +118,12 @@ void UDrag_Component::XDrag()
 		if (!Character->HasAuthority())
 		{
 			Character->Server_SetDoorRotation(Door, NewRotation);
+		}
+		else
+		{
+			// Listen-server host drags the door locally with authority, so refresh
+			// the replicated closed/open state here (no RPC round-trip happens).
+			Door->RefreshDoorClosedState();
 		}
 	}
 }

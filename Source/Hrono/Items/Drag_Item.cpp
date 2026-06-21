@@ -30,21 +30,54 @@ void ADrag_Item::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifeti
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 
 	DOREPLIFETIME(ADrag_Item, DoorRotation);
+    DOREPLIFETIME(ADrag_Item, bIsClosed);
+
 }
 
 void ADrag_Item::OnRep_DoorRotation()
 {
-	// The client that is actively dragging trusts its own local prediction; every
-	// other machine (and the server visuals) applies the replicated authoritative value.
-	if (DragComponent && DragComponent->bIsRotating)
-	{
-		return;
-	}
+    // Runs on remote clients only. Skip while this client is actively dragging so we
+    // don't fight the local prediction in UDrag_Component.
+    if (DragComponent && DragComponent->bIsRotating)
+    {
+        return;
+    }
 
-	if (ItemMesh)
-	{
-		ItemMesh->SetRelativeRotation(DoorRotation);
-	}
+    if (ItemMesh)
+    {
+        // Apply the exact authoritative rotation so every machine matches the server.
+        ItemMesh->SetRelativeRotation(DoorRotation);
+    }
+}
+
+void ADrag_Item::RefreshDoorClosedState()
+{
+    // Authority is the single source of truth for the replicated bIsClosed flag.
+    if (!HasAuthority())
+    {
+        return;
+    }
+
+    // The door is closed when its Yaw is (almost) zero.
+    const bool bNewClosed = FMath::Abs(DoorRotation.Yaw) <= DoorClosedYawTolerance;
+    if (bNewClosed == bIsClosed)
+    {
+        return;
+    }
+
+    bIsClosed = bNewClosed;
+
+    // OnRep_IsClosed only fires on remote clients, so broadcast here for the
+    // server/listen-server host as well.
+    UE_LOG(LogTemp, Log, TEXT("[SERVER] Door %s"), bIsClosed ? TEXT("closed") : TEXT("open"));
+    OnDoorStateChanged.Broadcast(bIsClosed);
+}
+
+void ADrag_Item::OnRep_IsClosed()
+{
+    // Runs on remote clients when the authority changes bIsClosed.
+    UE_LOG(LogTemp, Log, TEXT("[CLIENT] Door %s"), bIsClosed ? TEXT("closed") : TEXT("open"));
+    OnDoorStateChanged.Broadcast(bIsClosed);
 }
 
 void ADrag_Item::UpdateMeshForLocalPlayer()
@@ -79,6 +112,7 @@ void ADrag_Item::BeginPlay()
         ItemMesh->SetCollisionObjectType(COLLISION_CHANNEL_DOOR_PAST);
         ItemMesh->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_PAST, ECR_Block);
         ItemMesh->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_FUTURE, ECR_Ignore);
+
     }
     else // EItemTimeline::Both — blocks all pawns
     {
@@ -101,6 +135,8 @@ void ADrag_Item::Tick(float DeltaTime)
 
     if (GEngine)
     {
+   
+
         FRotator Rot = ItemMesh->GetRelativeRotation();
         if (HasAuthority())
         {
@@ -119,6 +155,13 @@ void ADrag_Item::Tick(float DeltaTime)
                 0.0f,
                 FColor::Yellow,
                 Msg
+            );
+
+            GEngine->AddOnScreenDebugMessage(
+                Key,
+                0.0f,
+                FColor::Yellow,
+                FString::Printf(TEXT("bIsClosed :: %i"), bIsClosed)
             );
         }
         else {
@@ -139,6 +182,12 @@ void ADrag_Item::Tick(float DeltaTime)
                 Msg
             );
 
+            GEngine->AddOnScreenDebugMessage(
+                Key,
+                0.0f,
+                FColor::Yellow,
+                FString::Printf(TEXT("bIsClosed :: %i"), bIsClosed)
+            );
         }
 
     }

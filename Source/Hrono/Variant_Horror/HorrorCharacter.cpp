@@ -13,7 +13,7 @@
 AHorrorCharacter::AHorrorCharacter()
 {
 	// create the spotlight
-	SpotLight = CreateDefaultSubobject<USpotLightComponent>(TEXT("SpotLight"));
+	/*SpotLight = CreateDefaultSubobject<USpotLightComponent>(TEXT("SpotLight"));
 	SpotLight->SetupAttachment(GetFirstPersonCameraComponent());
 
 	SpotLight->SetRelativeLocationAndRotation(FVector(30.0f, 17.5f, -5.0f), FRotator(-18.6f, -1.3f, 5.26f));
@@ -21,7 +21,7 @@ AHorrorCharacter::AHorrorCharacter()
 	SpotLight->SetIntensityUnits(ELightUnits::Lumens);
 	SpotLight->AttenuationRadius = 1050.0f;
 	SpotLight->InnerConeAngle = 18.7f;
-	SpotLight->OuterConeAngle = 45.24f;
+	SpotLight->OuterConeAngle = 45.24f;*/
 }
 
 void AHorrorCharacter::BeginPlay()

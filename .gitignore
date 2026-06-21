@@ -75,3 +75,6 @@ Plugins/**/Intermediate/*
 DerivedDataCache/*
 /Content/__ExternalActors__
 /Content/__ExternalObjects__
+*.uasset
+/Content/_Alex
+Content/_Alex/B_Drag_Item.uasset

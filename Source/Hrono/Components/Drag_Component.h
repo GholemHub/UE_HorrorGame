@@ -54,5 +54,4 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Inspect")
 	float RotationSpeed = 4.f;
 
-	bool bIsOpen = false;
 };

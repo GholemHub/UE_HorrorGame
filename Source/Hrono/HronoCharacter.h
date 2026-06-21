@@ -15,13 +15,13 @@ class UCameraComponent;
 class UInputAction;
 class UDrag_Component;
 class ADrag_Item;
+class USpotLightComponent;
 struct FInputActionValue;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
 
-/**
- *  A basic first person character
- */
+
+
 UCLASS(abstract)
 class AHronoCharacter : public ACharacter
 {
@@ -38,7 +38,10 @@ class AHronoCharacter : public ACharacter
 	UPROPERTY(VisibleAnywhere)
 	class UInventoryComponent* InventoryComponent;
 
-
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components", meta = (AllowPrivateAccess = "true"))
+	USpotLightComponent* SpotLight;
+	
+	
 protected:
 
 
@@ -135,7 +138,7 @@ protected:
 	UFUNCTION(BlueprintCallable, Category = "Items")
 	void DoUnDrag();
 
-	FHitResult PerformInteractTrace() const;
+	FHitResult PerformInteractTrace(bool bIsDrag);
 	void HandleInteraction(const FHitResult& HitResult);
 	void HandleDrag(const FHitResult& HitResult);
 
@@ -154,6 +157,12 @@ protected:
 
 	UFUNCTION(Server, Reliable)
 	void ServerDropCurrentItem();
+
+
+	public:
+		// The Client will call this to tell the server to interact with an object
+		UFUNCTION(Server, Reliable)
+		void Server_InteractWithEnvironment(AActor* InteractableActor);
 
 public:
 	/** Server-authoritative door rotation. Routed through the Character because the
@@ -174,5 +183,8 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerNextItemInput(float AxisValue);
 
+
+	private:
+		void OnEnyInteractTrace(FHitResult HitResult);
 };
 

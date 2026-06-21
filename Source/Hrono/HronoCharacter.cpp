@@ -13,6 +13,10 @@
 #include "Net/UnrealNetwork.h"
 #include "Components/Drag_Component.h"
 #include "Items/Drag_Item.h"
+#include "Components/SpotLightComponent.h"
+#include "Interface/Enviroment_Interface.h"
+#include "Items/Base_Item.h"
+
 
 #include "Components/InventoryComponent.h"
 
@@ -63,6 +67,16 @@ AHronoCharacter::AHronoCharacter()
 	InteractionPoint->SetupAttachment(GetFirstPersonCameraComponent());
 
 	InventoryComponent = CreateDefaultSubobject<UInventoryComponent>(TEXT("InventoryComponent"));
+
+	SpotLight = CreateDefaultSubobject<USpotLightComponent>(TEXT("SpotLight1"));
+	SpotLight->SetupAttachment(GetFirstPersonCameraComponent());
+
+	SpotLight->SetRelativeLocationAndRotation(FVector(30.0f, 17.5f, -5.0f), FRotator(-18.6f, -1.3f, 5.26f));
+	SpotLight->Intensity = 0.5;
+	SpotLight->SetIntensityUnits(ELightUnits::Lumens);
+	SpotLight->AttenuationRadius = 1050.0f;
+	SpotLight->InnerConeAngle = 18.7f;
+	SpotLight->OuterConeAngle = 45.24f;
 
 }
 
@@ -136,6 +150,7 @@ void AHronoCharacter::BeginPlay()
 		if (IsLocallyControlled())
 		{
 			CharacterTimeline = EItemTimeline::Future;
+			
 		}
 		else
 		{
@@ -143,22 +158,22 @@ void AHronoCharacter::BeginPlay()
 		}
 	}
 
-	// Apply collision channels based on assigned timeline.
-	// This runs on both server and client to ensure server-side movement
-	// validation uses the correct collision filtering.
+	if (!IsLocallyControlled())
+	{
+		SpotLight->DestroyComponent();
+		SpotLight = nullptr;
+	}
+
 	ApplyTimelineCollision();
 }
 
 void AHronoCharacter::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
-
-	/*UE_LOG(LogTemp, Error, TEXT("CharacterTimeline :: %s"),
-		*UEnum::GetValueAsString(CharacterTimeline));*/
 	
 }
 
-FHitResult AHronoCharacter::PerformInteractTrace() const
+FHitResult AHronoCharacter::PerformInteractTrace(bool bIsDrag)
 {
 	FHitResult HitResult;
 
@@ -186,16 +201,31 @@ FHitResult AHronoCharacter::PerformInteractTrace() const
 	FCollisionQueryParams Params;
 	Params.AddIgnoredActor(this);
 
-	bool bHit = GetWorld()->LineTraceSingleByChannel(
-		HitResult,
-		Start,
-		End,
-		ECC_Visibility,
-		Params
-	);
-
+	bool bHit;
+	if (CharacterTimeline == EItemTimeline::Future) {
+		bHit = GetWorld()->LineTraceSingleByChannel(
+			HitResult,
+			Start,
+			End,
+			ECC_GameTraceChannel3,
+			Params
+		);
+	}
+	else {
+		bHit = GetWorld()->LineTraceSingleByChannel(
+			HitResult,
+			Start,
+			End,
+			ECC_GameTraceChannel2,
+			Params
+		);
+	}
 	if (bHit)
 	{
+		if (!bIsDrag) {
+			OnEnyInteractTrace(HitResult);
+		}
+		
 		DrawDebugSphere(
 			GetWorld(),
 			HitResult.ImpactPoint,
@@ -216,6 +246,14 @@ FHitResult AHronoCharacter::PerformInteractTrace() const
 	else
 	{
 		UE_LOG(LogTemp, Warning, TEXT("LineTrace missed"));
+	}
+	auto Door = Cast<ADrag_Item>(HitResult.GetActor());
+	if (Door)
+	{
+		if (Door->ItemTimeline != CharacterTimeline)
+		{
+			HitResult = FHitResult();
+		}
 	}
 
 	return HitResult;
@@ -245,7 +283,6 @@ void AHronoCharacter::HandleInteraction(const FHitResult& HitResult)
 }
 
 
-#include "Items/Base_Item.h"
 
 void AHronoCharacter::DoInteract()
 {
@@ -255,7 +292,7 @@ void AHronoCharacter::DoInteract()
 		return;
 	}
 
-	FHitResult HitResult = PerformInteractTrace();
+	FHitResult HitResult = PerformInteractTrace(false);
 
 	if (HitResult.bBlockingHit)
 	{
@@ -295,7 +332,6 @@ void AHronoCharacter::DoDrop()
 	}
 }
 
-#include "Components/Drag_Component.h"
 
 void AHronoCharacter::HandleDrag(const FHitResult& HitResult)
 {
@@ -319,9 +355,9 @@ void AHronoCharacter::HandleDrag(const FHitResult& HitResult)
 
 void AHronoCharacter::DoDrag()
 {
-	UE_LOG(LogTemp, Log, TEXT("DoDrag()"));
+	//UE_LOG(LogTemp, Log, TEXT("DoDrag()"));
 
-	FHitResult HitResult = PerformInteractTrace();
+	FHitResult HitResult = PerformInteractTrace(true);
 
 	if (HitResult.bBlockingHit)
 	{
@@ -347,6 +383,9 @@ void AHronoCharacter::Server_SetDoorRotation_Implementation(ADrag_Item* Door, FR
 	// then replicate it (DoorRotation -> OnRep_DoorRotation) to every other machine.
 	Door->ItemMesh->SetRelativeRotation(NewRotation);
 	Door->DoorRotation = NewRotation;
+
+	// Recompute and replicate the closed/open flag from the new Yaw.
+	Door->RefreshDoorClosedState();
 }
 
 void AHronoCharacter::ServerDropCurrentItem_Implementation()
@@ -390,6 +429,25 @@ void AHronoCharacter::DropCurrentItem()
 	InventoryComponent->RemoveItem(ItemToDrop);
 }
 
+void AHronoCharacter::OnEnyInteractTrace(FHitResult HitResult)
+{
+	if (AActor* HitActor = HitResult.GetActor())
+	{
+		if (HitActor->Implements<UEnviroment_Interface>())
+		{
+			if (HasAuthority())
+			{
+				// Server can interact directly
+				IEnviroment_Interface::Execute_Interact(HitActor, this);
+			}
+			else
+			{
+				// Client MUST ask the server to do the interaction
+				Server_InteractWithEnvironment(HitActor);
+			}
+		}
+	}
+}
 void AHronoCharacter::PickupItem(ABase_Item* Item)
 {
 	if (!HasAuthority())
@@ -408,7 +466,14 @@ void AHronoCharacter::PickupItem(ABase_Item* Item)
 	}
 }
 
-
+void AHronoCharacter::Server_InteractWithEnvironment_Implementation(AActor* InteractableActor)
+{
+	// The server verifies the actor is valid and implements the interface, then interacts
+	if (InteractableActor && InteractableActor->Implements<UEnviroment_Interface>())
+	{
+		IEnviroment_Interface::Execute_Interact(InteractableActor, this);
+	}
+}
 
 void AHronoCharacter::MoveInput(const FInputActionValue& Value)
 {

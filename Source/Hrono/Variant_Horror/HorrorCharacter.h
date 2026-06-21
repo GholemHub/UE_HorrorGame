@@ -22,8 +22,8 @@ class HRONO_API AHorrorCharacter : public AHronoCharacter
 	GENERATED_BODY()
 
 	/** Player light source */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta = (AllowPrivateAccess = "true"))
-	USpotLightComponent* SpotLight;
+	/*UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
+	USpotLightComponent* SpotLight;*/
 	
 protected:
 

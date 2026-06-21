@@ -10,6 +10,10 @@
 
 #include "Drag_Item.generated.h"
 
+/** Broadcast whenever the door finishes closing (true) or starts to open (false).
+ *  Fires on the server and on every client so gameplay/UI can react to door state. */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnDoorStateChanged, bool, bIsClosed);
+
 UCLASS()
 class HRONO_API ADrag_Item : public ABase_Item
 {
@@ -49,4 +53,20 @@ public:
 	UFUNCTION()
 	void OnRep_DoorRotation();
 
+	UPROPERTY(ReplicatedUsing = OnRep_IsClosed)
+	bool bIsClosed = true;
+	UFUNCTION()
+	void OnRep_IsClosed();
+
+	/** Fired on the server and on clients whenever the door finishes opening or closing. */
+	UPROPERTY(BlueprintAssignable, Category = "Door")
+	FOnDoorStateChanged OnDoorStateChanged;
+
+	/** Yaw (in degrees) at or under which the panel is treated as fully closed. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Door")
+	float DoorClosedYawTolerance = 1.0f;
+
+	/** Authority-only: recomputes bIsClosed from the door's current Yaw and
+	 *  broadcasts OnDoorStateChanged when the open/closed state changes. */
+	void RefreshDoorClosedState();
 };
