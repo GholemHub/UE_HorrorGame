@@ -165,6 +165,10 @@ void AHronoCharacter::BeginPlay()
 	}
 
 	ApplyTimelineCollision();
+
+	// DEBUG: Print timeline
+	const char* TimelineStr = (CharacterTimeline == EItemTimeline::Future) ? "FUTURE" : "PAST";
+	UE_LOG(LogTemp, Warning, TEXT("Character Timeline: %s"), ANSI_TO_TCHAR(TimelineStr));
 }
 
 void AHronoCharacter::Tick(float DeltaTime)
@@ -225,6 +229,10 @@ FHitResult AHronoCharacter::PerformInteractTrace(bool bIsDrag)
 		if (!bIsDrag) {
 			OnEnyInteractTrace(HitResult);
 		}
+		else
+		{
+			OnMakeInteractImpulse(HitResult);
+		}
 		
 		DrawDebugSphere(
 			GetWorld(),
@@ -248,10 +256,18 @@ FHitResult AHronoCharacter::PerformInteractTrace(bool bIsDrag)
 		UE_LOG(LogTemp, Warning, TEXT("LineTrace missed"));
 	}
 	auto Door = Cast<ADrag_Item>(HitResult.GetActor());
+
 	if (Door)
 	{
+		const char* DoorTimelineStr = (Door->ItemTimeline == EItemTimeline::Future) ? "FUTURE" : "PAST";
+		const char* CharTimelineStr = (CharacterTimeline == EItemTimeline::Future) ? "FUTURE" : "PAST";
+
+		UE_LOG(LogTemp, Warning, TEXT("Door Timeline: %s, Character Timeline: %s"),
+			ANSI_TO_TCHAR(DoorTimelineStr), ANSI_TO_TCHAR(CharTimelineStr));
+
 		if (Door->ItemTimeline != CharacterTimeline)
 		{
+			UE_LOG(LogTemp, Warning, TEXT("Timeline mismatch! Clearing HitResult"));
 			HitResult = FHitResult();
 		}
 	}
@@ -335,27 +351,47 @@ void AHronoCharacter::DoDrop()
 
 void AHronoCharacter::HandleDrag(const FHitResult& HitResult)
 {
-	auto Door = Cast<ADrag_Item>(HitResult.GetActor());
-	if (!Door) return;
+	AActor* HitActor = HitResult.GetActor();
+	UE_LOG(LogTemp, Warning, TEXT("HandleDrag: Hit actor = %s"), HitActor ? *HitActor->GetName() : TEXT("None"));
 
-	
+	auto Item = Cast<ADrag_Item>(HitResult.GetActor());
+	if (!Item)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("HandleDrag FAILED: Not an ADrag_Item!"));
+		return;
+	}
 
-	auto DoorComp = Door->FindComponentByClass<UDrag_Component>();
-	if (!DoorComp) return;
+	auto DragComponent = Item->FindComponentByClass<UDrag_Component>();
+	if (!DragComponent)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("HandleDrag FAILED: No DragComponent found!"));
+		return;
+	}
 
-	CurrentDraggedComponent = DoorComp;
+	CurrentDraggedComponent = DragComponent;
 
 	APlayerController* PC = Cast<APlayerController>(GetController());
-	if (PC)
+	if (!PC)
 	{
-		DoorComp->StartDrag(PC);
+		UE_LOG(LogTemp, Warning, TEXT("HandleDrag FAILED: No PlayerController!"));
+		return;
+	}
+
+	DragComponent->StartDrag(PC);
+
+	if (DragComponent->bIsShelf)
+	{
+		UE_LOG(LogTemp, Log, TEXT("Started dragging shelf"));
+	}
+	else
+	{
+		UE_LOG(LogTemp, Log, TEXT("Started dragging door"));
 	}
 }
 
-
 void AHronoCharacter::DoDrag()
 {
-	//UE_LOG(LogTemp, Log, TEXT("DoDrag()"));
+	UE_LOG(LogTemp, Log, TEXT("DoDrag()"));
 
 	FHitResult HitResult = PerformInteractTrace(true);
 
@@ -429,6 +465,21 @@ void AHronoCharacter::DropCurrentItem()
 	InventoryComponent->RemoveItem(ItemToDrop);
 }
 
+void AHronoCharacter::Server_SetShelfPosition_Implementation(ADrag_Item* Shelf, const FVector& NewPosition)
+{
+	if (!Shelf) return;
+
+	Shelf->ShelfPosition = NewPosition;
+	Shelf->ItemMesh->SetRelativeLocation(NewPosition);
+	Shelf->RefreshShelfOpenState();
+}
+
+bool AHronoCharacter::Server_SetShelfPosition_Validate(ADrag_Item* Shelf, const FVector& NewPosition)
+{
+	return Shelf != nullptr;
+
+}
+
 void AHronoCharacter::OnEnyInteractTrace(FHitResult HitResult)
 {
 	if (AActor* HitActor = HitResult.GetActor())
@@ -446,6 +497,22 @@ void AHronoCharacter::OnEnyInteractTrace(FHitResult HitResult)
 				Server_InteractWithEnvironment(HitActor);
 			}
 		}
+	}
+}
+void AHronoCharacter::OnMakeInteractImpulse(FHitResult HitResult)
+{
+	UPrimitiveComponent* HitComp = HitResult.GetComponent();
+
+	if (HitComp && HitComp->IsSimulatingPhysics())
+	{
+		FVector ImpulseDirection = GetControlRotation().Vector();
+		float ImpulseStrength = 300.f;
+
+		HitComp->AddImpulse(
+			ImpulseDirection * ImpulseStrength,
+			NAME_None,
+			true
+		);
 	}
 }
 void AHronoCharacter::PickupItem(ABase_Item* Item)

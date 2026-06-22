@@ -13,6 +13,7 @@
 /** Broadcast whenever the door finishes closing (true) or starts to open (false).
  *  Fires on the server and on every client so gameplay/UI can react to door state. */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnDoorStateChanged, bool, bIsClosed);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnShelfStateChanged);
 
 UCLASS()
 class HRONO_API ADrag_Item : public ABase_Item
@@ -69,4 +70,38 @@ public:
 	/** Authority-only: recomputes bIsClosed from the door's current Yaw and
 	 *  broadcasts OnDoorStateChanged when the open/closed state changes. */
 	void RefreshDoorClosedState();
+
+	// In Drag_Item.h
+public:
+	UPROPERTY(BlueprintAssignable, Category = "Shelf")
+	FOnShelfStateChanged OnShelfOpen;
+
+	UPROPERTY(BlueprintAssignable, Category = "Shelf")
+	FOnShelfStateChanged OnShelfClose;
+
+	UPROPERTY(BlueprintReadWrite, Replicated, Category = "Shelf")
+	bool bIsShelfOpen = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shelf")
+	float ShelfMaxDistance = 50.f;
+
+	// In Drag_Item.h
+public:
+	UPROPERTY(BlueprintReadWrite, Replicated, Category = "Shelf")
+	FVector ShelfPosition = FVector::ZeroVector;
+
+	UFUNCTION(BlueprintCallable, Category = "Shelf")  // Changed this line
+		void RefreshShelfOpenState();
+
+
+protected:
+	UFUNCTION(BlueprintCallable, Category = "Shelf")
+	void OnShelfOpened();
+
+	UFUNCTION(BlueprintCallable, Category = "Shelf")
+	void OnShelfClosed();
+
+	UFUNCTION(BlueprintCallable, Category = "Shelf")
+	void UpdateShelfCollision();
+
 };

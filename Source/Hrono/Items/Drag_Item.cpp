@@ -29,8 +29,10 @@ void ADrag_Item::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifeti
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 
-	DOREPLIFETIME(ADrag_Item, DoorRotation);
+    DOREPLIFETIME(ADrag_Item, DoorRotation);
     DOREPLIFETIME(ADrag_Item, bIsClosed);
+    DOREPLIFETIME(ADrag_Item, ShelfPosition);
+    DOREPLIFETIME(ADrag_Item, bIsShelfOpen);
 
 }
 
@@ -71,6 +73,70 @@ void ADrag_Item::RefreshDoorClosedState()
     // server/listen-server host as well.
     UE_LOG(LogTemp, Log, TEXT("[SERVER] Door %s"), bIsClosed ? TEXT("closed") : TEXT("open"));
     OnDoorStateChanged.Broadcast(bIsClosed);
+}
+
+void ADrag_Item::RefreshShelfOpenState()
+{
+    if (!ItemMesh) return;
+
+    // Get current shelf position relative to its starting point
+    FVector CurrentPosition = ItemMesh->GetRelativeLocation();
+    float CurrentDistance = FMath::Abs(CurrentPosition.X);
+
+    // Determine if shelf is open or closed
+    bool bIsNowOpen = CurrentDistance > (DragComponent->ShelfMaxDistance * 0.5f);  // More than 50% pulled out
+
+    // Only trigger state changes if it changed
+    if (bIsNowOpen != bIsShelfOpen)
+    {
+        bIsShelfOpen = bIsNowOpen;
+
+        // Play sound/animation based on state
+        if (bIsNowOpen)
+        {
+            OnShelfOpened();
+        }
+        else
+        {
+            OnShelfClosed();
+        }
+    }
+
+    // Update collision if needed (e.g., items inside become accessible)
+    UpdateShelfCollision();
+}
+
+void ADrag_Item::OnShelfOpened()
+{
+    // Broadcast event for animations, sounds, etc.
+    if (OnShelfOpen.IsBound())
+    {
+        OnShelfOpen.Broadcast();
+    }
+
+    UE_LOG(LogTemp, Log, TEXT("Shelf opened"));
+}
+
+void ADrag_Item::OnShelfClosed()
+{
+    // Broadcast event when shelf closes
+    if (OnShelfClose.IsBound())
+    {
+        OnShelfClose.Broadcast();
+    }
+
+    UE_LOG(LogTemp, Log, TEXT("Shelf closed"));
+}
+
+void ADrag_Item::UpdateShelfCollision()
+{
+    // Enable/disable collision for items inside shelf based on open state
+    if (ItemMesh)
+    {
+        // You can adjust collision channels or disable overlap based on bIsShelfOpen
+        ItemMesh->SetCollisionResponseToChannel(ECC_Pawn,
+            bIsShelfOpen ? ECR_Ignore : ECR_Block);
+    }
 }
 
 void ADrag_Item::OnRep_IsClosed()

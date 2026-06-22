@@ -142,87 +142,64 @@ void UDrag_Component::XDrag()
 void UDrag_Component::ShelfDrag()
 {
 	AActor* Owner = GetOwner();
-	if (!Owner || !RotatingController)
-		return;
+	if (!Owner || !RotatingController) return;
 
-	ADrag_Item* Shelf = Cast<ADrag_Item>(Owner);
-	if (!Shelf)
-		return;
+	auto Shelf = Cast<ADrag_Item>(Owner);
+	if (!Shelf) return;
 
 	APawn* PlayerPawn = RotatingController->GetPawn();
-	if (!PlayerPawn)
-		return;
+	if (!PlayerPawn) return;
 
 	float MouseX, MouseY;
 	RotatingController->GetInputMouseDelta(MouseX, MouseY);
 
-	// Only vertical mouse movement
-	float DragDelta = -MouseY;
+	// Use mouse vertical movement for push/pull (Y axis dragging)
+	float DragDelta = MouseY;
 
 	FVector ShelfForward = Owner->GetActorForwardVector();
-
-	FVector ShelfToPlayer =
-		PlayerPawn->GetActorLocation() -
-		Owner->GetActorLocation();
-
+	FVector ShelfToPlayer = PlayerPawn->GetActorLocation() - Owner->GetActorLocation();
 	ShelfToPlayer.Z = 0.f;
 	ShelfToPlayer.Normalize();
 
-	float Side =
-		FVector::DotProduct(
-			ShelfForward,
-			ShelfToPlayer
-		);
+	// Determine push vs pull direction
+	// Positive = player in front (can push in), Negative = player behind (can pull out)
+	float PushPullDirection = FVector::DotProduct(ShelfForward, ShelfToPlayer);
+	float DirectionMultiplier = (PushPullDirection > 0.f) ? 1.f : -1.f;
 
-	float DirectionMultiplier =
-		(Side > 0.f) ? 1.f : -1.f;
+	FVector OldLocation = Shelf->ItemMesh->GetRelativeLocation();
+	FVector NewLocation = OldLocation;
 
-	FVector OldRelativeLocation =
-		Shelf->ItemMesh->GetRelativeLocation();
-
-	FVector NewRelativeLocation =
-		OldRelativeLocation;
-
-	float NewX = FMath::Clamp(
-		OldRelativeLocation.X +
-		DragDelta *
-		ShelfSpeed *
-		DirectionMultiplier,
-		-ShelfMaxDistance,
-		0.f
+	// Clamp shelf position: 0 = fully closed, negative = pulled out
+	NewLocation.X = FMath::Clamp(
+		NewLocation.X + DragDelta * ShelfSpeed * DirectionMultiplier,
+		-ShelfMaxDistance,  // Max distance pulled out
+		0.f                 // Fully closed/pushed in
 	);
 
-	NewRelativeLocation.X = NewX;
-
-	bool bOverlappingPlayer =
-		Shelf->ItemMesh->IsOverlappingActor(PlayerPawn);
-
+	// Prevent pushing if overlapping player
+	bool bOverlappingPlayer = Shelf->ItemMesh->IsOverlappingActor(PlayerPawn);
 	if (bOverlappingPlayer)
 	{
-		NewRelativeLocation =
-			OldRelativeLocation;
+		NewLocation = OldLocation;
 	}
 
-	Shelf->ItemMesh->SetRelativeLocation(
-		NewRelativeLocation
-	);
+	// Apply locally for immediate feedback
+	Shelf->ItemMesh->SetRelativeLocation(NewLocation);
+	Shelf->ShelfPosition = NewLocation;
 
-	Shelf->ShelfPosition =
-		NewRelativeLocation;
-
-	if (AHronoCharacter* Character =
-		Cast<AHronoCharacter>(PlayerPawn))
+	// Replicate to server and other clients
+	if (AHronoCharacter* Character = Cast<AHronoCharacter>(RotatingController->GetPawn()))
 	{
 		if (!Character->HasAuthority())
 		{
-			Character->Server_SetShelfPosition(
-				Shelf,
-				NewRelativeLocation
-			);
+			// Client sends to server
+			Character->Server_SetShelfPosition(Shelf, NewLocation);
 		}
 		else
 		{
+			// Listen server: locally authoritative, just refresh state
 			Shelf->RefreshShelfOpenState();
 		}
 	}
 }
+

@@ -60,7 +60,7 @@ public:
 	// In Drag_Component.h
 public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shelf")
-	float ShelfSpeed = 4.f;
+	float ShelfSpeed = 2.5f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shelf")
 	float ShelfMaxDistance = 50.f;  // How far shelf can pull out

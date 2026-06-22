@@ -79,6 +79,8 @@ protected:
 public:
 	AHronoCharacter();
 
+
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<USceneComponent> InteractionPoint;
 
@@ -157,9 +159,11 @@ protected:
 
 	UFUNCTION(Server, Reliable)
 	void ServerDropCurrentItem();
+public:
+		UFUNCTION(Server, Reliable, WithValidation)
+		void Server_SetShelfPosition(ADrag_Item* Shelf, const FVector& NewPosition);
 
-
-	public:
+public:
 		// The Client will call this to tell the server to interact with an object
 		UFUNCTION(Server, Reliable)
 		void Server_InteractWithEnvironment(AActor* InteractableActor);
@@ -186,5 +190,6 @@ public:
 
 	private:
 		void OnEnyInteractTrace(FHitResult HitResult);
+		void OnMakeInteractImpulse(FHitResult HitResult);
 };
 
