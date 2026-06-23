@@ -156,26 +156,8 @@ void UDrag_Component::ShelfDrag()
 	float MouseX, MouseY;
 	RotatingController->GetInputMouseDelta(MouseX, MouseY);
 
-	// Only vertical mouse movement
-	float DragDelta = -MouseY;
-
-	FVector ShelfForward = Owner->GetActorForwardVector();
-
-	FVector ShelfToPlayer =
-		PlayerPawn->GetActorLocation() -
-		Owner->GetActorLocation();
-
-	ShelfToPlayer.Z = 0.f;
-	ShelfToPlayer.Normalize();
-
-	float Side =
-		FVector::DotProduct(
-			ShelfForward,
-			ShelfToPlayer
-		);
-
-	float DirectionMultiplier =
-		(Side > 0.f) ? 1.f : -1.f;
+	// Use only vertical mouse movement
+	float DragDelta = MouseY;
 
 	FVector OldRelativeLocation =
 		Shelf->ItemMesh->GetRelativeLocation();
@@ -183,16 +165,14 @@ void UDrag_Component::ShelfDrag()
 	FVector NewRelativeLocation =
 		OldRelativeLocation;
 
-	float NewX = FMath::Clamp(
-		OldRelativeLocation.X +
-		DragDelta *
-		ShelfSpeed *
-		DirectionMultiplier,
+	float NewY = FMath::Clamp(
+		OldRelativeLocation.Y +
+		DragDelta * ShelfSpeed,
 		-ShelfMaxDistance,
 		0.f
 	);
 
-	NewRelativeLocation.X = NewX;
+	NewRelativeLocation.Y = NewY;
 
 	bool bOverlappingPlayer =
 		Shelf->ItemMesh->IsOverlappingActor(PlayerPawn);

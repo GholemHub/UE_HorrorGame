@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "GameplayTagContainer.h"
 #include "InventoryComponent.generated.h"
 
 class ABase_Item;
@@ -55,4 +56,12 @@ public:
 
 	UFUNCTION()
 	void OnRep_CurrentItemIndex();
+
+	UFUNCTION(BlueprintCallable)
+	ABase_Item* FindItemByClass(TSubclassOf<ABase_Item> ItemClass) const;
+
+	ABase_Item* FindItemByTag(FGameplayTag Tag) const;
+
+	UFUNCTION(BlueprintCallable)
+	bool ConsumeItem(ABase_Item* Item);
 };

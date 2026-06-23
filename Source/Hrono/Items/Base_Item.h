@@ -5,6 +5,7 @@
 #include "HronoSharedTools.h"
 #include "HronoCharacter.h"
 #include "Net/UnrealNetwork.h"
+#include "GameplayTagContainer.h"
 
 
 #include "Base_Item.generated.h"
@@ -18,6 +19,15 @@ class HRONO_API ABase_Item : public AActor
 	
 public:	
 	ABase_Item();
+
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Item TAG")
+	FGameplayTagContainer ItemTags;
+	
+	bool HasTag(FGameplayTag Tag) const
+	{
+		return ItemTags.HasTag(Tag);
+	}
 
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 

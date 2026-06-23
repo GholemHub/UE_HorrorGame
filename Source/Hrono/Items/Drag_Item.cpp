@@ -15,11 +15,19 @@ ADrag_Item::ADrag_Item()
 	PrimaryActorTick.bCanEverTick = true;
 	bReplicates = true; // Door open/closed state must replicate so server collision matches clients
 
-	FrameMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("FrameMesh"));
-	RootComponent = FrameMesh;
+    SceneRoot =
+        CreateDefaultSubobject<USceneComponent>(
+            TEXT("SceneRoot"));
 
+    RootComponent = SceneRoot;
 
-	ItemMesh->SetupAttachment(FrameMesh);
+    FrameMesh =
+        CreateDefaultSubobject<UStaticMeshComponent>(
+            TEXT("FrameMesh"));
+
+    FrameMesh->SetupAttachment(SceneRoot);
+
+    ItemMesh->SetupAttachment(FrameMesh);
 
 	DragComponent = CreateDefaultSubobject<UDrag_Component>(TEXT("DragComponent"));
 
@@ -81,7 +89,8 @@ void ADrag_Item::RefreshShelfOpenState()
 
     // Get current shelf position relative to its starting point
     FVector CurrentPosition = ItemMesh->GetRelativeLocation();
-    float CurrentDistance = FMath::Abs(CurrentPosition.X);
+    float CurrentDistance =
+        FMath::Abs(CurrentPosition.Y);
 
     // Determine if shelf is open or closed
     bool bIsNowOpen = CurrentDistance > (DragComponent->ShelfMaxDistance * 0.5f);  // More than 50% pulled out

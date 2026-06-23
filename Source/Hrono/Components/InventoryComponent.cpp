@@ -145,3 +145,80 @@ void UInventoryComponent::OnRep_CurrentItemIndex()
 {
 	UpdateItemVisibility();
 }
+
+ABase_Item* UInventoryComponent::FindItemByClass(TSubclassOf<ABase_Item> ItemClass) const
+{
+	if (!ItemClass)
+	{
+		return nullptr;
+	}
+
+	for (ABase_Item* Item : Items)
+	{
+		if (!IsValid(Item))
+		{
+			continue;
+		}
+
+		if (Item->IsA(ItemClass))
+		{
+			return Item;
+		}
+	}
+
+	return nullptr;
+}
+
+ABase_Item* UInventoryComponent::FindItemByTag(FGameplayTag Tag) const
+{
+	for (ABase_Item* Item : Items)
+	{
+		if (!IsValid(Item))
+		{
+			continue;
+		}
+
+		if (Item->ItemTags.HasTag(Tag))
+		{
+			return Item;
+		}
+	}
+
+	return nullptr;
+}
+
+bool UInventoryComponent::ConsumeItem(ABase_Item* Item)
+{
+	if (!GetOwner()->HasAuthority())
+	{
+		return false;
+	}
+
+	if (!IsValid(Item))
+	{
+		return false;
+	}
+
+	const int32 RemovedIndex = Items.Find(Item);
+	if (RemovedIndex == INDEX_NONE)
+	{
+		return false;
+	}
+
+	Items.RemoveAt(RemovedIndex);
+
+	if (Items.Num() == 0)
+	{
+		CurrentItemIndex = INDEX_NONE;
+	}
+	else if (CurrentItemIndex >= Items.Num())
+	{
+		CurrentItemIndex = 0;
+	}
+
+	UpdateItemVisibility();
+
+	Item->Destroy();
+
+	return true;
+}

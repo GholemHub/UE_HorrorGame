@@ -10,6 +10,17 @@
 
 #include "Drag_Item.generated.h"
 
+UENUM(BlueprintType)
+enum class EItemType : uint8
+{
+	None,
+	Key,
+	Battery,
+	Note,
+	Tool
+};
+
+
 /** Broadcast whenever the door finishes closing (true) or starts to open (false).
  *  Fires on the server and on every client so gameplay/UI can react to door state. */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnDoorStateChanged, bool, bIsClosed);
@@ -25,7 +36,7 @@ public:
 	ADrag_Item();
 
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
-
+	USceneComponent* SceneRoot;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Components")
 	UStaticMeshComponent* FrameMesh;
 
@@ -37,9 +48,15 @@ public:
 
 	virtual void UpdateMeshForLocalPlayer() override;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	EItemType ItemType = EItemType::None;
+
+
 protected:
 	// Called when the game starts or when spawned
 	virtual void BeginPlay() override;
+
+
 
 public:	
 	// Called every frame
@@ -92,6 +109,12 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Shelf")  // Changed this line
 		void RefreshShelfOpenState();
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shelf")
+	ABase_Item* KeyActor;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shelf")
+	bool bNeedKeyActor = false;
 
 
 protected:

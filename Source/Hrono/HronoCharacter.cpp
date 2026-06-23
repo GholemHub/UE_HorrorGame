@@ -368,6 +368,22 @@ void AHronoCharacter::HandleDrag(const FHitResult& HitResult)
 		return;
 	}
 
+	if (Item->bNeedKeyActor)
+	{
+		const FGameplayTag BasementKeyTag =
+			FGameplayTag::RequestGameplayTag(TEXT("Item.Key"));
+
+		if (!InventoryComponent->FindItemByTag(BasementKeyTag))
+		{
+			return;
+		}
+		else {
+			auto Key = InventoryComponent->FindItemByTag(BasementKeyTag);
+			InventoryComponent->ConsumeItem(Key);
+			Item->bNeedKeyActor = false;
+		}
+	}
+
 	CurrentDraggedComponent = DragComponent;
 
 	APlayerController* PC = Cast<APlayerController>(GetController());
