@@ -49,9 +49,13 @@ void ASwitcher_Env::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLif
 void ASwitcher_Env::OnRep_Switch()
 {
 	UE_LOG(LogTemp, Log, TEXT("OnRep_Switch"));
-	if (LightActor)
+
+	for (ALight_Env* Light : LightActors)
 	{
-		LightActor->OnSwith(bIsLightOn);
+		if (IsValid(Light))
+		{
+			Light->OnSwith(bIsLightOn);
+		}
 	}
 }
 

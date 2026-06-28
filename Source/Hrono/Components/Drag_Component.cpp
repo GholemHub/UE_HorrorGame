@@ -4,6 +4,7 @@
 #include "Components/Drag_Component.h"
 #include "Items/Drag_Item.h"
 #include "HronoCharacter.h"
+#include "InputCoreTypes.h"
 
 
 // Sets default values for this component's properties
@@ -33,7 +34,16 @@ void UDrag_Component::TickComponent(float DeltaTime, ELevelTick TickType, FActor
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 	
 	if (!bIsRotating || !RotatingController)
+	{
 		return;
+	}
+
+	if (!RotatingController->IsInputKeyDown(EKeys::LeftMouseButton))
+	{
+		StopDrag();
+		return;
+	}
+
 	
 	if (bIsShelf)
 	{

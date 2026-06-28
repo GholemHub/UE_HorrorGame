@@ -111,8 +111,26 @@ void AHronoCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Started, this, &AHronoCharacter::DoJumpStart);
 		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Completed, this, &AHronoCharacter::DoJumpEnd);
 		//Drag
-		EnhancedInputComponent->BindAction(DragAction, ETriggerEvent::Triggered, this, &AHronoCharacter::DoDrag);
-		EnhancedInputComponent->BindAction(DragAction, ETriggerEvent::Completed, this, &AHronoCharacter::DoUnDrag);
+		EnhancedInputComponent->BindAction(
+			DragAction,
+			ETriggerEvent::Started,
+			this,
+			&AHronoCharacter::DoDrag
+		);
+
+		EnhancedInputComponent->BindAction(
+			DragAction,
+			ETriggerEvent::Completed,
+			this,
+			&AHronoCharacter::DoUnDrag
+		);
+
+		EnhancedInputComponent->BindAction(
+			DragAction,
+			ETriggerEvent::Canceled,
+			this,
+			&AHronoCharacter::DoUnDrag
+		);
 
 		// Moving
 		EnhancedInputComponent->BindAction(MoveAction, ETriggerEvent::Triggered, this, &AHronoCharacter::MoveInput);
@@ -274,7 +292,7 @@ FHitResult AHronoCharacter::PerformInteractTrace(bool bIsDrag)
 
 	return HitResult;
 }
-
+#include "Items/Drag_Item.h"
 void AHronoCharacter::HandleInteraction(const FHitResult& HitResult)
 {
 	AActor* HitActor = HitResult.GetActor();
@@ -286,6 +304,9 @@ void AHronoCharacter::HandleInteraction(const FHitResult& HitResult)
 	if (auto Item = Cast<ABase_Item>(HitActor))
 	{
 		UE_LOG(LogTemp, Warning, TEXT("Valid item found: %s"), *Item->GetName());
+		auto Draggable = Cast<ADrag_Item>(Item);
+		if (Draggable) return;
+
 
 		if (HasAuthority())
 		{

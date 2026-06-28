@@ -17,7 +17,8 @@ enum class EItemType : uint8
 	Key,
 	Battery,
 	Note,
-	Tool
+	Tool,
+	Draggable
 };
 
 

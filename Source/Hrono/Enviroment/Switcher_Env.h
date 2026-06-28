@@ -36,7 +36,7 @@ public:
 	bool bIsLightOn = true;
 	
 	UPROPERTY(EditInstanceOnly, Replicated, BlueprintReadWrite, Category = "Light Test")
-	ALight_Env* LightActor;
+	TArray<ALight_Env*> LightActors;
 
 	UFUNCTION()
 	void OnRep_Switch();
