@@ -9,15 +9,15 @@
 class USpotLightComponent;
 class UInputAction;
 
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FUpdateSprintMeterDelegate, float, Percentage);
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSprintStateChangedDelegate, bool, bSprinting);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FUpdateSprintMeterDelegate1, float, Percentage);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSprintStateChangedDelegate1, bool, bSprinting);
 
 /**
  *  Simple first person horror character
  *  Provides stamina-based sprinting
  */
 UCLASS(abstract)
-class HRONO_API AHorrorCharacter : public AHronoCharacter
+class HRONO_API AHorrorCharacter : public ACharacter
 {
 	GENERATED_BODY()
 
@@ -70,10 +70,10 @@ protected:
 public:
 
 	/** Delegate called when the sprint meter should be updated */
-	FUpdateSprintMeterDelegate OnSprintMeterUpdated;
+	FUpdateSprintMeterDelegate1 OnSprintMeterUpdated;
 
 	/** Delegate called when we start and stop sprinting */
-	FSprintStateChangedDelegate OnSprintStateChanged;
+	FSprintStateChangedDelegate1 OnSprintStateChanged;
 
 protected:
 

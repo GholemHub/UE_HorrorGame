@@ -212,6 +212,7 @@ void ABase_Item::BeginPlay()
 
 	
 
+
 	if (ItemTimeline == EItemTimeline::Future && FutureMesh)
 	{
 		ItemMesh->SetStaticMesh(FutureMesh);
@@ -221,33 +222,6 @@ void ABase_Item::BeginPlay()
 	{
 		ItemMesh->SetStaticMesh(PastMesh);
 		ItemTag = UGameplayTagsManager::Get().RequestGameplayTag(FName("Item.Past"));
-	}
-
-
-	if (ItemTimeline == EItemTimeline::Future)
-	{
-
-
-		ItemMesh->SetCollisionObjectType(COLLISION_CHANNEL_DOOR_FUTURE);
-		ItemMesh->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_FUTURE, ECR_Block);
-		ItemMesh->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_PAST, ECR_Ignore);
-	}
-	else if (ItemTimeline == EItemTimeline::Past)
-	{
-
-
-		ItemMesh->SetCollisionObjectType(COLLISION_CHANNEL_DOOR_PAST);
-		ItemMesh->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_PAST, ECR_Block);
-		ItemMesh->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_FUTURE, ECR_Ignore);
-
-	}
-	else // EItemTimeline::Both — blocks all pawns
-	{
-
-
-		ItemMesh->SetCollisionObjectType(COLLISION_CHANNEL_DOOR_PAST);
-		ItemMesh->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_PAST, ECR_Block);
-		ItemMesh->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_FUTURE, ECR_Block);
 	}
 }
 

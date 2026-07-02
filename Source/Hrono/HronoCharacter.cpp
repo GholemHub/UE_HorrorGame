@@ -28,6 +28,7 @@ void AHronoCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutL
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 
 	DOREPLIFETIME(AHronoCharacter, CharacterTimeline);
+	DOREPLIFETIME(AHronoCharacter, bSprinting);
 }
 
 AHronoCharacter::AHronoCharacter()
@@ -84,6 +85,20 @@ void AHronoCharacter::OnRep_CharacterTimeline()
 {
 	ApplyTimelineCollision();
 
+}
+
+void AHronoCharacter::ServerSetSprinting_Implementation(bool bNewSprint)
+{
+	bSprinting = bNewSprint;
+
+	if (bSprinting && !bRecovering)
+	{
+		GetCharacterMovement()->MaxWalkSpeed = SprintSpeed;
+	}
+	else
+	{
+		GetCharacterMovement()->MaxWalkSpeed = WalkSpeed;
+	}
 }
 
 void AHronoCharacter::ApplyTimelineCollision()
@@ -143,6 +158,10 @@ void AHronoCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 		EnhancedInputComponent->BindAction(MouseLookAction, ETriggerEvent::Triggered, this, &AHronoCharacter::LookInput);
 
 		EnhancedInputComponent->BindAction(InteractAction, ETriggerEvent::Started, this, &AHronoCharacter::DoInteract);
+
+		// Sprinting
+		EnhancedInputComponent->BindAction(SprintAction, ETriggerEvent::Started, this, &AHronoCharacter::DoStartSprint);
+		EnhancedInputComponent->BindAction(SprintAction, ETriggerEvent::Completed, this, &AHronoCharacter::DoEndSprint);
 
 		// Drop held item
 		if (DropAction)
@@ -659,4 +678,62 @@ void AHronoCharacter::DoJumpEnd()
 {
 	// pass StopJumping to the character
 	StopJumping();
+}
+void AHronoCharacter::OnRep_Sprinting()
+{
+	if (bSprinting && !bRecovering)
+	{
+		GetCharacterMovement()->MaxWalkSpeed = SprintSpeed;
+	}
+	else
+	{
+		GetCharacterMovement()->MaxWalkSpeed = WalkSpeed;
+	}
+}
+void AHronoCharacter::DoStartSprint()
+{
+	if (!IsLocallyControlled()) return;
+
+	bSprinting = true;
+	if (!bRecovering)
+	{
+		GetCharacterMovement()->MaxWalkSpeed = SprintSpeed;
+	}
+	ServerSetSprinting(true);
+}
+
+void AHronoCharacter::DoEndSprint()
+{
+	if (!IsLocallyControlled()) return;
+
+	bSprinting = false;
+	GetCharacterMovement()->MaxWalkSpeed = WalkSpeed;
+	ServerSetSprinting(false);
+}
+
+
+void AHronoCharacter::SprintFixedTick()
+{
+	float Velocity = GetVelocity().Size();
+
+	UE_LOG(LogTemp, Verbose, TEXT("[SprintTick] bSprinting=%d bRecovering=%d Velocity=%.2f SprintMeter=%.2f"),
+		bSprinting, bRecovering, Velocity, SprintMeter);
+	if (bSprinting && !bRecovering && Velocity > WalkSpeed)
+	{
+		if (SprintMeter > 0.0f)
+		{
+			SprintMeter = FMath::Max(SprintMeter - SprintFixedTickTime, 0.0f);
+
+			UE_LOG(LogTemp, Warning, TEXT("[SprintTick] Drain stamina: %f"), SprintMeter);
+
+			if (SprintMeter <= 0.0f)
+			{
+				bRecovering = true;
+
+				GetCharacterMovement()->MaxWalkSpeed = RecoveringWalkSpeed;
+
+				UE_LOG(LogTemp, Error, TEXT("[SprintTick] OUT OF STAMINA -> RECOVERING MODE"));
+			}
+		}
+	}
 }

@@ -4,7 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
-#include "Components/RectLightComponent.h"
+#include "Components/SpotLightComponent.h"
 #include "Light_Env.generated.h"
 
 UCLASS()
@@ -19,8 +19,8 @@ public:
 protected:
 	// Called when the game starts or when spawned
 	virtual void BeginPlay() override;
-	UPROPERTY(VisibleAnywhere)
-	URectLightComponent* RectLight;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Light")
+	USpotLightComponent* Light;
 public:	
 	// Called every frame
 	virtual void Tick(float DeltaTime) override;

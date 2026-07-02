@@ -45,23 +45,22 @@ void AHorrorPlayerController::OnPossess(APawn* aPawn)
 {
 	Super::OnPossess(aPawn);
 
-	// only spawn UI on local player controllers
-	if (IsLocalPlayerController())
-	{
-		// set up the UI for the character
-		if (AHorrorCharacter* HorrorCharacter = Cast<AHorrorCharacter>(aPawn))
-		{
-			// create the UI
-			if (!HorrorUI)
-			{
-				HorrorUI = CreateWidget<UHorrorUI>(this, HorrorUIClass);
-				HorrorUI->AddToViewport(0);
-			}
+	if (!IsLocalPlayerController())
+		return;
 
-			HorrorUI->SetupCharacter(HorrorCharacter);
+	if (UEnhancedInputLocalPlayerSubsystem* Subsystem =
+		ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(GetLocalPlayer()))
+	{
+		for (UInputMappingContext* Context : DefaultMappingContexts)
+		{
+			if (Context)
+			{
+				Subsystem->AddMappingContext(Context, 0);
+				UE_LOG(LogTemp, Warning, TEXT("Added IMC: %s"), *Context->GetName());
+			}
 		}
 	}
-	
+	//UE_LOG(LogTemp, Warning, TEXT("Enhanced Input Subsystem valid: %d"), Subsystem != nullptr);
 }
 
 void AHorrorPlayerController::SetupInputComponent()

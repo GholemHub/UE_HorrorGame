@@ -20,7 +20,7 @@ public:
 
 	//EItemTimeline ItemTimeline = EItemTimeline::Future;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Item TAG")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tags")
 	FGameplayTag ItemTag;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Item TAG")

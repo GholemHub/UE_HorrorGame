@@ -10,11 +10,11 @@ ALight_Env::ALight_Env()
  	// Set this actor to call Tick() every frame.  You can turn this off to improve performance if you don't need it.
 	PrimaryActorTick.bCanEverTick = true;
 
-	RectLight = CreateDefaultSubobject<URectLightComponent>(TEXT("RectLight"));
-	RectLight->SetupAttachment(RootComponent);
+	Light = CreateDefaultSubobject<USpotLightComponent>(TEXT("Light"));
+	Light->SetupAttachment(RootComponent);
 
-	RectLight->Intensity = 5000.f;
-	RectLight->LightColor = FColor::White;
+	Light->Intensity = 5000.f;
+	Light->LightColor = FColor::White;
 	bReplicates = true;
 }
 
@@ -34,7 +34,7 @@ void ALight_Env::Tick(float DeltaTime)
 
 void ALight_Env::OnSwith(bool NewState)
 {
-	RectLight->SetVisibility(NewState);
+	Light->SetVisibility(NewState);
 	UE_LOG(LogTemp, Log, TEXT("OnSwith"));
 	GEngine->AddOnScreenDebugMessage(
 		1,
