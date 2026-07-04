@@ -10,6 +10,12 @@
 
 #include "Drag_Item.generated.h"
 
+
+/** Broadcast whenever the door finishes closing (true) or starts to open (false).
+ *  Fires on the server and on every client so gameplay/UI can react to door state. */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnDoorStateChanged, bool, bIsClosed);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnShelfStateChanged);
+
 UENUM(BlueprintType)
 enum class EItemType : uint8
 {
@@ -18,14 +24,10 @@ enum class EItemType : uint8
 	Battery,
 	Note,
 	Tool,
-	Draggable
+	Draggable,
+	DraggableInvertLeft,
+	DraggableInvertRight
 };
-
-
-/** Broadcast whenever the door finishes closing (true) or starts to open (false).
- *  Fires on the server and on every client so gameplay/UI can react to door state. */
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnDoorStateChanged, bool, bIsClosed);
-DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnShelfStateChanged);
 
 UCLASS()
 class HRONO_API ADrag_Item : public ABase_Item

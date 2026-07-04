@@ -79,6 +79,9 @@ AHronoCharacter::AHronoCharacter()
 	SpotLight->InnerConeAngle = 18.7f;
 	SpotLight->OuterConeAngle = 45.24f;
 
+
+	GetCharacterMovement()->NavAgentProps.bCanCrouch = true;
+
 }
 
 void AHronoCharacter::OnRep_CharacterTimeline()
@@ -163,6 +166,12 @@ void AHronoCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 		EnhancedInputComponent->BindAction(SprintAction, ETriggerEvent::Started, this, &AHronoCharacter::DoStartSprint);
 		EnhancedInputComponent->BindAction(SprintAction, ETriggerEvent::Completed, this, &AHronoCharacter::DoEndSprint);
 
+		// Crouch
+		EnhancedInputComponent->BindAction(CrouchAction, ETriggerEvent::Started, this, &AHronoCharacter::DoCrouchStart);
+		EnhancedInputComponent->BindAction(CrouchAction, ETriggerEvent::Completed, this, &AHronoCharacter::DoCrouchEnd);
+
+		
+
 		// Drop held item
 		if (DropAction)
 		{
@@ -174,6 +183,14 @@ void AHronoCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 		UE_LOG(LogHrono, Error, TEXT("'%s' Failed to find an Enhanced Input Component! This template is built to use the Enhanced Input system. If you intend to use the legacy system, then you will need to update this C++ file."), *GetNameSafe(this));
 	}
 }
+
+void AHronoCharacter::OnStartCrouch(float HalfHeightAdjust, float ScaledHalfHeightAdjust)
+{
+	Super::OnStartCrouch(HalfHeightAdjust, ScaledHalfHeightAdjust);
+
+	UE_LOG(LogTemp, Warning, TEXT("OnStartCrouch"));
+}
+
 #include "Kismet/GameplayStatics.h"
 void AHronoCharacter::BeginPlay()
 {
@@ -678,6 +695,28 @@ void AHronoCharacter::DoJumpEnd()
 {
 	// pass StopJumping to the character
 	StopJumping();
+}
+void AHronoCharacter::DoCrouchStart()
+{
+	UE_LOG(LogTemp, Warning,
+		TEXT("Role=%d RemoteRole=%d Local=%d Authority=%d"),
+		(int32)GetLocalRole(),
+		(int32)GetRemoteRole(),
+		IsLocallyControlled(),
+		HasAuthority());
+
+	Crouch();
+
+	
+	UE_LOG(LogTemp, Warning,
+		TEXT("MovementMode=%d"),
+		(int32)GetCharacterMovement()->MovementMode);
+
+
+}
+void AHronoCharacter::DoCrouchEnd()
+{
+	UnCrouch();
 }
 void AHronoCharacter::OnRep_Sprinting()
 {

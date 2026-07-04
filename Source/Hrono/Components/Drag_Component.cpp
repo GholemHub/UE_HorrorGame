@@ -80,8 +80,8 @@ void UDrag_Component::XDrag()
 	AActor* Owner = GetOwner();
 	if (!Owner || !RotatingController) return;
 
-	auto Door = Cast<ADrag_Item>(Owner);
-	if (!Door) return;
+	auto Drag_Item = Cast<ADrag_Item>(Owner);
+	if (!Drag_Item) return;
 
 	APawn* PlayerPawn = RotatingController->GetPawn();
 	if (!PlayerPawn) return;
@@ -108,26 +108,46 @@ void UDrag_Component::XDrag()
 
 	float DirectionMultiplier =
 		(Side < 0.f) ? -1.f : 1.f;
-
-	FRotator OldRotation = Door->ItemMesh->GetRelativeRotation();
+	FRotator OldRotation = Drag_Item->ItemMesh->GetRelativeRotation();
 
 	FRotator NewRotation = OldRotation;
 
-	NewRotation.Yaw = FMath::Clamp(
-		NewRotation.Yaw + MouseX * RotationSpeed * DirectionMultiplier,
-		-90.f,
-		0.f
-	);
+	if (Drag_Item->ItemType == EItemType::DraggableInvertLeft)
+	{
+		NewRotation.Yaw = FMath::Clamp(
+			NewRotation.Yaw + MouseX * RotationSpeed * DirectionMultiplier * -1,
+			0.f,
+			90.f
+		);
+	}
+	else if (Drag_Item->ItemType == EItemType::DraggableInvertRight)
+	{
+		NewRotation.Yaw = FMath::Clamp(
+			NewRotation.Yaw + MouseX * RotationSpeed * DirectionMultiplier * -1,
+			-90.f,
+			0.f
+			
+		);
+	}
+	else 
+	{
+		NewRotation.Yaw = FMath::Clamp(
+			NewRotation.Yaw + MouseX * RotationSpeed * DirectionMultiplier,
+			-90.f,
+			0.f
+		);
+	}
 
-	bool bOverlappingPlayer = Door->ItemMesh->IsOverlappingActor(PlayerPawn);
+
+	bool bOverlappingPlayer = Drag_Item->ItemMesh->IsOverlappingActor(PlayerPawn);
 	if (bOverlappingPlayer)
 	{
 		NewRotation = OldRotation;
 	}
 
 	// Apply rotation locally for immediate feedback (prediction)
-	Door->ItemMesh->SetRelativeRotation(NewRotation);
-	Door->DoorRotation = NewRotation;
+	Drag_Item->ItemMesh->SetRelativeRotation(NewRotation);
+	Drag_Item->DoorRotation = NewRotation;
 
 	// Send the new rotation to the server so it updates the authoritative collision
 	// body and replicates it to every other client. The door is a level actor and
@@ -136,13 +156,13 @@ void UDrag_Component::XDrag()
 	{
 		if (!Character->HasAuthority())
 		{
-			Character->Server_SetDoorRotation(Door, NewRotation);
+			Character->Server_SetDoorRotation(Drag_Item, NewRotation);
 		}
 		else
 		{
 			// Listen-server host drags the door locally with authority, so refresh
 			// the replicated closed/open state here (no RPC round-trip happens).
-			Door->RefreshDoorClosedState();
+			Drag_Item->RefreshDoorClosedState();
 		}
 	}
 }

@@ -53,6 +53,9 @@ protected:
 	UPROPERTY(EditAnywhere, Category ="Input")
 	UInputAction* JumpAction;
 
+	UPROPERTY(EditAnywhere, Category = "Input")
+	UInputAction* CrouchAction;
+
 	/** Move Input Action */
 	UPROPERTY(EditAnywhere, Category ="Input")
 	UInputAction* MoveAction;
@@ -139,6 +142,13 @@ protected:
 	/** Handles jump end inputs from either controls or UI interfaces */
 	UFUNCTION(BlueprintCallable, Category="Input")
 	virtual void DoJumpEnd();
+
+	UFUNCTION(BlueprintCallable, Category = "Input")
+	void DoCrouchStart();
+
+	/** Handles jump end inputs from either controls or UI interfaces */
+	UFUNCTION(BlueprintCallable, Category = "Input")
+	void DoCrouchEnd();
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, ReplicatedUsing = OnRep_CharacterTimeline, Category = "Timeline")
 	EItemTimeline CharacterTimeline = EItemTimeline::Past;
@@ -242,7 +252,7 @@ public:
 
 	UFUNCTION(Server, Reliable)
 	void ServerNextItemInput(float AxisValue);
-
+	virtual void OnStartCrouch(float HalfHeightAdjust, float ScaledHalfHeightAdjust) override;
 
 	private:
 		void OnEnyInteractTrace(FHitResult HitResult);
