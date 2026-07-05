@@ -49,10 +49,6 @@ class AHronoCharacter : public ACharacter
 	
 protected:
 
-	void UpdateChairState(AChair* PreviousChair);
-
-	void HandleSitStarted(AChair* Chair);
-	void HandleSitEnded(AChair* Chair);
 
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
@@ -243,7 +239,7 @@ protected:
 	UPROPERTY(ReplicatedUsing = OnRep_CurrentChair)
 	AChair* CurrentChair;
 	UFUNCTION()
-	void OnRep_CurrentChair(AChair* PreviousChair);
+	void OnRep_CurrentChair();
 
 	UPROPERTY(BlueprintReadWrite, Replicated)
 	bool bIsSitting;

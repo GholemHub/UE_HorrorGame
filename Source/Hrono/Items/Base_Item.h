@@ -3,12 +3,14 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "HronoSharedTools.h"
-#include "HronoCharacter.h"
+
 #include "Net/UnrealNetwork.h"
 #include "GameplayTagContainer.h"
-
+#include "HronoSharedTools.h"
 
 #include "Base_Item.generated.h"
+
+class AHronoCharacter;
 
 UCLASS()
 class HRONO_API ABase_Item : public AActor
@@ -17,6 +19,9 @@ class HRONO_API ABase_Item : public AActor
 	
 public:	
 	ABase_Item();
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	EItemType ItemType = EItemType::None;
 
 	//EItemTimeline ItemTimeline = EItemTimeline::Future;
 
@@ -34,6 +39,10 @@ public:
 	{
 		return ItemTags.HasTag(Tag);
 	}
+	UFUNCTION(BlueprintNativeEvent)
+	void Use(AActor* Character);
+
+	virtual void Use_Implementation(AActor* Character);
 
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 

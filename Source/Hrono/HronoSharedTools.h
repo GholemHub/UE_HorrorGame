@@ -23,3 +23,17 @@ enum class EItemTimeline : uint8
 	Both    UMETA(DisplayName = "Both")
 };
 
+UENUM(BlueprintType)
+enum class EItemType : uint8
+{
+	None,
+	Key,
+	Battery,
+	Note,
+	Tool,
+	Draggable,
+	DraggableInvertLeft,
+	DraggableInvertRight,
+	Chair
+};
+

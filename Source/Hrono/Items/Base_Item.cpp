@@ -23,6 +23,12 @@ ABase_Item::ABase_Item()
 
 }
 
+
+void ABase_Item::Use_Implementation(AActor* Character)
+{
+	UE_LOG(LogTemp, Warning, TEXT("Default Use"));
+}
+
 void ABase_Item::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);

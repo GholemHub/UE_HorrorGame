@@ -372,6 +372,7 @@ void AHronoCharacter::HandleInteraction(const FHitResult& HitResult)
 }
 
 
+
 void AHronoCharacter::DoInteract()
 {
 	if (!IsLocallyControlled())
@@ -397,114 +398,46 @@ void AHronoCharacter::ServerPickupItem_Implementation(ABase_Item* Item)
 
 #include "Items/Chair.h"
 
-void AHronoCharacter::OnRep_CurrentChair(AChair* PreviousChair)
+void AHronoCharacter::OnRep_CurrentChair()
 {
-	UpdateChairState(PreviousChair);
-}
-
-void AHronoCharacter::UpdateChairState(AChair* PreviousChair)
-{
-	// Run on the authority (so the server-owned position is updated and replicated)
-	// and on the owning client (so the local player reacts immediately). Simulated
-	// proxies are skipped because their transform follows replicated movement.
-	// Doing the teleport on the server too keeps positions in sync and prevents the
-	// CharacterMovement correction that caused the double teleport on stand up.
-	if (!HasAuthority() && !IsLocallyControlled())
-		return;
-
 	if (CurrentChair)
 	{
-		HandleSitStarted(CurrentChair);
+		OnSitStarted(CurrentChair);
 	}
-	else if (PreviousChair)
+	else
 	{
-		// CurrentChair has already been cleared, so the chair we left is passed in
-		// as the previous value of the replicated property.
-		HandleSitEnded(PreviousChair);
+		OnSitEnded();
 	}
-}
-
-void AHronoCharacter::HandleSitStarted(AChair* Chair)
-{
-	if (!Chair)
-		return;
-
-	// Freeze the character in place while sitting.
-	if (UCharacterMovementComponent* Movement = GetCharacterMovement())
-	{
-		Movement->StopMovementImmediately();
-		Movement->DisableMovement();
-	}
-
-	// Snap to the chair's sit point.
-	if (USceneComponent* SitPoint = Chair->GetSitPoint())
-	{
-		SetActorLocation(SitPoint->GetComponentLocation(), false, nullptr, ETeleportType::TeleportPhysics);
-	}
-
-	// Optional cosmetic hook (animation, sound). The gameplay logic now lives in C++.
-	OnSitStarted(Chair);
-}
-
-void AHronoCharacter::HandleSitEnded(AChair* Chair)
-{
-	// Snap to the chair's stand-up point before restoring movement.
-	if (Chair)
-	{
-		if (USceneComponent* StandUpPoint = Chair->GetStandUpPoint())
-		{
-			SetActorLocation(StandUpPoint->GetComponentLocation(), false, nullptr, ETeleportType::TeleportPhysics);
-		}
-	}
-
-	// Restore normal walking movement.
-	if (UCharacterMovementComponent* Movement = GetCharacterMovement())
-	{
-		Movement->SetMovementMode(MOVE_Walking);
-	}
-
-	// Optional cosmetic hook (animation, sound). The gameplay logic now lives in C++.
-	OnSitEnded();
 }
 
 void AHronoCharacter::StandUp()
 {
-	if (!HasAuthority())
-		return;
-
-	AChair* PreviousChair = CurrentChair;
-
-	if (CurrentChair)
-	{
-		CurrentChair->bIsSit = false;
-	}
-
+	
+	CurrentChair->bIsSit = false;
 	CurrentChair = nullptr;
 	bIsSitting = false;
 
-	// RepNotify is not called on the authority, so invoke it manually to keep the
-	// server (listen-server host) in sync with clients.
-	OnRep_CurrentChair(PreviousChair);
+	OnRep_CurrentChair(); // server visuals
 }
 
 void AHronoCharacter::SitOnChair(AChair* Chair)
 {
+	
 	if (!HasAuthority())
 		return;
 
-	if (Chair->bIsSit)
-		return;
-
-	AChair* PreviousChair = CurrentChair;
-
 	CurrentChair = Chair;
+
+	if (CurrentChair->bIsSit == true) {
+		return;
+	}
+
+
+
+	CurrentChair->bIsSit = true;
 	bIsSitting = true;
 
-	Chair->bIsSit = true;
-
-	// RepNotify is not called on the authority, so invoke it manually to keep the
-	// server (listen-server host) in sync with clients.
-	OnRep_CurrentChair(PreviousChair);
+	OnRep_CurrentChair(); // server local visual
 }
 
 void AHronoCharacter::DoDrop()

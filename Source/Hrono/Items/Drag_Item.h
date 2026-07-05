@@ -7,6 +7,7 @@
 #include "Components/Drag_Component.h"
 #include "Items/Base_Item.h"
 #include "Engine/Engine.h"
+#include "HronoSharedTools.h"
 
 #include "Drag_Item.generated.h"
 
@@ -16,18 +17,7 @@
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnDoorStateChanged, bool, bIsClosed);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnShelfStateChanged);
 
-UENUM(BlueprintType)
-enum class EItemType : uint8
-{
-	None,
-	Key,
-	Battery,
-	Note,
-	Tool,
-	Draggable,
-	DraggableInvertLeft,
-	DraggableInvertRight
-};
+
 
 UCLASS()
 class HRONO_API ADrag_Item : public ABase_Item
@@ -50,10 +40,6 @@ public:
 	class UDrag_Component* DragComponent;
 
 	virtual void UpdateMeshForLocalPlayer() override;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	EItemType ItemType = EItemType::None;
-
 
 protected:
 	// Called when the game starts or when spawned
