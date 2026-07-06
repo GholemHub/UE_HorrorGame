@@ -34,6 +34,7 @@ enum class EItemType : uint8
 	Draggable,
 	DraggableInvertLeft,
 	DraggableInvertRight,
-	Chair
+	Chair,
+	Dozimetr
 };
 

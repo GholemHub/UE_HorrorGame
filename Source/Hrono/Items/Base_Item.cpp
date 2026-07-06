@@ -114,6 +114,7 @@ void ABase_Item::AttachToCharacter()
 	bIsPickedUp = true;
 	
 }
+#include "Items/Dozimetr.h"
 
 void ABase_Item::OnPickedUp(AHronoCharacter* Character)
 {
@@ -124,6 +125,11 @@ void ABase_Item::OnPickedUp(AHronoCharacter* Character)
 
 	AttachToCharacter();
 	UE_LOG(LogTemp, Warning, TEXT("PickUp"));
+	auto Dozimetr = Cast<ADozimetr>(this);
+	if (Dozimetr) {
+		Dozimetr->On();
+	}
+
 }
 
 
@@ -181,6 +187,11 @@ void ABase_Item::Drop()
 	DetachFromCharacter();
 
 	bIsPickedUp = false;
+
+	auto Dozimetr = Cast<ADozimetr>(this);
+	if (Dozimetr) {
+		Dozimetr->Off();
+	}
 
 	// Clear both native ownership and your replication variable
 	SetOwner(nullptr);

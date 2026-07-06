@@ -77,7 +77,7 @@ public:
 
 	void AttachToCharacter();
 
-	UPROPERTY(ReplicatedUsing = OnRep_OwningCharacter)
+	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_OwningCharacter)
 	AHronoCharacter* OwningCharacter;
 
 	UFUNCTION()
