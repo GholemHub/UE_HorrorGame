@@ -701,6 +701,9 @@ void AHronoCharacter::OnEnyInteractTrace(FHitResult HitResult)
 
 void AHronoCharacter::PickupItem(ABase_Item* Item)
 {
+	UE_LOG(LogTemp, Warning, TEXT("PickupItem Authority=%d"), HasAuthority());
+
+
 	if (!HasAuthority())
 	{
 		return;
@@ -716,6 +719,17 @@ void AHronoCharacter::PickupItem(ABase_Item* Item)
 		Item->Use(this);
 		return;
 	}
+
+	if (Item->ItemType == EItemType::Clock)
+	{
+		Item->Use(this);
+
+		UE_LOG(LogTemp, Log, TEXT("RESET"));
+
+
+		return;
+	}
+
 	
 	if (Item->TryPickUp(this))
 	{
