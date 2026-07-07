@@ -11,6 +11,7 @@
 class USphereComponent;
 class UPrimitiveComponent;
 class AShooterWeapon;
+class USoundBase;
 
 /**
  *  Holds information about a type of weapon pickup
@@ -60,6 +61,14 @@ protected:
 
 	/** Timer to respawn the pickup */
 	FTimerHandle RespawnTimer;
+
+	/** Played when this pickup is collected. Assign any sound in Blueprint. */
+	UPROPERTY(EditAnywhere, Category="Audio")
+	TObjectPtr<USoundBase> PickupSound;
+
+	/** Played when this pickup respawns. Assign any sound in Blueprint. */
+	UPROPERTY(EditAnywhere, Category="Audio")
+	TObjectPtr<USoundBase> RespawnSound;
 
 public:	
 	

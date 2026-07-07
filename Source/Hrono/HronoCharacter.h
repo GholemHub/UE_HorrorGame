@@ -18,6 +18,7 @@ class UDrag_Component;
 class ADrag_Item;
 class USpotLightComponent;
 class AChair;
+class USoundBase;
 struct FInputActionValue;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
@@ -102,6 +103,33 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<USceneComponent> InteractionPoint;
+
+	// =========================================================
+	// AUDIO (placeholder sounds — assign any sound in Blueprint)
+	// =========================================================
+
+	/** Played for each footstep. Call PlayFootstepSound() from an animation notify. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio")
+	TObjectPtr<USoundBase> FootstepSound;
+
+	/** Played when the character jumps. Assign any sound in Blueprint. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio")
+	TObjectPtr<USoundBase> JumpSound;
+
+	/** Played when the character lands. Assign any sound in Blueprint. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio")
+	TObjectPtr<USoundBase> LandSound;
+
+	/** Played when the character interacts with something. Assign any sound in Blueprint. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio")
+	TObjectPtr<USoundBase> InteractSound;
+
+	/** Plays the footstep sound at the character's feet. Hook this up to an animation notify. */
+	UFUNCTION(BlueprintCallable, Category = "Audio")
+	void PlayFootstepSound();
+
+	/** Called by the engine when the character lands after a fall. */
+	virtual void Landed(const FHitResult& Hit) override;
 
 protected:
 

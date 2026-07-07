@@ -2,6 +2,8 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 #include "HronoCharacter.h"
 #include "Components/SceneComponent.h"
+#include "Kismet/GameplayStatics.h"
+#include "Sound/SoundBase.h"
 
 #include "Items/Chair.h"
 
@@ -23,6 +25,10 @@ void AChair::Use_Implementation(AActor* Character)
 
     if (!Hrono)
         return;
+
+    // bIsSit still reflects the state *before* this toggle, so play the sound
+    // matching the action the player is about to perform.
+    UGameplayStatics::PlaySoundAtLocation(this, bIsSit ? StandUpSound : SitSound, GetActorLocation());
 
     Hrono->SitOnChair(this);
 }

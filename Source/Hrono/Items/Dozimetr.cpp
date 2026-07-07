@@ -1,6 +1,8 @@
 #include "Items/Dozimetr.h"
 #include "HronoCharacter.h"
 #include "GameFramework/PlayerController.h"
+#include "Kismet/GameplayStatics.h"
+#include "Sound/SoundBase.h"
 
 static bool IsOwnedByRemoteClient(ABase_Item* Item)
 {
@@ -21,6 +23,7 @@ void ADozimetr::On()
 	// since OnPickedUp() is gated behind HasAuthority()). Covers dedicated server
 	// AND the listen-server host's own local player.
 	ReceiveOn();
+	UGameplayStatics::PlaySoundAtLocation(this, TurnOnSound, GetActorLocation());
 
 	// Only RPC out if the owner is a genuinely remote client — otherwise the
 	// listen-server host would run ReceiveOn() twice (once above, once via RPC).
@@ -33,6 +36,7 @@ void ADozimetr::On()
 void ADozimetr::Off()
 {
 	ReceiveOff();
+	UGameplayStatics::PlaySoundAtLocation(this, TurnOffSound, GetActorLocation());
 
 	if (IsOwnedByRemoteClient(this))
 	{
@@ -43,9 +47,11 @@ void ADozimetr::Off()
 void ADozimetr::Client_On_Implementation()
 {
 	ReceiveOn();
+	UGameplayStatics::PlaySoundAtLocation(this, TurnOnSound, GetActorLocation());
 }
 
 void ADozimetr::Client_Off_Implementation()
 {
 	ReceiveOff();
+	UGameplayStatics::PlaySoundAtLocation(this, TurnOffSound, GetActorLocation());
 }

@@ -13,6 +13,7 @@ class AShooterProjectile;
 class USkeletalMeshComponent;
 class UAnimMontage;
 class UAnimInstance;
+class USoundBase;
 
 /**
  *  Base class for a simple first person shooter weapon
@@ -52,6 +53,22 @@ protected:
 	/** Animation montage to play when firing this weapon */
 	UPROPERTY(EditAnywhere, Category="Animation")
 	UAnimMontage* FiringMontage;
+
+	/** Played each time the weapon fires a shot. Assign any sound in Blueprint. */
+	UPROPERTY(EditAnywhere, Category="Audio")
+	TObjectPtr<USoundBase> FireSound;
+
+	/** Played when the trigger is pulled with no ammo (dry fire). Assign any sound in Blueprint. */
+	UPROPERTY(EditAnywhere, Category="Audio")
+	TObjectPtr<USoundBase> EmptySound;
+
+	/** Played when the weapon reloads a fresh magazine. Assign any sound in Blueprint. */
+	UPROPERTY(EditAnywhere, Category="Audio")
+	TObjectPtr<USoundBase> ReloadSound;
+
+	/** Played when the weapon is equipped/activated. Assign any sound in Blueprint. */
+	UPROPERTY(EditAnywhere, Category="Audio")
+	TObjectPtr<USoundBase> EquipSound;
 
 	/** AnimInstance class to set for the first person character mesh when this weapon is active */
 	UPROPERTY(EditAnywhere, Category="Animation")

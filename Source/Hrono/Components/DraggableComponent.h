@@ -8,6 +8,8 @@
 class UStaticMeshComponent;
 class UDrag_Component;
 class ABase_Item;
+class USoundBase;
+class UAudioComponent;
 
 UENUM(BlueprintType)
 enum class EItemType1 : uint8
@@ -135,6 +137,46 @@ public:
 
     UFUNCTION(BlueprintCallable, Category = "State")
     bool IsShelfOpen() const { return bIsShelfOpen; }
+
+    // =========================================================
+    // AUDIO (placeholder sounds — assign any sound in Blueprint)
+    // =========================================================
+
+    /** Runtime looping audio source used for the door/shelf movement sound. */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Audio")
+    UAudioComponent* MoveAudioComponent;
+
+    /** Played once when the door finishes opening. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio|Door")
+    TObjectPtr<USoundBase> DoorOpenSound;
+
+    /** Played once when the door finishes closing. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio|Door")
+    TObjectPtr<USoundBase> DoorCloseSound;
+
+    /** Looping sound played while the door is being moved/dragged. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio|Door")
+    TObjectPtr<USoundBase> DoorMoveSound;
+
+    /** Played once when the shelf finishes opening. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio|Shelf")
+    TObjectPtr<USoundBase> ShelfOpenSound;
+
+    /** Played once when the shelf finishes closing. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio|Shelf")
+    TObjectPtr<USoundBase> ShelfCloseSound;
+
+    /** Looping sound played while the shelf is being moved/dragged. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio|Shelf")
+    TObjectPtr<USoundBase> ShelfMoveSound;
+
+    /** Starts the looping move sound. Pass true for the shelf sound, false for the door sound. */
+    UFUNCTION(BlueprintCallable, Category = "Audio")
+    void StartMoveSound(bool bShelf);
+
+    /** Stops the looping move sound. */
+    UFUNCTION(BlueprintCallable, Category = "Audio")
+    void StopMoveSound();
 
 protected:
 

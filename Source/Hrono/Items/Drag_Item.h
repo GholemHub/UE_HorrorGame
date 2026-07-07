@@ -17,7 +17,8 @@
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnDoorStateChanged, bool, bIsClosed);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnShelfStateChanged);
 
-
+class USoundBase;
+class UAudioComponent;
 
 UCLASS()
 class HRONO_API ADrag_Item : public ABase_Item
@@ -40,6 +41,46 @@ public:
 	class UDrag_Component* DragComponent;
 
 	virtual void UpdateMeshForLocalPlayer() override;
+
+	// =========================================================
+	// AUDIO (placeholder sounds — assign any sound in Blueprint)
+	// =========================================================
+
+	/** Runtime looping audio source used for the door/shelf movement sound. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Audio")
+	UAudioComponent* MoveAudioComponent;
+
+	/** Played once when the door finishes opening. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio|Door")
+	TObjectPtr<USoundBase> DoorOpenSound;
+
+	/** Played once when the door finishes closing. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio|Door")
+	TObjectPtr<USoundBase> DoorCloseSound;
+
+	/** Looping sound played while the door is being moved/dragged. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio|Door")
+	TObjectPtr<USoundBase> DoorMoveSound;
+
+	/** Played once when the shelf finishes opening. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio|Shelf")
+	TObjectPtr<USoundBase> ShelfOpenSound;
+
+	/** Played once when the shelf finishes closing. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio|Shelf")
+	TObjectPtr<USoundBase> ShelfCloseSound;
+
+	/** Looping sound played while the shelf is being moved/dragged. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio|Shelf")
+	TObjectPtr<USoundBase> ShelfMoveSound;
+
+	/** Starts the looping move sound. Pass true for the shelf sound, false for the door sound. */
+	UFUNCTION(BlueprintCallable, Category = "Audio")
+	void StartMoveSound(bool bShelf);
+
+	/** Stops the looping move sound. */
+	UFUNCTION(BlueprintCallable, Category = "Audio")
+	void StopMoveSound();
 
 protected:
 	// Called when the game starts or when spawned

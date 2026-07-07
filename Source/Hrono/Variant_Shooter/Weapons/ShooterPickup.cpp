@@ -9,6 +9,8 @@
 #include "ShooterWeapon.h"
 #include "Engine/World.h"
 #include "TimerManager.h"
+#include "Kismet/GameplayStatics.h"
+#include "Sound/SoundBase.h"
 
 AShooterPickup::AShooterPickup()
 {
@@ -75,6 +77,9 @@ void AShooterPickup::OnOverlap(UPrimitiveComponent* OverlappedComponent, AActor*
 	{
 		WeaponHolder->AddWeaponClass(WeaponClass);
 
+		// play the pickup sound
+		UGameplayStatics::PlaySoundAtLocation(this, PickupSound, GetActorLocation());
+
 		// hide this mesh
 		SetActorHiddenInGame(true);
 
@@ -93,6 +98,9 @@ void AShooterPickup::RespawnPickup()
 {
 	// unhide this pickup
 	SetActorHiddenInGame(false);
+
+	// play the respawn sound
+	UGameplayStatics::PlaySoundAtLocation(this, RespawnSound, GetActorLocation());
 
 	// call the BP handler
 	BP_OnRespawn();

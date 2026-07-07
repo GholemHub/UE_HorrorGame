@@ -5,6 +5,9 @@
 #include "Components/Drag_Component.h"
 #include "HronoCollisionChannels.h"
 #include "Net/UnrealNetwork.h"
+#include "Components/AudioComponent.h"
+#include "Kismet/GameplayStatics.h"
+#include "Sound/SoundBase.h"
 
 
 
@@ -27,10 +30,15 @@ ADrag_Item::ADrag_Item()
 
     FrameMesh->SetupAttachment(SceneRoot);
 
-    ItemMesh->SetupAttachment(FrameMesh);
+	ItemMesh->SetupAttachment(FrameMesh);
 
 	DragComponent = CreateDefaultSubobject<UDrag_Component>(TEXT("DragComponent"));
 
+	// Looping audio source that follows the moving panel. The actual sound is set
+	// at runtime (door vs shelf) and the component is only activated while dragging.
+	MoveAudioComponent = CreateDefaultSubobject<UAudioComponent>(TEXT("MoveAudioComponent"));
+	MoveAudioComponent->SetupAttachment(ItemMesh);
+	MoveAudioComponent->bAutoActivate = false;
 }
 
 void ADrag_Item::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -80,6 +88,7 @@ void ADrag_Item::RefreshDoorClosedState()
     // OnRep_IsClosed only fires on remote clients, so broadcast here for the
     // server/listen-server host as well.
     UE_LOG(LogTemp, Log, TEXT("[SERVER] Door %s"), bIsClosed ? TEXT("closed") : TEXT("open"));
+    UGameplayStatics::PlaySoundAtLocation(this, bIsClosed ? DoorCloseSound : DoorOpenSound, GetActorLocation());
     OnDoorStateChanged.Broadcast(bIsClosed);
 }
 
@@ -123,6 +132,7 @@ void ADrag_Item::OnShelfOpened()
         OnShelfOpen.Broadcast();
     }
 
+    UGameplayStatics::PlaySoundAtLocation(this, ShelfOpenSound, GetActorLocation());
     UE_LOG(LogTemp, Log, TEXT("Shelf opened"));
 }
 
@@ -134,7 +144,38 @@ void ADrag_Item::OnShelfClosed()
         OnShelfClose.Broadcast();
     }
 
+    UGameplayStatics::PlaySoundAtLocation(this, ShelfCloseSound, GetActorLocation());
     UE_LOG(LogTemp, Log, TEXT("Shelf closed"));
+}
+
+void ADrag_Item::StartMoveSound(bool bShelf)
+{
+    if (!MoveAudioComponent)
+    {
+        return;
+    }
+
+    USoundBase* MoveSound = bShelf ? ShelfMoveSound : DoorMoveSound;
+    if (!MoveSound)
+    {
+        return;
+    }
+
+    MoveAudioComponent->SetSound(MoveSound);
+
+    if (!MoveAudioComponent->IsPlaying())
+    {
+        MoveAudioComponent->Play();
+    }
+}
+
+void ADrag_Item::StopMoveSound()
+{
+    if (MoveAudioComponent && MoveAudioComponent->IsPlaying())
+    {
+        // Small fade avoids an abrupt cut when the player releases the door.
+        MoveAudioComponent->FadeOut(0.15f, 0.0f);
+    }
 }
 
 void ADrag_Item::UpdateShelfCollision()
@@ -152,6 +193,7 @@ void ADrag_Item::OnRep_IsClosed()
 {
     // Runs on remote clients when the authority changes bIsClosed.
     UE_LOG(LogTemp, Log, TEXT("[CLIENT] Door %s"), bIsClosed ? TEXT("closed") : TEXT("open"));
+    UGameplayStatics::PlaySoundAtLocation(this, bIsClosed ? DoorCloseSound : DoorOpenSound, GetActorLocation());
     OnDoorStateChanged.Broadcast(bIsClosed);
 }
 

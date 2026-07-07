@@ -21,6 +21,14 @@ protected:
 	virtual void BeginPlay() override;
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Light")
 	USpotLightComponent* Light;
+
+	/** Played when this light turns on. Assign any sound in Blueprint. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio")
+	TObjectPtr<USoundBase> LightOnSound;
+
+	/** Played when this light turns off. Assign any sound in Blueprint. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio")
+	TObjectPtr<USoundBase> LightOffSound;
 public:	
 	// Called every frame
 	virtual void Tick(float DeltaTime) override;

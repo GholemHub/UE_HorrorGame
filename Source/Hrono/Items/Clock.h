@@ -18,4 +18,8 @@ public:
 	virtual void Use_Implementation(AActor* Character) override;
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	float TimeNow = 0.0;
+
+	/** Played when the clock is used/read. Assign any sound in Blueprint. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio")
+	TObjectPtr<USoundBase> UseSound;
 };

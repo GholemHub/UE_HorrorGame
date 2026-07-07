@@ -22,6 +22,14 @@ public:
 	UPROPERTY(Replicated)
 	bool bIsSit = false;
 
+	/** Played when a character sits down on this chair. Assign any sound in Blueprint. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio")
+	TObjectPtr<USoundBase> SitSound;
+
+	/** Played when a character stands up from this chair. Assign any sound in Blueprint. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio")
+	TObjectPtr<USoundBase> StandUpSound;
+
 	/** Where the character is placed while sitting on this chair */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Chair")
 	USceneComponent* SitPoint;

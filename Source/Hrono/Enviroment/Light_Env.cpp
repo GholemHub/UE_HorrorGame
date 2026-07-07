@@ -3,6 +3,8 @@
 
 #include "Enviroment/Light_Env.h"
 #include "Light_Env.h"
+#include "Kismet/GameplayStatics.h"
+#include "Sound/SoundBase.h"
 
 // Sets default values
 ALight_Env::ALight_Env()
@@ -35,6 +37,7 @@ void ALight_Env::Tick(float DeltaTime)
 void ALight_Env::OnSwith(bool NewState)
 {
 	Light->SetVisibility(NewState);
+	UGameplayStatics::PlaySoundAtLocation(this, NewState ? LightOnSound : LightOffSound, GetActorLocation());
 	UE_LOG(LogTemp, Log, TEXT("OnSwith"));
 	GEngine->AddOnScreenDebugMessage(
 		1,

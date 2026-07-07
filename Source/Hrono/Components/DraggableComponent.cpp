@@ -4,6 +4,9 @@
 #include "Components/StaticMeshComponent.h"
 #include "Net/UnrealNetwork.h"
 #include "Engine/Engine.h"
+#include "Components/AudioComponent.h"
+#include "Kismet/GameplayStatics.h"
+#include "Sound/SoundBase.h"
 
 #include "Components/Drag_Component.h"
 #include "Items/Base_Item.h"
@@ -59,6 +62,17 @@ void UDraggableComponent::BeginPlay()
 
     // Optional: make sure it replicates movement if needed
     ItemMesh->SetIsReplicated(true);
+
+    // =====================================================
+    // CREATE LOOPING MOVE AUDIO SOURCE
+    // =====================================================
+    MoveAudioComponent = NewObject<UAudioComponent>(Owner, TEXT("MoveAudioComponent"));
+    if (MoveAudioComponent)
+    {
+        MoveAudioComponent->RegisterComponent();
+        MoveAudioComponent->AttachToComponent(ItemMesh, FAttachmentTransformRules::KeepRelativeTransform);
+        MoveAudioComponent->bAutoActivate = false;
+    }
 
     // =====================================================
     // OPTIONAL: find drag component
@@ -173,6 +187,11 @@ void UDraggableComponent::RefreshDoorClosedState()
             bIsClosed ? TEXT("closed") : TEXT("open"));
     }
 
+    if (AActor* Owner = GetOwner())
+    {
+        UGameplayStatics::PlaySoundAtLocation(this, bIsClosed ? DoorCloseSound : DoorOpenSound, Owner->GetActorLocation());
+    }
+
     OnDoorStateChanged.Broadcast(bIsClosed);
 }
 
@@ -198,6 +217,11 @@ void UDraggableComponent::OnRep_IsClosed()
     {
         UE_LOG(LogTemp, Log, TEXT("[CLIENT] Door %s"),
             bIsClosed ? TEXT("closed") : TEXT("open"));
+    }
+
+    if (AActor* Owner = GetOwner())
+    {
+        UGameplayStatics::PlaySoundAtLocation(this, bIsClosed ? DoorCloseSound : DoorOpenSound, Owner->GetActorLocation());
     }
 
     OnDoorStateChanged.Broadcast(bIsClosed);
@@ -257,6 +281,11 @@ void UDraggableComponent::OnShelfOpened()
 {
     OnShelfOpen.Broadcast();
 
+    if (AActor* Owner = GetOwner())
+    {
+        UGameplayStatics::PlaySoundAtLocation(this, ShelfOpenSound, Owner->GetActorLocation());
+    }
+
     UE_LOG(LogTemp, Log, TEXT("Shelf opened"));
 }
 
@@ -264,7 +293,41 @@ void UDraggableComponent::OnShelfClosed()
 {
     OnShelfClose.Broadcast();
 
+    if (AActor* Owner = GetOwner())
+    {
+        UGameplayStatics::PlaySoundAtLocation(this, ShelfCloseSound, Owner->GetActorLocation());
+    }
+
     UE_LOG(LogTemp, Log, TEXT("Shelf closed"));
+}
+
+void UDraggableComponent::StartMoveSound(bool bShelf)
+{
+    if (!MoveAudioComponent)
+    {
+        return;
+    }
+
+    USoundBase* MoveSound = bShelf ? ShelfMoveSound : DoorMoveSound;
+    if (!MoveSound)
+    {
+        return;
+    }
+
+    MoveAudioComponent->SetSound(MoveSound);
+
+    if (!MoveAudioComponent->IsPlaying())
+    {
+        MoveAudioComponent->Play();
+    }
+}
+
+void UDraggableComponent::StopMoveSound()
+{
+    if (MoveAudioComponent && MoveAudioComponent->IsPlaying())
+    {
+        MoveAudioComponent->FadeOut(0.15f, 0.0f);
+    }
 }
 
 void UDraggableComponent::UpdateShelfCollision()

@@ -20,6 +20,14 @@ public:
 	void On();
 	void Off();
 
+	/** Played when the dosimeter is switched on. Assign any sound in Blueprint. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio")
+	TObjectPtr<USoundBase> TurnOnSound;
+
+	/** Played when the dosimeter is switched off. Assign any sound in Blueprint. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio")
+	TObjectPtr<USoundBase> TurnOffSound;
+
 protected:
 
 	UFUNCTION(Client, Reliable)

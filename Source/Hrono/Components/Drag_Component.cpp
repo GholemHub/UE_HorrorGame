@@ -64,6 +64,12 @@ void UDrag_Component::StartDrag(APlayerController* PC)
 	bIsRotating = true;
 	RotatingController = PC;
 
+	// Start the looping movement sound on the owning door/shelf actor.
+	if (ADrag_Item* Drag_Item = Cast<ADrag_Item>(GetOwner()))
+	{
+		Drag_Item->StartMoveSound(bIsShelf);
+	}
+
 	//UE_LOG(LogTemp, Log, TEXT("Drag started"));
 }
 
@@ -71,6 +77,12 @@ void UDrag_Component::StopDrag()
 {
 	bIsRotating = false;
 	RotatingController = nullptr;
+
+	// Stop the looping movement sound on the owning door/shelf actor.
+	if (ADrag_Item* Drag_Item = Cast<ADrag_Item>(GetOwner()))
+	{
+		Drag_Item->StopMoveSound();
+	}
 
 	//UE_LOG(LogTemp, Log, TEXT("Drag stopped"));
 }

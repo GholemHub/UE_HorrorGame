@@ -19,6 +19,9 @@
 
 #include "Components/InventoryComponent.h"
 
+#include "Kismet/GameplayStatics.h"
+#include "Sound/SoundBase.h"
+
 void AHronoCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
@@ -384,6 +387,7 @@ void AHronoCharacter::DoInteract()
 
 	if (HitResult.bBlockingHit)
 	{
+		UGameplayStatics::PlaySoundAtLocation(this, InteractSound, GetActorLocation());
 		HandleInteraction(HitResult);
 	}
 }
@@ -835,6 +839,9 @@ void AHronoCharacter::DoJumpStart()
 {
 	// pass Jump to the character
 	Jump();
+
+	// play the jump sound
+	UGameplayStatics::PlaySoundAtLocation(this, JumpSound, GetActorLocation());
 }
 
 void AHronoCharacter::DoJumpEnd()
@@ -921,4 +928,18 @@ void AHronoCharacter::SprintFixedTick()
 			}
 		}
 	}
+}
+
+void AHronoCharacter::Landed(const FHitResult& Hit)
+{
+	Super::Landed(Hit);
+
+	// play the landing sound
+	UGameplayStatics::PlaySoundAtLocation(this, LandSound, GetActorLocation());
+}
+
+void AHronoCharacter::PlayFootstepSound()
+{
+	// called from an animation notify while walking/running
+	UGameplayStatics::PlaySoundAtLocation(this, FootstepSound, GetActorLocation());
 }

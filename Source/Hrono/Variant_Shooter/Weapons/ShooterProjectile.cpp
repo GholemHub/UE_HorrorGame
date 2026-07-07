@@ -12,6 +12,7 @@
 #include "Engine/OverlapResult.h"
 #include "Engine/World.h"
 #include "TimerManager.h"
+#include "Sound/SoundBase.h"
 
 AShooterProjectile::AShooterProjectile()
 {
@@ -70,11 +71,17 @@ void AShooterProjectile::NotifyHit(class UPrimitiveComponent* MyComp, AActor* Ot
 
 	if (bExplodeOnHit)
 	{
-		
+
+		// play the explosion sound
+		UGameplayStatics::PlaySoundAtLocation(this, ExplosionSound, GetActorLocation());
+
 		// apply explosion damage centered on the projectile
 		ExplosionCheck(GetActorLocation());
 
 	} else {
+
+		// play the impact sound
+		UGameplayStatics::PlaySoundAtLocation(this, ImpactSound, Hit.ImpactPoint);
 
 		// single hit projectile. Process the collided actor
 		ProcessHit(Other, OtherComp, Hit.ImpactPoint, -Hit.ImpactNormal);

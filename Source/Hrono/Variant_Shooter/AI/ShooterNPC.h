@@ -45,6 +45,14 @@ protected:
 	UPROPERTY(EditAnywhere, Category="Team")
 	FName DeathTag = FName("Dead");
 
+	/** Played when this NPC takes damage but survives. Assign any sound in Blueprint. */
+	UPROPERTY(EditAnywhere, Category="Audio")
+	TObjectPtr<USoundBase> HitSound;
+
+	/** Played when this NPC dies. Assign any sound in Blueprint. */
+	UPROPERTY(EditAnywhere, Category="Audio")
+	TObjectPtr<USoundBase> DeathSound;
+
 	/** Pointer to the equipped weapon */
 	TObjectPtr<AShooterWeapon> Weapon;
 

@@ -34,9 +34,17 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, ReplicatedUsing = OnRep_Switch)
 	bool bIsLightOn = true;
-	
+
 	UPROPERTY(EditInstanceOnly, Replicated, BlueprintReadWrite, Category = "Light Test")
 	TArray<ALight_Env*> LightActors;
+
+	/** Played when the switch is flipped on. Assign any sound in Blueprint. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio")
+	TObjectPtr<USoundBase> SwitchOnSound;
+
+	/** Played when the switch is flipped off. Assign any sound in Blueprint. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio")
+	TObjectPtr<USoundBase> SwitchOffSound;
 
 	UFUNCTION()
 	void OnRep_Switch();

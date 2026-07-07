@@ -4,6 +4,8 @@
 #include "Enviroment/Switcher_Env.h"
 #include "Net/UnrealNetwork.h"
 #include "Enviroment/Light_Env.h"
+#include "Kismet/GameplayStatics.h"
+#include "Sound/SoundBase.h"
 
 
 // Sets default values
@@ -49,6 +51,10 @@ void ASwitcher_Env::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLif
 void ASwitcher_Env::OnRep_Switch()
 {
 	UE_LOG(LogTemp, Log, TEXT("OnRep_Switch"));
+
+	// Runs on clients (RepNotify) and is called manually on the server, so this is
+	// the single place every machine reacts to the light state change.
+	UGameplayStatics::PlaySoundAtLocation(this, bIsLightOn ? SwitchOnSound : SwitchOffSound, GetActorLocation());
 
 	for (ALight_Env* Light : LightActors)
 	{

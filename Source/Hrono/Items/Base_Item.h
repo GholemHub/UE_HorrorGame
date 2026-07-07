@@ -11,6 +11,7 @@
 #include "Base_Item.generated.h"
 
 class AHronoCharacter;
+class USoundBase;
 
 UCLASS()
 class HRONO_API ABase_Item : public AActor
@@ -58,6 +59,14 @@ public:
 	/** Description of the item */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Item")
 	FText ItemDescription;
+
+	/** Played when this item is picked up. Assign any sound in Blueprint. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio")
+	TObjectPtr<USoundBase> PickupSound;
+
+	/** Played when this item is dropped. Assign any sound in Blueprint. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio")
+	TObjectPtr<USoundBase> DropSound;
 
 	/** Which timeline this item belongs to (determines who can see/pick it up) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Item")

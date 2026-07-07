@@ -5,6 +5,8 @@
 #include "Net/UnrealNetwork.h"
 #include "GameplayTagsManager.h"
 #include "HronoCharacter.h"
+#include "Kismet/GameplayStatics.h"
+#include "Sound/SoundBase.h"
 
 // Sets default values
 ABase_Item::ABase_Item()
@@ -124,6 +126,7 @@ void ABase_Item::OnPickedUp(AHronoCharacter* Character)
 	SetOwner(Character);
 
 	AttachToCharacter();
+	UGameplayStatics::PlaySoundAtLocation(this, PickupSound, GetActorLocation());
 	UE_LOG(LogTemp, Warning, TEXT("PickUp"));
 	auto Dozimetr = Cast<ADozimetr>(this);
 	if (Dozimetr) {
@@ -139,6 +142,7 @@ void ABase_Item::OnRep_OwningCharacter()
 	{
 		// Clients run attachment logic here
 		AttachToCharacter();
+		UGameplayStatics::PlaySoundAtLocation(this, PickupSound, GetActorLocation());
 		UE_LOG(LogTemp, Warning, TEXT("[Item] %s OnRep: Attaching to %s"), *GetName(), *OwningCharacter->GetName());
 	}
 	else
@@ -148,6 +152,8 @@ void ABase_Item::OnRep_OwningCharacter()
 
 		// Ensure it becomes visible again on clients
 		SetActorHiddenInGame(false);
+
+		UGameplayStatics::PlaySoundAtLocation(this, DropSound, GetActorLocation());
 
 		// FIX 1: Turn actor-level collision back on! 
 		// Changing the mesh component collision alone will fail if the actor itself is disabled.
@@ -185,6 +191,8 @@ void ABase_Item::Drop()
 	UE_LOG(LogTemp, Warning, TEXT("[Item] %s Dropped by %s"), *GetName(), *OwningCharacter->GetName());
 
 	DetachFromCharacter();
+
+	UGameplayStatics::PlaySoundAtLocation(this, DropSound, GetActorLocation());
 
 	bIsPickedUp = false;
 

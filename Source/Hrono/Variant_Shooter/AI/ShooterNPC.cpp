@@ -6,11 +6,13 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "Camera/CameraComponent.h"
 #include "Kismet/KismetMathLibrary.h"
+#include "Kismet/GameplayStatics.h"
 #include "Engine/World.h"
 #include "ShooterGameMode.h"
 #include "Components/CapsuleComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "TimerManager.h"
+#include "Sound/SoundBase.h"
 
 void AShooterNPC::BeginPlay()
 {
@@ -48,6 +50,11 @@ float AShooterNPC::TakeDamage(float Damage, struct FDamageEvent const& DamageEve
 	if (CurrentHP <= 0.0f)
 	{
 		Die();
+	}
+	else
+	{
+		// still alive — play the hit reaction sound
+		UGameplayStatics::PlaySoundAtLocation(this, HitSound, GetActorLocation());
 	}
 
 	return Damage;
@@ -158,6 +165,9 @@ void AShooterNPC::Die()
 
 	// raise the dead flag
 	bIsDead = true;
+
+	// play the death sound
+	UGameplayStatics::PlaySoundAtLocation(this, DeathSound, GetActorLocation());
 
 	// grant the death tag to the character
 	Tags.Add(DeathTag);

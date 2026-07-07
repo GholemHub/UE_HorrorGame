@@ -10,6 +10,7 @@ class USphereComponent;
 class UProjectileMovementComponent;
 class ACharacter;
 class UPrimitiveComponent;
+class USoundBase;
 
 /**
  *  Simple projectile class for a first person shooter game
@@ -67,6 +68,14 @@ protected:
 
 	/** If true, this projectile has already hit another surface */
 	bool bHit = false;
+
+	/** Played when the projectile hits a surface. Assign any sound in Blueprint. */
+	UPROPERTY(EditAnywhere, Category="Audio")
+	TObjectPtr<USoundBase> ImpactSound;
+
+	/** Played when the projectile explodes (if bExplodeOnHit). Assign any sound in Blueprint. */
+	UPROPERTY(EditAnywhere, Category="Audio")
+	TObjectPtr<USoundBase> ExplosionSound;
 
 	/** How long to wait after a hit before destroying this projectile */
 	UPROPERTY(EditAnywhere, Category="Projectile|Destruction", meta = (ClampMin = 0, ClampMax = 10, Units = "s"))

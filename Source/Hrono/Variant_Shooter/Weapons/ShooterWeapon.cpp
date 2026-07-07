@@ -3,6 +3,7 @@
 
 #include "ShooterWeapon.h"
 #include "Kismet/KismetMathLibrary.h"
+#include "Kismet/GameplayStatics.h"
 #include "Engine/World.h"
 #include "ShooterProjectile.h"
 #include "ShooterWeaponHolder.h"
@@ -11,6 +12,7 @@
 #include "Animation/AnimInstance.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "GameFramework/Pawn.h"
+#include "Sound/SoundBase.h"
 
 AShooterWeapon::AShooterWeapon()
 {
@@ -72,6 +74,9 @@ void AShooterWeapon::ActivateWeapon()
 {
 	// unhide this weapon
 	SetActorHiddenInGame(false);
+
+	// play the equip sound
+	UGameplayStatics::PlaySoundAtLocation(this, EquipSound, GetActorLocation());
 
 	// notify the owner
 	WeaponOwner->OnWeaponActivated(this);
@@ -176,6 +181,9 @@ void AShooterWeapon::FireProjectile(const FVector& TargetLocation)
 	// play the firing montage
 	WeaponOwner->PlayFiringMontage(FiringMontage);
 
+	// play the firing sound
+	UGameplayStatics::PlaySoundAtLocation(this, FireSound, GetActorLocation());
+
 	// add recoil
 	WeaponOwner->AddWeaponRecoil(FiringRecoil);
 
@@ -186,6 +194,9 @@ void AShooterWeapon::FireProjectile(const FVector& TargetLocation)
 	if (CurrentBullets <= 0)
 	{
 		CurrentBullets = MagazineSize;
+
+		// play the reload sound
+		UGameplayStatics::PlaySoundAtLocation(this, ReloadSound, GetActorLocation());
 	}
 
 	// update the weapon HUD
