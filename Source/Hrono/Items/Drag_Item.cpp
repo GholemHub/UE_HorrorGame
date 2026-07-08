@@ -178,6 +178,12 @@ void ADrag_Item::StopMoveSound()
     }
 }
 
+void ADrag_Item::NotifyDragStarted(bool bShelf)
+{
+    // Let Blueprints react to the start of a drag interaction.
+    OnDragStarted.Broadcast(bShelf);
+}
+
 void ADrag_Item::UpdateShelfCollision()
 {
     // Enable/disable collision for items inside shelf based on open state

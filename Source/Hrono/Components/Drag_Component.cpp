@@ -68,6 +68,9 @@ void UDrag_Component::StartDrag(APlayerController* PC)
 	if (ADrag_Item* Drag_Item = Cast<ADrag_Item>(GetOwner()))
 	{
 		Drag_Item->StartMoveSound(bIsShelf);
+
+		// Notify Blueprints that a drag interaction has begun.
+		Drag_Item->NotifyDragStarted(bIsShelf);
 	}
 
 	//UE_LOG(LogTemp, Log, TEXT("Drag started"));

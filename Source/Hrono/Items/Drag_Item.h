@@ -17,6 +17,10 @@
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnDoorStateChanged, bool, bIsClosed);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnShelfStateChanged);
 
+/** Broadcast when the player starts dragging this item.
+ *  bIsShelf is true for a shelf drag and false for a door drag. */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnDragStarted, bool, bIsShelf);
+
 class USoundBase;
 class UAudioComponent;
 
@@ -109,6 +113,14 @@ public:
 	/** Fired on the server and on clients whenever the door finishes opening or closing. */
 	UPROPERTY(BlueprintAssignable, Category = "Door")
 	FOnDoorStateChanged OnDoorStateChanged;
+
+	/** Fired when the player starts dragging this item (door or shelf).
+	 *  Subscribe in Blueprints to react to the start of a drag interaction. */
+	UPROPERTY(BlueprintAssignable, Category = "Drag")
+	FOnDragStarted OnDragStarted;
+
+	/** Broadcasts OnDragStarted. Called by UDrag_Component when a drag begins. */
+	void NotifyDragStarted(bool bShelf);
 
 	/** Yaw (in degrees) at or under which the panel is treated as fully closed. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Door")
