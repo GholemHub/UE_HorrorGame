@@ -131,6 +131,10 @@ public:
 	/** Called by the engine when the character lands after a fall. */
 	virtual void Landed(const FHitResult& Hit) override;
 
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, ReplicatedUsing = OnRep_CharacterTimeline, Category = "Timeline")
+	EItemTimeline CharacterTimeline = EItemTimeline::Past;
+
 protected:
 
 	UPROPERTY(ReplicatedUsing = OnRep_Sprinting)
@@ -192,8 +196,7 @@ protected:
 	UFUNCTION(BlueprintCallable, Category = "Input")
 	void DoCrouchEnd();
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, ReplicatedUsing = OnRep_CharacterTimeline, Category = "Timeline")
-	EItemTimeline CharacterTimeline = EItemTimeline::Past;
+
 
 	UPROPERTY(EditAnywhere, Category = "Input", meta = (ClampMin = 0, Units = "cm"))
 	float InteractTraceDistance = 300.0f;
