@@ -28,7 +28,7 @@ ABase_Item::ABase_Item()
 
 void ABase_Item::Use_Implementation(AActor* Character)
 {
-	UE_LOG(LogTemp, Warning, TEXT("Default Use"));
+	//UE_LOG(LogTemp, Warning, TEXT("Default Use"));
 }
 
 void ABase_Item::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -36,6 +36,32 @@ void ABase_Item::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifeti
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 
 	DOREPLIFETIME(ABase_Item, OwningCharacter);
+	DOREPLIFETIME(ABase_Item, ItemTimeline);
+}
+
+void ABase_Item::SetItemTimeline(EItemTimeline NewTimeline)
+{
+	if (!HasAuthority())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Item] %s SetItemTimeline attempted on non-authority, ignoring"), *GetName());
+		return;
+	}
+
+	if (ItemTimeline == NewTimeline)
+	{
+		return;
+	}
+
+	ItemTimeline = NewTimeline;
+	CurrentCachedTimeline = EItemTimeline::Both;
+	ApplyItemTimelineState();
+	ForceNetUpdate();
+}
+
+void ABase_Item::OnRep_ItemTimeline()
+{
+	CurrentCachedTimeline = EItemTimeline::Both;
+	ApplyItemTimelineState();
 }
 
 void ABase_Item::UpdateMeshForLocalPlayer()
@@ -108,10 +134,13 @@ void ABase_Item::AttachToCharacter()
 
 		return;
 	}
+
 	const bool bAttached = AttachToComponent(
 		Player->InteractionPoint,
-		FAttachmentTransformRules::SnapToTargetNotIncludingScale
+		FAttachmentTransformRules::SnapToTargetIncludingScale
 	);
+
+	SetActorRelativeTransform(HoldOffset);
 
 	bIsPickedUp = true;
 	
@@ -234,9 +263,11 @@ void ABase_Item::DetachFromCharacter()
 void ABase_Item::BeginPlay()
 {
 	Super::BeginPlay();
+	ApplyItemTimelineState();
+}
 
-	
-
+void ABase_Item::ApplyItemTimelineState()
+{
 	if (ItemTimeline == EItemTimeline::Future && FutureMesh)
 	{
 		ItemMesh->SetStaticMesh(FutureMesh);
@@ -274,6 +305,9 @@ void ABase_Item::BeginPlay()
 		ItemMesh->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_PAST, ECR_Block);
 		ItemMesh->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_FUTURE, ECR_Block);
 	}
+
+	// Refresh visibility immediately after a timeline change instead of waiting for Tick.
+	UpdateMeshForLocalPlayer();
 }
 
 // Called every frame

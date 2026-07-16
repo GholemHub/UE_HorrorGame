@@ -730,7 +730,6 @@ void AHronoCharacter::PickupItem(ABase_Item* Item)
 
 		UE_LOG(LogTemp, Log, TEXT("RESET"));
 
-
 		return;
 	}
 

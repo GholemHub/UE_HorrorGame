@@ -24,8 +24,6 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	EItemType ItemType = EItemType::None;
 
-	//EItemTimeline ItemTimeline = EItemTimeline::Future;
-
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Item TAG")
 	FGameplayTag ItemTag;
 
@@ -69,8 +67,12 @@ public:
 	TObjectPtr<USoundBase> DropSound;
 
 	/** Which timeline this item belongs to (determines who can see/pick it up) */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Item")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, ReplicatedUsing = OnRep_ItemTimeline, Category = "Item")
 	EItemTimeline ItemTimeline = EItemTimeline::Both;
+
+	/** Changes this item's timeline. This must be called on the server for replication. */
+	UFUNCTION(BlueprintCallable, Category = "Item|Timeline")
+	void SetItemTimeline(EItemTimeline NewTimeline);
 
 	UPROPERTY(EditAnywhere)
 	UStaticMesh* PastMesh;
@@ -89,6 +91,9 @@ public:
 	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_OwningCharacter)
 	AHronoCharacter* OwningCharacter;
 
+	UPROPERTY(EditAnywhere, Category = "Pickup")
+	FTransform HoldOffset;
+
 	UFUNCTION()
 	void OnRep_OwningCharacter();
 
@@ -104,9 +109,15 @@ public:
 	
 	UFUNCTION()
 	void UpdateVisibilityForLocalPlayer(EItemTimeline ViewerTimeline);
+
+	UFUNCTION()
+	void OnRep_ItemTimeline();
 	
 protected:
 	virtual void BeginPlay() override;
+
+	/** Applies mesh, gameplay tag, collision, and local visibility for ItemTimeline. */
+	void ApplyItemTimelineState();
 
 	// Tracks what mesh state is currently visible to avoid spamming updates
 	EItemTimeline CurrentCachedTimeline = EItemTimeline::Both;

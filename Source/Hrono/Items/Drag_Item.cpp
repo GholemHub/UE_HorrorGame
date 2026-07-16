@@ -34,6 +34,11 @@ ADrag_Item::ADrag_Item()
 
 	DragComponent = CreateDefaultSubobject<UDrag_Component>(TEXT("DragComponent"));
 
+	// Editable set of points authored in the viewport / Blueprint. Attached to the
+	// root so its control points move with the actor.
+	PointSet = CreateDefaultSubobject<USceneComponent>(TEXT("PointSet"));
+	PointSet->SetupAttachment(ItemMesh);
+
 	// Looping audio source that follows the moving panel. The actual sound is set
 	// at runtime (door vs shelf) and the component is only activated while dragging.
 	MoveAudioComponent = CreateDefaultSubobject<UAudioComponent>(TEXT("MoveAudioComponent"));
