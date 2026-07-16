@@ -23,6 +23,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnDragStarted, bool, bIsShelf);
 
 class USoundBase;
 class UAudioComponent;
+class USplineComponent;
 
 UCLASS()
 class HRONO_API ADrag_Item : public ABase_Item
@@ -43,6 +44,12 @@ public:
 
 	UPROPERTY(VisibleAnywhere)
 	class UDrag_Component* DragComponent;
+
+	/** Editable set of points (spline control points) used to author a path/positions
+	 *  for this drag item. Points can be edited directly in the viewport and are
+	 *  exposed to Blueprints. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Components")
+	USceneComponent* PointSet;
 
 	virtual void UpdateMeshForLocalPlayer() override;
 
