@@ -5,6 +5,7 @@
 #include "Net/UnrealNetwork.h"
 #include "GameplayTagsManager.h"
 #include "HronoCharacter.h"
+#include "Components/SceneComponent.h"
 #include "Kismet/GameplayStatics.h"
 #include "Sound/SoundBase.h"
 
@@ -17,9 +18,11 @@ ABase_Item::ABase_Item()
 
 	PrimaryActorTick.bCanEverTick = true;
 
+	DefaultSceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("DefaultSceneRoot"));
+	RootComponent = DefaultSceneRoot;
 
 	ItemMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("ItemMesh"));
-	//RootComponent = ItemMesh;
+	ItemMesh->SetupAttachment(DefaultSceneRoot);
 	ItemMesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 	ItemMesh->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
 
