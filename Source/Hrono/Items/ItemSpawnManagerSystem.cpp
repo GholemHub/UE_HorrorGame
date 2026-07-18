@@ -238,7 +238,12 @@ ABase_Item* AItemSpawnManagerSystem::SpawnItemWithInfo(
 		if (UStaticMeshComponent* Mesh = SpawnedItem->GetItemMesh())
 		{
 			Mesh->SetSimulatePhysics(false);
-			Mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+			// Items attached to a spawn point must remain queryable so the
+			// authoritative listen-server player can hit them with an interaction
+			// trace. Component collision state is not replicated, so disabling it
+			// here only disabled pickup on the server while clients retained the
+			// Blueprint's default collision state.
+			Mesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 		}
 
 		const bool bAttached = SpawnedItem->AttachToComponent(

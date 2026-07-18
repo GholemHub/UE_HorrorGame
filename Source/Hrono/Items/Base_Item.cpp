@@ -5,6 +5,7 @@
 #include "Net/UnrealNetwork.h"
 #include "GameplayTagsManager.h"
 #include "HronoCharacter.h"
+#include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
 #include "Kismet/GameplayStatics.h"
 #include "Sound/SoundBase.h"
@@ -119,34 +120,68 @@ bool ABase_Item::TryPickUp(AHronoCharacter* Character)
 	// Call pickup logic (NOT the base destroy behavior)
 	OnPickedUp(Character);
 
-	return true;
+	return bIsPickedUp;
 }
 
-void ABase_Item::AttachToCharacter()
+bool ABase_Item::AttachToCharacter()
 {
-	if (UStaticMeshComponent* Mesh = GetItemMesh())
+	TInlineComponentArray<UPrimitiveComponent*> PrimitiveComponents(this);
+	for (UPrimitiveComponent* PrimitiveComponent : PrimitiveComponents)
 	{
-		Mesh->SetSimulatePhysics(false);
-		Mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		UE_LOG(LogTemp, Warning, TEXT("[Item] %s Disabled physics for attachment"), *GetName());
+		if (!IsValid(PrimitiveComponent))
+		{
+			continue;
+		}
+
+		PrimitiveComponent->SetSimulatePhysics(false);
+		PrimitiveComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		PrimitiveComponent->SetMobility(EComponentMobility::Movable);
 	}
 
 	auto Player = Cast<AHronoCharacter>(OwningCharacter);
 	if (!Player) {
-		UE_LOG(LogTemp, Warning, TEXT("OwnongCharacter is null"));
+		UE_LOG(LogTemp, Warning, TEXT("[Item] %s has no owning character"), *GetName());
 
-		return;
+		return false;
+	}
+
+	if (USceneComponent* Root = GetRootComponent())
+	{
+		Root->SetMobility(EComponentMobility::Movable);
+
+		// A non-root primitive is detached by Unreal when physics simulation starts.
+		// Reattach and reset it before moving the actor root. KeepWorldTransform would
+		// preserve the offset accumulated while the dropped mesh was falling, causing
+		// the second pickup to appear far behind the character.
+		if (IsValid(ItemMesh) && ItemMesh != Root)
+		{
+			if (ItemMesh->GetAttachParent() != Root)
+			{
+				ItemMesh->AttachToComponent(Root, FAttachmentTransformRules::KeepRelativeTransform);
+			}
+
+			// Physics detaches a non-root mesh and changes its relative transform to
+			// world space. Restore the Blueprint-authored mesh transform so HoldOffset
+			// is the only transform that controls how the held item is positioned.
+			ItemMesh->SetRelativeTransform(ItemMeshRelativeTransform);
+		}
 	}
 
 	const bool bAttached = AttachToComponent(
 		Player->InteractionPoint,
 		FAttachmentTransformRules::SnapToTargetIncludingScale
 	);
+	if (!bAttached)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[Item] Failed to attach %s to %s"), *GetName(), *GetNameSafe(Player->InteractionPoint));
+		return false;
+	}
 
 	SetActorRelativeTransform(HoldOffset);
 
 	bIsPickedUp = true;
-	
+	UE_LOG(LogTemp, Warning, TEXT("[Item] Attached %s to %s"), *GetName(), *GetNameSafe(Player->InteractionPoint));
+	return true;
 }
 #include "Items/Dozimetr.h"
 
@@ -157,7 +192,12 @@ void ABase_Item::OnPickedUp(AHronoCharacter* Character)
 	// Set native network ownership to allow safe attachment replication
 	SetOwner(Character);
 
-	AttachToCharacter();
+	if (!AttachToCharacter())
+	{
+		SetOwner(nullptr);
+		OwningCharacter = nullptr;
+		return;
+	}
 	UGameplayStatics::PlaySoundAtLocation(this, PickupSound, GetActorLocation());
 	UE_LOG(LogTemp, Warning, TEXT("PickUp"));
 	auto Dozimetr = Cast<ADozimetr>(this);
@@ -266,6 +306,10 @@ void ABase_Item::DetachFromCharacter()
 void ABase_Item::BeginPlay()
 {
 	Super::BeginPlay();
+	if (IsValid(ItemMesh))
+	{
+		ItemMeshRelativeTransform = ItemMesh->GetRelativeTransform();
+	}
 	ApplyItemTimelineState();
 }
 
