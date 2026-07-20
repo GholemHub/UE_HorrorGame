@@ -29,7 +29,14 @@ UCLASS()
 class HRONO_API ADrag_Item : public ABase_Item
 {
 	GENERATED_BODY()
-	
+
+public:
+	UFUNCTION(BlueprintPure, Category = "Timeline")
+	EItemTimeline GetItemTimeline() const
+	{
+		return ItemTimeline;
+	}
+
 public:	
 	// Sets default values for this actor's properties
 	ADrag_Item();

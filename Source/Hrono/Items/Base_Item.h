@@ -86,7 +86,7 @@ public:
 	bool TryPickUp(AHronoCharacter* Character);
 	void OnPickedUp(AHronoCharacter* Character);
 
-	void AttachToCharacter();
+	bool AttachToCharacter();
 
 	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_OwningCharacter)
 	AHronoCharacter* OwningCharacter;
@@ -115,6 +115,9 @@ public:
 	
 protected:
 	virtual void BeginPlay() override;
+
+	/** The mesh's authored transform under DefaultSceneRoot, restored after physics detaches it. */
+	FTransform ItemMeshRelativeTransform = FTransform::Identity;
 
 	/** Applies mesh, gameplay tag, collision, and local visibility for ItemTimeline. */
 	void ApplyItemTimelineState();

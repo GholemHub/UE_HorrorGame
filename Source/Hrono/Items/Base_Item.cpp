@@ -5,6 +5,8 @@
 #include "Net/UnrealNetwork.h"
 #include "GameplayTagsManager.h"
 #include "HronoCharacter.h"
+#include "Components/PrimitiveComponent.h"
+#include "Components/SceneComponent.h"
 #include "Kismet/GameplayStatics.h"
 #include "Sound/SoundBase.h"
 
@@ -17,9 +19,11 @@ ABase_Item::ABase_Item()
 
 	PrimaryActorTick.bCanEverTick = true;
 
+	DefaultSceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("DefaultSceneRoot"));
+	RootComponent = DefaultSceneRoot;
 
 	ItemMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("ItemMesh"));
-	//RootComponent = ItemMesh;
+	ItemMesh->SetupAttachment(DefaultSceneRoot);
 	ItemMesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 	ItemMesh->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
 
@@ -49,6 +53,10 @@ void ABase_Item::SetItemTimeline(EItemTimeline NewTimeline)
 
 	if (ItemTimeline == NewTimeline)
 	{
+		// Deferred Blueprint spawning can assign the same value as the class
+		// default. The components still need their local visibility/collision
+		// initialized before the actor is finished spawning.
+		ApplyItemTimelineState();
 		return;
 	}
 
@@ -74,13 +82,6 @@ void ABase_Item::UpdateMeshForLocalPlayer()
 
 	EItemTimeline TargetTimeline = Character->GetTimeline();
 
-	// Only switch when the local player's timeline actually changed.
-	if (CurrentCachedTimeline == TargetTimeline)
-	{
-		return;
-	}
-
-	
 	UpdateVisibilityForLocalPlayer(TargetTimeline);
 
 	CurrentCachedTimeline = TargetTimeline;
@@ -88,12 +89,19 @@ void ABase_Item::UpdateMeshForLocalPlayer()
 
 void ABase_Item::UpdateVisibilityForLocalPlayer(EItemTimeline ViewerTimeline)
 {
-	
 	const bool bShouldBeVisible = (ItemTimeline == EItemTimeline::Both || ItemTimeline == ViewerTimeline);
 
-	if (USceneComponent* Root = GetRootComponent())
+	// Do not rely on root propagation here. A primitive that starts with physics
+	// enabled can be detached from the scene root, and Blueprint item classes can
+	// also contain scene components outside the native root hierarchy. Updating
+	// every scene component keeps spawned and placed items consistent.
+	TInlineComponentArray<USceneComponent*> SceneComponents(this);
+	for (USceneComponent* SceneComponent : SceneComponents)
 	{
-		Root->SetVisibility(bShouldBeVisible, /*bPropagateToChildren=*/true);
+		if (IsValid(SceneComponent))
+		{
+			SceneComponent->SetVisibility(bShouldBeVisible, /*bPropagateToChildren=*/false);
+		}
 	}
 }
 
@@ -116,34 +124,75 @@ bool ABase_Item::TryPickUp(AHronoCharacter* Character)
 	// Call pickup logic (NOT the base destroy behavior)
 	OnPickedUp(Character);
 
-	return true;
+	return bIsPickedUp;
 }
 
-void ABase_Item::AttachToCharacter()
+bool ABase_Item::AttachToCharacter()
 {
-	if (UStaticMeshComponent* Mesh = GetItemMesh())
+	TInlineComponentArray<UPrimitiveComponent*> PrimitiveComponents(this);
+	for (UPrimitiveComponent* PrimitiveComponent : PrimitiveComponents)
 	{
-		Mesh->SetSimulatePhysics(false);
-		Mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		UE_LOG(LogTemp, Warning, TEXT("[Item] %s Disabled physics for attachment"), *GetName());
+		if (!IsValid(PrimitiveComponent))
+		{
+			continue;
+		}
+
+		PrimitiveComponent->SetSimulatePhysics(false);
+		PrimitiveComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		PrimitiveComponent->SetMobility(EComponentMobility::Movable);
 	}
 
 	auto Player = Cast<AHronoCharacter>(OwningCharacter);
 	if (!Player) {
-		UE_LOG(LogTemp, Warning, TEXT("OwnongCharacter is null"));
+		UE_LOG(LogTemp, Warning, TEXT("[Item] %s has no owning character"), *GetName());
 
-		return;
+		return false;
+	}
+
+	if (USceneComponent* Root = GetRootComponent())
+	{
+		Root->SetMobility(EComponentMobility::Movable);
+
+		// A non-root primitive is detached by Unreal when physics simulation starts.
+		// Reattach and reset it before moving the actor root. KeepWorldTransform would
+		// preserve the offset accumulated while the dropped mesh was falling, causing
+		// the second pickup to appear far behind the character.
+		if (IsValid(ItemMesh) && ItemMesh != Root)
+		{
+			if (ItemMesh->GetAttachParent() != Root)
+			{
+				ItemMesh->AttachToComponent(Root, FAttachmentTransformRules::KeepRelativeTransform);
+			}
+
+			// Physics detaches a non-root mesh and changes its relative transform to
+			// world space. Restore the Blueprint-authored mesh transform so HoldOffset
+			// is the only transform that controls how the held item is positioned.
+			ItemMesh->SetRelativeTransform(ItemMeshRelativeTransform);
+		}
 	}
 
 	const bool bAttached = AttachToComponent(
 		Player->InteractionPoint,
-		FAttachmentTransformRules::SnapToTargetIncludingScale
+		FAttachmentTransformRules::SnapToTargetNotIncludingScale
 	);
+	if (!bAttached)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[Item] Failed to attach %s to %s"), *GetName(), *GetNameSafe(Player->InteractionPoint));
+		return false;
+	}
 
-	SetActorRelativeTransform(HoldOffset);
+	// HoldOffset controls only the held pose. Preserve the item's scale so it
+	// cannot inherit a different scale from the character or change after drop.
+	if (USceneComponent* Root = GetRootComponent())
+	{
+		Root->SetRelativeLocationAndRotation(
+			HoldOffset.GetLocation(),
+			HoldOffset.GetRotation().Rotator());
+	}
 
 	bIsPickedUp = true;
-	
+	UE_LOG(LogTemp, Warning, TEXT("[Item] Attached %s to %s"), *GetName(), *GetNameSafe(Player->InteractionPoint));
+	return true;
 }
 #include "Items/Dozimetr.h"
 
@@ -154,7 +203,12 @@ void ABase_Item::OnPickedUp(AHronoCharacter* Character)
 	// Set native network ownership to allow safe attachment replication
 	SetOwner(Character);
 
-	AttachToCharacter();
+	if (!AttachToCharacter())
+	{
+		SetOwner(nullptr);
+		OwningCharacter = nullptr;
+		return;
+	}
 	UGameplayStatics::PlaySoundAtLocation(this, PickupSound, GetActorLocation());
 	UE_LOG(LogTemp, Warning, TEXT("PickUp"));
 	auto Dozimetr = Cast<ADozimetr>(this);
@@ -263,6 +317,10 @@ void ABase_Item::DetachFromCharacter()
 void ABase_Item::BeginPlay()
 {
 	Super::BeginPlay();
+	if (IsValid(ItemMesh))
+	{
+		ItemMeshRelativeTransform = ItemMesh->GetRelativeTransform();
+	}
 	ApplyItemTimelineState();
 }
 
