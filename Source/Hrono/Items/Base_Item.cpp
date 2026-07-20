@@ -53,6 +53,10 @@ void ABase_Item::SetItemTimeline(EItemTimeline NewTimeline)
 
 	if (ItemTimeline == NewTimeline)
 	{
+		// Deferred Blueprint spawning can assign the same value as the class
+		// default. The components still need their local visibility/collision
+		// initialized before the actor is finished spawning.
+		ApplyItemTimelineState();
 		return;
 	}
 
@@ -78,13 +82,6 @@ void ABase_Item::UpdateMeshForLocalPlayer()
 
 	EItemTimeline TargetTimeline = Character->GetTimeline();
 
-	// Only switch when the local player's timeline actually changed.
-	if (CurrentCachedTimeline == TargetTimeline)
-	{
-		return;
-	}
-
-	
 	UpdateVisibilityForLocalPlayer(TargetTimeline);
 
 	CurrentCachedTimeline = TargetTimeline;
@@ -92,12 +89,19 @@ void ABase_Item::UpdateMeshForLocalPlayer()
 
 void ABase_Item::UpdateVisibilityForLocalPlayer(EItemTimeline ViewerTimeline)
 {
-	
 	const bool bShouldBeVisible = (ItemTimeline == EItemTimeline::Both || ItemTimeline == ViewerTimeline);
 
-	if (USceneComponent* Root = GetRootComponent())
+	// Do not rely on root propagation here. A primitive that starts with physics
+	// enabled can be detached from the scene root, and Blueprint item classes can
+	// also contain scene components outside the native root hierarchy. Updating
+	// every scene component keeps spawned and placed items consistent.
+	TInlineComponentArray<USceneComponent*> SceneComponents(this);
+	for (USceneComponent* SceneComponent : SceneComponents)
 	{
-		Root->SetVisibility(bShouldBeVisible, /*bPropagateToChildren=*/true);
+		if (IsValid(SceneComponent))
+		{
+			SceneComponent->SetVisibility(bShouldBeVisible, /*bPropagateToChildren=*/false);
+		}
 	}
 }
 
@@ -169,7 +173,7 @@ bool ABase_Item::AttachToCharacter()
 
 	const bool bAttached = AttachToComponent(
 		Player->InteractionPoint,
-		FAttachmentTransformRules::SnapToTargetIncludingScale
+		FAttachmentTransformRules::SnapToTargetNotIncludingScale
 	);
 	if (!bAttached)
 	{
@@ -177,7 +181,14 @@ bool ABase_Item::AttachToCharacter()
 		return false;
 	}
 
-	SetActorRelativeTransform(HoldOffset);
+	// HoldOffset controls only the held pose. Preserve the item's scale so it
+	// cannot inherit a different scale from the character or change after drop.
+	if (USceneComponent* Root = GetRootComponent())
+	{
+		Root->SetRelativeLocationAndRotation(
+			HoldOffset.GetLocation(),
+			HoldOffset.GetRotation().Rotator());
+	}
 
 	bIsPickedUp = true;
 	UE_LOG(LogTemp, Warning, TEXT("[Item] Attached %s to %s"), *GetName(), *GetNameSafe(Player->InteractionPoint));

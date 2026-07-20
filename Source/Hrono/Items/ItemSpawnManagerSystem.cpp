@@ -4,8 +4,6 @@
 #include "Components/SceneComponent.h"
 #include "Engine/World.h"
 
-#include "Items/Drag_Item.h"
-
 namespace
 {
 	USceneComponent* FindChildSceneComponentByName(USceneComponent* Parent, FName ComponentName)
@@ -98,28 +96,32 @@ ABase_Item* AItemSpawnManagerSystem::SpawnItemWithInfo(
 	 */
 	TOptional<EItemTimeline> OwnerTimeline;
 
-	if (const ADrag_Item* DragItemOwner = Cast<ADrag_Item>(Data.Owner.Get()))
+	// Every supported spawn location derives from ABase_Item: shelves derive
+	// from ADrag_Item, while dedicated BP_ItemPointSpawn actors derive directly
+	// from ABase_Item. Use the common timeline property so both kinds of location
+	// constrain the random item selection in exactly the same way.
+	if (const ABase_Item* TimelineOwner = Cast<ABase_Item>(Data.Owner.Get()))
 	{
-		const EItemTimeline DragItemTimeline = DragItemOwner->GetItemTimeline();
+		const EItemTimeline LocationTimeline = TimelineOwner->ItemTimeline;
 
-		if (DragItemTimeline != EItemTimeline::Both)
+		if (LocationTimeline != EItemTimeline::Both)
 		{
-			OwnerTimeline = DragItemTimeline;
+			OwnerTimeline = LocationTimeline;
 		}
 
 		UE_LOG(
 			LogTemp,
 			Log,
 			TEXT("[ItemSpawnManager] Owner %s timeline: %s"),
-			*GetNameSafe(DragItemOwner),
-			*UEnum::GetValueAsString(DragItemTimeline));
+			*GetNameSafe(TimelineOwner),
+			*UEnum::GetValueAsString(LocationTimeline));
 	}
 	else if (Data.Owner)
 	{
 		UE_LOG(
 			LogTemp,
 			Warning,
-			TEXT("[ItemSpawnManager] Owner %s is not ADrag_Item. "
+			TEXT("[ItemSpawnManager] Owner %s is not ABase_Item. "
 				"Owner timeline restriction will not be applied."),
 			*GetNameSafe(Data.Owner.Get()));
 	}
@@ -251,11 +253,7 @@ ABase_Item* AItemSpawnManagerSystem::SpawnItemWithInfo(
 			FAttachmentTransformRules::SnapToTargetNotIncludingScale,
 			AttachSocketName);
 
-		if (bAttached)
-		{
-			SpawnedItem->SetActorRelativeTransform(SpawnedItem->HoldOffset);
-		}
-		else
+		if (!bAttached)
 		{
 			UE_LOG(
 				LogTemp,
@@ -293,6 +291,66 @@ ABase_Item* AItemSpawnManagerSystem::SpawnItemWithInfo(
 		*GetNameSafe(Data.Owner.Get()));
 
 	return SpawnedItem;
+}
+
+int32 AItemSpawnManagerSystem::SpawnItemsAtRandomLocations(
+	const TArray<AActor*>& PossibleLocations,
+	int32 ItemCount,
+	const FSpawnRequest& BaseRequest,
+	TArray<FSpawnedItemInfo>& OutSpawnedItems)
+{
+	OutSpawnedItems.Reset();
+
+	TArray<AActor*> ShuffledLocations;
+	ShuffledLocations.Reserve(PossibleLocations.Num());
+
+	for (AActor* Location : PossibleLocations)
+	{
+		if (IsValid(Location) && Cast<ABase_Item>(Location))
+		{
+			ShuffledLocations.AddUnique(Location);
+		}
+		else if (Location)
+		{
+			UE_LOG(
+				LogTemp,
+				Warning,
+				TEXT("[ItemSpawnManager] Ignoring location %s because it is not ABase_Item."),
+				*GetNameSafe(Location));
+		}
+	}
+
+	for (int32 Index = ShuffledLocations.Num() - 1; Index > 0; --Index)
+	{
+		const int32 SwapIndex = FMath::RandRange(0, Index);
+		ShuffledLocations.Swap(Index, SwapIndex);
+	}
+
+	const int32 TargetCount = ItemCount <= 0
+		? ShuffledLocations.Num()
+		: FMath::Min(ItemCount, ShuffledLocations.Num());
+
+	for (AActor* Location : ShuffledLocations)
+	{
+		if (OutSpawnedItems.Num() >= TargetCount)
+		{
+			break;
+		}
+
+		FSpawnRequest LocationRequest = BaseRequest;
+		LocationRequest.Owner = Location;
+		LocationRequest.SpawnTransform = Location->GetActorTransform();
+		LocationRequest.AttachToComponent = nullptr;
+		LocationRequest.AttachSocketName = NAME_None;
+
+		FSpawnedItemInfo SpawnedInfo;
+		if (SpawnItemWithInfo(LocationRequest, SpawnedInfo))
+		{
+			OutSpawnedItems.Add(SpawnedInfo);
+		}
+	}
+
+	return OutSpawnedItems.Num();
 }
 
 void AItemSpawnManagerSystem::ResetSpawnHistory()
@@ -340,6 +398,11 @@ USceneComponent* AItemSpawnManagerSystem::ResolveAttachComponent(const FSpawnReq
 		return Request.AttachToComponent.Get();
 	}
 
+	if (PointSetComponent)
+	{
+		return PointSetComponent.Get();
+	}
+
 	auto FindPointSetComponent = [](const AActor* Actor) -> USceneComponent*
 	{
 		if (!Actor)
@@ -369,11 +432,6 @@ USceneComponent* AItemSpawnManagerSystem::ResolveAttachComponent(const FSpawnReq
 	if (USceneComponent* OwnerPointSet = FindPointSetComponent(Request.Owner.Get()))
 	{
 		return OwnerPointSet;
-	}
-
-	if (PointSetComponent)
-	{
-		return PointSetComponent.Get();
 	}
 
 	if (USceneComponent* ManagerPointSet = FindPointSetComponent(this))

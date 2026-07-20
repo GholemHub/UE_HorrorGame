@@ -107,6 +107,19 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Item Spawn")
 	ABase_Item* SpawnItemWithInfo(const FSpawnRequest& Data, FSpawnedItemInfo& OutInfo);
 
+	/**
+	 * Randomly selects from a mixed array of shelves and dedicated item points,
+	 * then spawns at most one item at each selected location. A value <= 0 for
+	 * ItemCount attempts to fill every supplied location. The location becomes
+	 * the request owner, so its ItemTimeline restricts the item timeline.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Item Spawn")
+	int32 SpawnItemsAtRandomLocations(
+		const TArray<AActor*>& PossibleLocations,
+		int32 ItemCount,
+		const FSpawnRequest& BaseRequest,
+		TArray<FSpawnedItemInfo>& OutSpawnedItems);
+
 	/** Clears the history, allowing all registered timeline versions to be spawned again. */
 	UFUNCTION(BlueprintCallable, Category = "Item Spawn")
 	void ResetSpawnHistory();
