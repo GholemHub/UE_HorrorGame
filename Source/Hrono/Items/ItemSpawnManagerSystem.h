@@ -53,7 +53,10 @@ struct FSpawnRequest
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Item Spawn")
 	TObjectPtr<APawn> Instigator = nullptr;
 
-	/** Optional component to attach the spawned item to. If empty, the manager's PointSetComponent is used. */
+	/**
+	 * Optional component to attach the spawned item to. If empty, a PointSet on
+	 * the request owner is preferred, followed by the manager's PointSetComponent.
+	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Item Spawn")
 	TObjectPtr<USceneComponent> AttachToComponent = nullptr;
 
@@ -131,11 +134,34 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Item Spawn")
 	TArray<FItemSpawnDefinition> DefaultAvailableItems;
 
+	/**
+	 * All shelves and dedicated item-point actors that may receive an item when
+	 * the manager starts. Both location types derive from ABase_Item.
+	 */
+	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Item Spawn|Automatic")
+	TArray<TObjectPtr<ABase_Item>> PossibleSpawnLocations;
+
+	/** Automatically choose random entries from PossibleSpawnLocations on BeginPlay. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Item Spawn|Automatic")
+	bool bSpawnItemsOnBeginPlay = true;
+
+	/** Number of locations to fill automatically. A value <= 0 attempts to fill every location. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Item Spawn|Automatic", meta = (ClampMin = "0", UIMin = "0"))
+	int32 BeginPlayItemCount = 0;
+
+	/** Optional class and timeline filters used by the automatic BeginPlay spawn. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Item Spawn|Automatic")
+	FSpawnRequest BeginPlaySpawnRequest;
+
+	/** Successful automatic spawns from the most recent BeginPlay spawn pass. */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Item Spawn|Automatic")
+	TArray<FSpawnedItemInfo> BeginPlaySpawnedItems;
+
 	/** Runtime registered item definitions. */
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Item Spawn")
 	TArray<FItemSpawnDefinition> AvailableItems;
 
-	/** Assign this to a Blueprint component named PointSetComponent to attach spawned items there. */
+	/** Fallback attachment point when neither the request nor its owner supplies one. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Item Spawn")
 	TObjectPtr<USceneComponent> PointSetComponent = nullptr;
 
