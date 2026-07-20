@@ -41,6 +41,60 @@ void AItemSpawnManagerSystem::BeginPlay()
 	{
 		RegisterAvailableItem(Definition);
 	}
+
+	BeginPlaySpawnedItems.Reset();
+
+	if (!bSpawnItemsOnBeginPlay)
+	{
+		return;
+	}
+
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	if (AvailableItems.IsEmpty())
+	{
+		UE_LOG(
+			LogTemp,
+			Warning,
+			TEXT("[ItemSpawnManager] Automatic spawn skipped because no items are registered."));
+		return;
+	}
+
+	TArray<AActor*> SpawnLocations;
+	SpawnLocations.Reserve(PossibleSpawnLocations.Num());
+
+	for (ABase_Item* Location : PossibleSpawnLocations)
+	{
+		if (IsValid(Location))
+		{
+			SpawnLocations.Add(Location);
+		}
+	}
+
+	if (SpawnLocations.IsEmpty())
+	{
+		UE_LOG(
+			LogTemp,
+			Warning,
+			TEXT("[ItemSpawnManager] Automatic spawn skipped because PossibleSpawnLocations is empty."));
+		return;
+	}
+
+	const int32 SpawnedCount = SpawnItemsAtRandomLocations(
+		SpawnLocations,
+		BeginPlayItemCount,
+		BeginPlaySpawnRequest,
+		BeginPlaySpawnedItems);
+
+	UE_LOG(
+		LogTemp,
+		Log,
+		TEXT("[ItemSpawnManager] Automatic spawn created %d item(s) from %d possible location(s)."),
+		SpawnedCount,
+		SpawnLocations.Num());
 }
 
 bool AItemSpawnManagerSystem::RegisterAvailableItem(const FItemSpawnDefinition& Definition)
@@ -398,11 +452,6 @@ USceneComponent* AItemSpawnManagerSystem::ResolveAttachComponent(const FSpawnReq
 		return Request.AttachToComponent.Get();
 	}
 
-	if (PointSetComponent)
-	{
-		return PointSetComponent.Get();
-	}
-
 	auto FindPointSetComponent = [](const AActor* Actor) -> USceneComponent*
 	{
 		if (!Actor)
@@ -432,6 +481,11 @@ USceneComponent* AItemSpawnManagerSystem::ResolveAttachComponent(const FSpawnReq
 	if (USceneComponent* OwnerPointSet = FindPointSetComponent(Request.Owner.Get()))
 	{
 		return OwnerPointSet;
+	}
+
+	if (PointSetComponent)
+	{
+		return PointSetComponent.Get();
 	}
 
 	if (USceneComponent* ManagerPointSet = FindPointSetComponent(this))
