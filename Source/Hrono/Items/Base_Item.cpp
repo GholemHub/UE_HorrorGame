@@ -191,6 +191,7 @@ bool ABase_Item::AttachToCharacter()
 	}
 
 	bIsPickedUp = true;
+	OnHeldStateChanged(true, Player);
 	UE_LOG(LogTemp, Warning, TEXT("[Item] Attached %s to %s"), *GetName(), *GetNameSafe(Player->InteractionPoint));
 	return true;
 }
@@ -230,6 +231,8 @@ void ABase_Item::OnRep_OwningCharacter()
 	}
 	else
 	{
+		AHronoCharacter* PreviousOwningCharacter = Cast<AHronoCharacter>(GetOwner());
+
 		// OwningCharacter was cleared — item was dropped on client side
 		DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
 
@@ -254,6 +257,7 @@ void ABase_Item::OnRep_OwningCharacter()
 		}
 
 		bIsPickedUp = false;
+		OnHeldStateChanged(false, PreviousOwningCharacter);
 	}
 }
 
@@ -293,6 +297,8 @@ void ABase_Item::DetachFromCharacter()
 {
 	UE_LOG(LogTemp, Warning, TEXT("[Item] %s Detaching from character"), *GetName());
 
+	AHronoCharacter* PreviousOwningCharacter = OwningCharacter;
+
 	// Detach from parent
 	DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
 
@@ -307,6 +313,7 @@ void ABase_Item::DetachFromCharacter()
 		UE_LOG(LogTemp, Warning, TEXT("[Item] %s Re-enabled physics on Server"), *GetName());
 	}
 	SetActorEnableCollision(true);
+	OnHeldStateChanged(false, PreviousOwningCharacter);
 
 }
 
