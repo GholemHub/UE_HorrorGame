@@ -2,6 +2,7 @@
 
 #include "Items/Base_Item.h"
 #include "Components/SceneComponent.h"
+#include "Engine/Engine.h"
 #include "Engine/World.h"
 
 namespace
@@ -46,6 +47,7 @@ void AItemSpawnManagerSystem::BeginPlay()
 
 	if (!bSpawnItemsOnBeginPlay)
 	{
+		ShowBeginPlaySpawnDebug(0, 0);
 		return;
 	}
 
@@ -60,6 +62,7 @@ void AItemSpawnManagerSystem::BeginPlay()
 			LogTemp,
 			Warning,
 			TEXT("[ItemSpawnManager] Automatic spawn skipped because no items are registered."));
+		ShowBeginPlaySpawnDebug(0, 0);
 		return;
 	}
 
@@ -80,8 +83,13 @@ void AItemSpawnManagerSystem::BeginPlay()
 			LogTemp,
 			Warning,
 			TEXT("[ItemSpawnManager] Automatic spawn skipped because PossibleSpawnLocations is empty."));
+		ShowBeginPlaySpawnDebug(0, 0);
 		return;
 	}
+
+	const int32 TargetCount = BeginPlayItemCount <= 0
+		? SpawnLocations.Num()
+		: FMath::Min(BeginPlayItemCount, SpawnLocations.Num());
 
 	const int32 SpawnedCount = SpawnItemsAtRandomLocations(
 		SpawnLocations,
@@ -95,6 +103,58 @@ void AItemSpawnManagerSystem::BeginPlay()
 		TEXT("[ItemSpawnManager] Automatic spawn created %d item(s) from %d possible location(s)."),
 		SpawnedCount,
 		SpawnLocations.Num());
+
+	ShowBeginPlaySpawnDebug(TargetCount, SpawnLocations.Num());
+}
+
+void AItemSpawnManagerSystem::ShowBeginPlaySpawnDebug(
+	int32 TargetCount,
+	int32 ValidLocationCount) const
+{
+	if (!bShowSpawnDebugOnScreen || !GEngine)
+	{
+		return;
+	}
+
+	FString Message;
+	if (!bSpawnItemsOnBeginPlay)
+	{
+		Message = TEXT("[ItemSpawnManager] Automatic spawning is disabled.");
+	}
+	else
+	{
+		Message = FString::Printf(
+			TEXT("[ItemSpawnManager] Spawned %d / %d item(s) | Valid locations: %d / %d"),
+			BeginPlaySpawnedItems.Num(),
+			TargetCount,
+			ValidLocationCount,
+			PossibleSpawnLocations.Num());
+
+		for (int32 Index = 0; Index < BeginPlaySpawnedItems.Num(); ++Index)
+		{
+			const FSpawnedItemInfo& Info = BeginPlaySpawnedItems[Index];
+			Message += FString::Printf(
+				TEXT("\n  %d. %s (Actor: %s, Timeline: %s)"),
+				Index + 1,
+				*Info.ItemId.ToString(),
+				*GetNameSafe(Info.Item.Get()),
+				*UEnum::GetValueAsString(Info.Timeline));
+		}
+
+		if (BeginPlaySpawnedItems.Num() < TargetCount)
+		{
+			Message += TEXT("\n  WARNING: Target was not reached. Check the Output Log for rejected locations or exhausted item/timeline pairs.");
+		}
+	}
+
+	const FColor MessageColor =
+		BeginPlaySpawnedItems.Num() < TargetCount ? FColor::Yellow : FColor::Green;
+
+	GEngine->AddOnScreenDebugMessage(
+		-1,
+		SpawnDebugMessageDuration,
+		MessageColor,
+		Message);
 }
 
 bool AItemSpawnManagerSystem::RegisterAvailableItem(const FItemSpawnDefinition& Definition)

@@ -88,6 +88,13 @@ public:
 
 	bool AttachToCharacter();
 
+	/**
+	 * Called after this item has been attached to a character's hand, and again
+	 * when it is dropped. Use this to enable expensive item-only effects while held.
+	 */
+	UFUNCTION(BlueprintImplementableEvent, BlueprintCallable, Category = "Item|Pickup")
+	void OnHeldStateChanged(bool bIsHeld, AHronoCharacter* Character);
+
 	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_OwningCharacter)
 	AHronoCharacter* OwningCharacter;
 
