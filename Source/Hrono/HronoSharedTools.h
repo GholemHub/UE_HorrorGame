@@ -36,6 +36,7 @@ enum class EItemType : uint8
 	DraggableInvertRight,
 	Chair,
 	Dozimetr,
-	Clock
+	Clock,
+	TableRitual
 };
 

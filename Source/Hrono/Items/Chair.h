@@ -6,6 +6,10 @@
 #include "Items/Base_Item.h"
 #include "Chair.generated.h"
 
+class AHronoCharacter;
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnCharacterSatOnChair, AHronoCharacter*, Character);
+
 /**
  * 
  */
@@ -18,6 +22,12 @@ class HRONO_API AChair : public ABase_Item
 public:
 	AChair();
 	virtual void Use_Implementation(AActor* Character) override;
+
+	/** Fired after a character successfully sits on this chair. */
+	UPROPERTY(BlueprintAssignable, Category = "Chair")
+	FOnCharacterSatOnChair OnCharacterSat;
+
+	void NotifyCharacterSat(AHronoCharacter* Character);
 
 	UPROPERTY(Replicated)
 	bool bIsSit = false;

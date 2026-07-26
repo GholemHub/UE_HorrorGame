@@ -454,6 +454,7 @@ void AHronoCharacter::HandleSitStarted(AChair* Chair)
 
 	// Optional cosmetic hook (animation, sound). The gameplay logic now lives in C++.
 	OnSitStarted(Chair);
+	Chair->NotifyCharacterSat(this);
 }
 
 void AHronoCharacter::HandleSitEnded(AChair* Chair)
@@ -500,6 +501,9 @@ void AHronoCharacter::StandUp()
 void AHronoCharacter::SitOnChair(AChair* Chair)
 {
 	if (!HasAuthority())
+		return;
+
+	if (bIsSitting || CurrentChair)
 		return;
 
 	if (Chair->bIsSit)

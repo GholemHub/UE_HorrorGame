@@ -19,13 +19,17 @@ AChair::AChair()
 	}
 }
 
+void AChair::NotifyCharacterSat(AHronoCharacter* Character)
+{
+	OnCharacterSat.Broadcast(Character);
+}
+
 void AChair::Use_Implementation(AActor* Character)
 {
     AHronoCharacter* Hrono = Cast<AHronoCharacter>(Character);
 
     if (!Hrono)
         return;
-
     // bIsSit still reflects the state *before* this toggle, so play the sound
     // matching the action the player is about to perform.
     UGameplayStatics::PlaySoundAtLocation(this, bIsSit ? StandUpSound : SitSound, GetActorLocation());
