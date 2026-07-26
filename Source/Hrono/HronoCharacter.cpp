@@ -44,6 +44,7 @@ AHronoCharacter::AHronoCharacter()
 	FirstPersonMesh->SetOnlyOwnerSee(true);
 	FirstPersonMesh->FirstPersonPrimitiveType = EFirstPersonPrimitiveType::FirstPerson;
 	FirstPersonMesh->SetCollisionProfileName(FName("NoCollision"));
+	GetCapsuleComponent()->SetCollisionResponseToChannel(COLLISION_CHANNEL_ITEM, ECR_Ignore);
 
 	// Create the Camera Component	
 	FirstPersonCameraComponent = CreateDefaultSubobject<UCameraComponent>(TEXT("First Person Camera"));
@@ -107,6 +108,11 @@ void AHronoCharacter::ServerSetSprinting_Implementation(bool bNewSprint)
 
 void AHronoCharacter::ApplyTimelineCollision()
 {
+	// Blueprint collision presets can override the constructor response. Reapply
+	// this at runtime and after every timeline change so Base_Item actors never
+	// physically block the character capsule.
+	GetCapsuleComponent()->SetCollisionResponseToChannel(COLLISION_CHANNEL_ITEM, ECR_Ignore);
+
 	if (CharacterTimeline == EItemTimeline::Past)
 	{
 		GetCapsuleComponent()->SetCollisionObjectType(COLLISION_CHANNEL_PAWN_PAST);

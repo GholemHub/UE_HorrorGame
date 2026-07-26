@@ -129,6 +129,9 @@ protected:
 	/** Applies mesh, gameplay tag, collision, and local visibility for ItemTimeline. */
 	void ApplyItemTimelineState();
 
+	/** Restores world physics and timeline interaction responses for a dropped item. */
+	void ConfigureDroppedCollision(UPrimitiveComponent* PrimitiveComponent);
+
 	// Tracks what mesh state is currently visible to avoid spamming updates
 	EItemTimeline CurrentCachedTimeline = EItemTimeline::Both;
 public:	
