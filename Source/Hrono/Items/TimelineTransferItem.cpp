@@ -51,8 +51,11 @@ void ATimelineTransferItem::OnTransferBoxEndOverlap(
 {
 	if (ABase_Item* Item = Cast<ABase_Item>(OtherActor))
 	{
-		Item->ItemTimeline = Item->OwningCharacter->CharacterTimeline;
-		ItemsInTransferBox.Remove(Item);
+		if (Item->OwningCharacter) {
+			Item->ItemTimeline = Item->OwningCharacter->CharacterTimeline;
+			ItemsInTransferBox.Remove(Item);
+		}
+		
 	}
 }
 

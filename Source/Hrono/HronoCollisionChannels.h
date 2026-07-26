@@ -13,3 +13,4 @@
 // Doors/interactables set their collision mesh to one of these based on their timeline.
 #define COLLISION_CHANNEL_DOOR_PAST    ECC_GameTraceChannel4
 #define COLLISION_CHANNEL_DOOR_FUTURE  ECC_GameTraceChannel5
+#define COLLISION_CHANNEL_ITEM         ECC_GameTraceChannel7

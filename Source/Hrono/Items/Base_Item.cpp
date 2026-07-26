@@ -249,6 +249,7 @@ void ABase_Item::OnRep_OwningCharacter()
 		{
 			// Re-enable collision so clients can see/re-interact with it
 			Mesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+			ConfigureDroppedCollision(Mesh);
 
 			// FIX 2: Clients MUST simulate physics if the server is simulating physics!
 			// Unreal's built-in network movement code uses the server's physics simulation 
@@ -309,12 +310,38 @@ void ABase_Item::DetachFromCharacter()
 	if (UStaticMeshComponent* Mesh = GetItemMesh())
 	{
 		Mesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+		ConfigureDroppedCollision(Mesh);
 		Mesh->SetSimulatePhysics(true); // Server simulates the actual physical drop
 		UE_LOG(LogTemp, Warning, TEXT("[Item] %s Re-enabled physics on Server"), *GetName());
 	}
 	SetActorEnableCollision(true);
 	OnHeldStateChanged(false, PreviousOwningCharacter);
 
+}
+
+void ABase_Item::ConfigureDroppedCollision(UPrimitiveComponent* PrimitiveComponent)
+{
+	if (!IsValid(PrimitiveComponent))
+	{
+		return;
+	}
+
+	PrimitiveComponent->SetCollisionObjectType(COLLISION_CHANNEL_ITEM);
+
+	const bool bVisibleToPast =
+		ItemTimeline == EItemTimeline::Both || ItemTimeline == EItemTimeline::Past;
+	const bool bVisibleToFuture =
+		ItemTimeline == EItemTimeline::Both || ItemTimeline == EItemTimeline::Future;
+
+	// These channels are also used by PerformInteractTrace. Keep the appropriate
+	// response blocking so a dropped item remains pickable. The character capsule
+	// ignores COLLISION_CHANNEL_ITEM, preventing physical character/item collision.
+	PrimitiveComponent->SetCollisionResponseToChannel(
+		COLLISION_CHANNEL_PAWN_PAST,
+		bVisibleToPast ? ECR_Block : ECR_Ignore);
+	PrimitiveComponent->SetCollisionResponseToChannel(
+		COLLISION_CHANNEL_PAWN_FUTURE,
+		bVisibleToFuture ? ECR_Block : ECR_Ignore);
 }
 
 
@@ -349,7 +376,7 @@ void ABase_Item::ApplyItemTimelineState()
 	{
 
 
-		ItemMesh->SetCollisionObjectType(COLLISION_CHANNEL_DOOR_FUTURE);
+		ItemMesh->SetCollisionObjectType(COLLISION_CHANNEL_ITEM);
 		ItemMesh->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_FUTURE, ECR_Block);
 		ItemMesh->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_PAST, ECR_Ignore);
 	}
@@ -357,7 +384,7 @@ void ABase_Item::ApplyItemTimelineState()
 	{
 
 
-		ItemMesh->SetCollisionObjectType(COLLISION_CHANNEL_DOOR_PAST);
+		ItemMesh->SetCollisionObjectType(COLLISION_CHANNEL_ITEM);
 		ItemMesh->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_PAST, ECR_Block);
 		ItemMesh->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_FUTURE, ECR_Ignore);
 
@@ -366,7 +393,7 @@ void ABase_Item::ApplyItemTimelineState()
 	{
 
 
-		ItemMesh->SetCollisionObjectType(COLLISION_CHANNEL_DOOR_PAST);
+		ItemMesh->SetCollisionObjectType(COLLISION_CHANNEL_ITEM);
 		ItemMesh->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_PAST, ECR_Block);
 		ItemMesh->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_FUTURE, ECR_Block);
 	}
