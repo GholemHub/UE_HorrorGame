@@ -482,13 +482,18 @@ void AHronoCharacter::StandUp()
 {
 	if (!HasAuthority())
 		return;
-
+	
 	AChair* PreviousChair = CurrentChair;
 
 	if (CurrentChair)
 	{
+		if (CurrentChair->IsRitualStarted == true) {
+			return;
+		}
 		CurrentChair->bIsSit = false;
 	}
+
+
 
 	CurrentChair = nullptr;
 	bIsSitting = false;
