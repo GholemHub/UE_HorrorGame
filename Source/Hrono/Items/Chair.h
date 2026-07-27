@@ -29,7 +29,7 @@ public:
 
 	void NotifyCharacterSat(AHronoCharacter* Character);
 
-	UPROPERTY(Replicated)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Replicated)
 	bool bIsSit = false;
 
 	/** Played when a character sits down on this chair. Assign any sound in Blueprint. */
@@ -47,6 +47,11 @@ public:
 	/** Where the character is placed after standing up from this chair */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Chair")
 	USceneComponent* StandUpPoint;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chair")
+	bool IsRitualStarted = false;
+
+
 
 	USceneComponent* GetSitPoint() const { return SitPoint; }
 	USceneComponent* GetStandUpPoint() const { return StandUpPoint; }
