@@ -10,6 +10,7 @@
 
 #include "HronoCharacter.generated.h"
 
+
 class UInputComponent;
 class USkeletalMeshComponent;
 class UCameraComponent;
@@ -94,6 +95,9 @@ protected:
 
 public:
 	AHronoCharacter();
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Dream")
+	bool bIsDreamCharacter = false;
 
 	/** Delegate called when the sprint meter should be updated */
 	FUpdateSprintMeterDelegate OnSprintMeterUpdated;
@@ -205,6 +209,7 @@ protected:
 	void OnRep_CharacterTimeline();
 
 	void ApplyTimelineCollision();
+	
 
 	UPROPERTY(EditAnywhere, Category = "Sprint", meta = (ClampMin = 0, ClampMax = 1, Units = "s"))
 	float SprintFixedTickTime = 0.03333f;

@@ -42,4 +42,5 @@ void AChair::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimePr
     Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 
     DOREPLIFETIME(AChair, bIsSit);
+    DOREPLIFETIME(AChair, CurrentSitter);
 }
