@@ -32,6 +32,16 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Replicated)
 	bool bIsSit = false;
 
+	/** Character currently occupying this chair, or null when the chair is empty. */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Replicated, Category = "Chair")
+	TObjectPtr<AHronoCharacter> CurrentSitter;
+
+	/** Returns the character sitting on this chair, or null if it is empty. */
+	UFUNCTION(BlueprintPure, Category = "Chair")
+	AHronoCharacter* GetSitter() const { return CurrentSitter; }
+
+	void SetSitter(AHronoCharacter* Character) { CurrentSitter = Character; }
+
 	/** Played when a character sits down on this chair. Assign any sound in Blueprint. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio")
 	TObjectPtr<USoundBase> SitSound;

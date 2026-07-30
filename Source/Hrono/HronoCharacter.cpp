@@ -2,6 +2,7 @@
 
 #include "HronoCharacter.h"
 #include "HronoCollisionChannels.h"
+#include "EngineUtils.h"
 #include "Animation/AnimInstance.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
@@ -89,8 +90,9 @@ AHronoCharacter::AHronoCharacter()
 void AHronoCharacter::OnRep_CharacterTimeline()
 {
 	ApplyTimelineCollision();
-
+	//RefreshTimelineVisibilityForLocalPlayer();
 }
+
 
 void AHronoCharacter::ServerSetSprinting_Implementation(bool bNewSprint)
 {
@@ -111,21 +113,36 @@ void AHronoCharacter::ApplyTimelineCollision()
 	// Blueprint collision presets can override the constructor response. Reapply
 	// this at runtime and after every timeline change so Base_Item actors never
 	// physically block the character capsule.
-	GetCapsuleComponent()->SetCollisionResponseToChannel(COLLISION_CHANNEL_ITEM, ECR_Ignore);
+	UCapsuleComponent* Capsule = GetCapsuleComponent();
+	USkeletalMeshComponent* CharacterMesh = GetMesh();
+
+	Capsule->SetCollisionResponseToChannel(COLLISION_CHANNEL_ITEM, ECR_Ignore);
 
 	if (CharacterTimeline == EItemTimeline::Past)
 	{
-		GetCapsuleComponent()->SetCollisionObjectType(COLLISION_CHANNEL_PAWN_PAST);
-		GetCapsuleComponent()->SetCollisionResponseToChannel(COLLISION_CHANNEL_DOOR_PAST, ECR_Block);
-		GetCapsuleComponent()->SetCollisionResponseToChannel(COLLISION_CHANNEL_DOOR_FUTURE, ECR_Ignore);
+		Capsule->SetCollisionObjectType(COLLISION_CHANNEL_PAWN_PAST);
+		Capsule->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_PAST, ECR_Block);
+		Capsule->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_FUTURE, ECR_Ignore);
+		Capsule->SetCollisionResponseToChannel(COLLISION_CHANNEL_DOOR_PAST, ECR_Block);
+		Capsule->SetCollisionResponseToChannel(COLLISION_CHANNEL_DOOR_FUTURE, ECR_Ignore);
+
+		CharacterMesh->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_PAST, ECR_Block);
+		CharacterMesh->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_FUTURE, ECR_Ignore);
 	}
 	else
 	{
-		GetCapsuleComponent()->SetCollisionObjectType(COLLISION_CHANNEL_PAWN_FUTURE);
-		GetCapsuleComponent()->SetCollisionResponseToChannel(COLLISION_CHANNEL_DOOR_FUTURE, ECR_Block);
-		GetCapsuleComponent()->SetCollisionResponseToChannel(COLLISION_CHANNEL_DOOR_PAST, ECR_Ignore);
+		Capsule->SetCollisionObjectType(COLLISION_CHANNEL_PAWN_FUTURE);
+		Capsule->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_FUTURE, ECR_Block);
+		Capsule->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_PAST, ECR_Ignore);
+		Capsule->SetCollisionResponseToChannel(COLLISION_CHANNEL_DOOR_FUTURE, ECR_Block);
+		Capsule->SetCollisionResponseToChannel(COLLISION_CHANNEL_DOOR_PAST, ECR_Ignore);
+
+		CharacterMesh->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_FUTURE, ECR_Block);
+		CharacterMesh->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_PAST, ECR_Ignore);
 	}
 }
+
+
 
 void AHronoCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {	
@@ -244,6 +261,7 @@ void AHronoCharacter::BeginPlay()
 	}
 
 	ApplyTimelineCollision();
+	//RefreshTimelineVisibilityForLocalPlayer();
 
 	// DEBUG: Print timeline
 	const char* TimelineStr = (CharacterTimeline == EItemTimeline::Future) ? "FUTURE" : "PAST";
@@ -313,7 +331,7 @@ FHitResult AHronoCharacter::PerformInteractTrace(bool bIsDrag)
 			OnMakeInteractImpulse(HitResult);
 		}
 		
-		DrawDebugSphere(
+		/*DrawDebugSphere(
 			GetWorld(),
 			HitResult.ImpactPoint,
 			12.0f,
@@ -321,7 +339,7 @@ FHitResult AHronoCharacter::PerformInteractTrace(bool bIsDrag)
 			FColor::Red,
 			false,
 			2.0f
-		);
+		);*/
 
 		UE_LOG(
 			LogTemp,
@@ -491,6 +509,7 @@ void AHronoCharacter::StandUp()
 			return;
 		}
 		CurrentChair->bIsSit = false;
+		CurrentChair->SetSitter(nullptr);
 	}
 
 
@@ -520,6 +539,7 @@ void AHronoCharacter::SitOnChair(AChair* Chair)
 	bIsSitting = true;
 
 	Chair->bIsSit = true;
+	Chair->SetSitter(this);
 
 	// RepNotify is not called on the authority, so invoke it manually to keep the
 	// server (listen-server host) in sync with clients.
