@@ -157,15 +157,6 @@ public:
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Item Spawn|Automatic")
 	TArray<FSpawnedItemInfo> BeginPlaySpawnedItems;
 
-	/** Display the BeginPlay spawn summary and spawned item names in the game viewport. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Item Spawn|Debug")
-	bool bShowSpawnDebugOnScreen = true;
-
-	/** How long the BeginPlay spawn diagnostics remain visible. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Item Spawn|Debug",
-		meta = (ClampMin = "0.1", UIMin = "0.1", Units = "s"))
-	float SpawnDebugMessageDuration = 15.0f;
-
 	/** Runtime registered item definitions. */
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Item Spawn")
 	TArray<FItemSpawnDefinition> AvailableItems;
@@ -195,7 +186,5 @@ private:
 	bool IsDefinitionAllowedByRequest(const FItemSpawnDefinition& Definition, const FSpawnRequest& Request) const;
 	bool IsTimelineAllowedByRequest(EItemTimeline Timeline, const FSpawnRequest& Request) const;
 	USceneComponent* ResolveAttachComponent(const FSpawnRequest& Request) const;
-	void ShowBeginPlaySpawnDebug(int32 TargetCount, int32 ValidLocationCount) const;
-
 	TSet<FUsedItemTimeline> UsedItemTimelines;
 };

@@ -2,7 +2,6 @@
 
 #include "Items/Base_Item.h"
 #include "Components/SceneComponent.h"
-#include "Engine/Engine.h"
 #include "Engine/World.h"
 
 namespace
@@ -47,7 +46,6 @@ void AItemSpawnManagerSystem::BeginPlay()
 
 	if (!bSpawnItemsOnBeginPlay)
 	{
-		ShowBeginPlaySpawnDebug(0, 0);
 		return;
 	}
 
@@ -58,7 +56,6 @@ void AItemSpawnManagerSystem::BeginPlay()
 
 	if (AvailableItems.IsEmpty())
 	{
-		ShowBeginPlaySpawnDebug(0, 0);
 		return;
 	}
 
@@ -75,82 +72,20 @@ void AItemSpawnManagerSystem::BeginPlay()
 
 	if (SpawnLocations.IsEmpty())
 	{
-		UE_LOG(
-			LogTemp,
-			Warning,
-			TEXT("[ItemSpawnManager] Automatic spawn skipped because PossibleSpawnLocations is empty."));
-		ShowBeginPlaySpawnDebug(0, 0);
 		return;
 	}
-
-	const int32 TargetCount = BeginPlayItemCount <= 0
-		? SpawnLocations.Num()
-		: FMath::Min(BeginPlayItemCount, SpawnLocations.Num());
 
 	SpawnItemsAtRandomLocations(
 		SpawnLocations,
 		BeginPlayItemCount,
 		BeginPlaySpawnRequest,
 		BeginPlaySpawnedItems);
-
-	ShowBeginPlaySpawnDebug(TargetCount, SpawnLocations.Num());
-}
-
-void AItemSpawnManagerSystem::ShowBeginPlaySpawnDebug(
-	int32 TargetCount,
-	int32 ValidLocationCount) const
-{
-	if (!bShowSpawnDebugOnScreen || !GEngine)
-	{
-		return;
-	}
-
-	FString Message;
-	if (!bSpawnItemsOnBeginPlay)
-	{
-		Message = TEXT("[ItemSpawnManager] Automatic spawning is disabled.");
-	}
-	else
-	{
-		Message = FString::Printf(
-			TEXT("[ItemSpawnManager] Spawned %d / %d item(s) | Valid locations: %d / %d"),
-			BeginPlaySpawnedItems.Num(),
-			TargetCount,
-			ValidLocationCount,
-			PossibleSpawnLocations.Num());
-
-		for (int32 Index = 0; Index < BeginPlaySpawnedItems.Num(); ++Index)
-		{
-			const FSpawnedItemInfo& Info = BeginPlaySpawnedItems[Index];
-			Message += FString::Printf(
-				TEXT("\n  %d. %s (Actor: %s, Timeline: %s)"),
-				Index + 1,
-				*Info.ItemId.ToString(),
-				*GetNameSafe(Info.Item.Get()),
-				*UEnum::GetValueAsString(Info.Timeline));
-		}
-
-		if (BeginPlaySpawnedItems.Num() < TargetCount)
-		{
-			Message += TEXT("\n  WARNING: Target was not reached. Check the Output Log for rejected locations or exhausted item/timeline pairs.");
-		}
-	}
-
-	const FColor MessageColor =
-		BeginPlaySpawnedItems.Num() < TargetCount ? FColor::Yellow : FColor::Green;
-
-	GEngine->AddOnScreenDebugMessage(
-		-1,
-		SpawnDebugMessageDuration,
-		MessageColor,
-		Message);
 }
 
 bool AItemSpawnManagerSystem::RegisterAvailableItem(const FItemSpawnDefinition& Definition)
 {
 	if (!Definition.ItemClass)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("[ItemSpawnManager] Cannot register an empty item class."));
 		return false;
 	}
 
@@ -181,11 +116,6 @@ ABase_Item* AItemSpawnManagerSystem::SpawnItemWithInfo(
 	UWorld* World = GetWorld();
 	if (!World || !HasAuthority())
 	{
-		UE_LOG(
-			LogTemp,
-			Warning,
-			TEXT("[ItemSpawnManager] SpawnItem must be called on the server."));
-
 		OutInfo = FSpawnedItemInfo();
 		return nullptr;
 	}
@@ -212,15 +142,6 @@ ABase_Item* AItemSpawnManagerSystem::SpawnItemWithInfo(
 			OwnerTimeline = LocationTimeline;
 		}
 
-	}
-	else if (Data.Owner)
-	{
-		UE_LOG(
-			LogTemp,
-			Warning,
-			TEXT("[ItemSpawnManager] Owner %s is not ABase_Item. "
-				"Owner timeline restriction will not be applied."),
-			*GetNameSafe(Data.Owner.Get()));
 	}
 
 	struct FCandidate
@@ -307,12 +228,6 @@ ABase_Item* AItemSpawnManagerSystem::SpawnItemWithInfo(
 
 	if (!IsValid(SpawnedItem))
 	{
-		UE_LOG(
-			LogTemp,
-			Warning,
-			TEXT("[ItemSpawnManager] Failed to spawn %s."),
-			*GetNameSafe(Choice.Definition->ItemClass));
-
 		OutInfo = FSpawnedItemInfo();
 		return nullptr;
 	}
@@ -333,20 +248,10 @@ ABase_Item* AItemSpawnManagerSystem::SpawnItemWithInfo(
 			Mesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 		}
 
-		const bool bAttached = SpawnedItem->AttachToComponent(
+		SpawnedItem->AttachToComponent(
 			AttachComponent,
 			FAttachmentTransformRules::SnapToTargetNotIncludingScale,
 			AttachSocketName);
-
-		if (!bAttached)
-		{
-			UE_LOG(
-				LogTemp,
-				Error,
-				TEXT("[ItemSpawnManager] Failed to attach %s to %s."),
-				*GetNameSafe(SpawnedItem),
-				*GetNameSafe(AttachComponent));
-		}
 	}
 	const FName ItemId = GetEffectiveItemId(*Choice.Definition);
 
@@ -376,14 +281,6 @@ int32 AItemSpawnManagerSystem::SpawnItemsAtRandomLocations(
 		if (IsValid(Location) && Cast<ABase_Item>(Location))
 		{
 			ShuffledLocations.AddUnique(Location);
-		}
-		else if (Location)
-		{
-			UE_LOG(
-				LogTemp,
-				Warning,
-				TEXT("[ItemSpawnManager] Ignoring location %s because it is not ABase_Item."),
-				*GetNameSafe(Location));
 		}
 	}
 

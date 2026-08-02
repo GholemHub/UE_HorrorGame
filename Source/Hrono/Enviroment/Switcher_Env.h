@@ -32,11 +32,15 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerInteract(AActor* Interactor);
 
+	/** Automatically fires in this actor's Blueprint whenever the switch state changes. */
+	UFUNCTION(BlueprintImplementableEvent, Category = "Switch", meta = (DisplayName = "On Switch Toggled"))
+	void OnSwitchToggled(bool bNewIsLightOn);
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, ReplicatedUsing = OnRep_Switch)
 	bool bIsLightOn = true;
 
 	UPROPERTY(EditInstanceOnly, Replicated, BlueprintReadWrite, Category = "Light Test")
-	TArray<ALight_Env*> LightActors;
+	TArray<AActor*> LightActors;
 
 	/** Played when the switch is flipped on. Assign any sound in Blueprint. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio")
