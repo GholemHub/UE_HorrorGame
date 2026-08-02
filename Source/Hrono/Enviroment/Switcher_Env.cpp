@@ -56,23 +56,23 @@ void ASwitcher_Env::OnRep_Switch()
 	// the single place every machine reacts to the light state change.
 	UGameplayStatics::PlaySoundAtLocation(this, bIsLightOn ? SwitchOnSound : SwitchOffSound, GetActorLocation());
 
-	for (ALight_Env* Light : LightActors)
+	for (AActor* Light : LightActors)
 	{
 		if (IsValid(Light))
 		{
-			Light->OnSwith(bIsLightOn);
+			//Light->OnSwith(bIsLightOn);
 		}
 	}
+
+	OnSwitchToggled(bIsLightOn);
 }
 
 void ASwitcher_Env::ServerInteract_Implementation(AActor* Interactor)
 {
 	UE_LOG(LogTemp, Log, TEXT("ServerInteract_Implementation"));
 
-
-	// 1. Change the variable
 	bIsLightOn = !bIsLightOn;
 
-	// 2. Manually trigger the update on the Server
+	// RepNotify runs on clients; call it manually so the server reacts too.
 	OnRep_Switch();
 }
