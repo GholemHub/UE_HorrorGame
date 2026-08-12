@@ -60,8 +60,8 @@ void ADrag_Item::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifeti
 void ADrag_Item::OnRep_DoorRotation()
 {
     // Runs on remote clients only. Skip while this client is actively dragging so we
-    // don't fight the local prediction in UDrag_Component.
-    if (DragComponent && DragComponent->bIsRotating)
+    // don't fight local prediction or the synchronized automatic animation.
+    if ((DragComponent && DragComponent->bIsRotating) || bDoorAnimationActive)
     {
         return;
     }
@@ -70,6 +70,128 @@ void ADrag_Item::OnRep_DoorRotation()
     {
         // Apply the exact authoritative rotation so every machine matches the server.
         ItemMesh->SetRelativeRotation(DoorRotation);
+    }
+}
+
+void ADrag_Item::AnimateDoor(bool bOpen)
+{
+    // A placed door is not owned by a client, so only the authority may fan this
+    // action out to every machine. Blueprint triggers should call this on Authority.
+    if (!HasAuthority())
+    {
+        UE_LOG(LogTemp, Warning,
+            TEXT("AnimateDoor ignored for %s because it was not called on the server"),
+            *GetName());
+        return;
+    }
+
+    if (!ItemMesh)
+    {
+        return;
+    }
+
+    const FRotator StartRotation = ItemMesh->GetRelativeRotation();
+    FRotator TargetRotation = StartRotation;
+
+    if (bOpen)
+    {
+        const float Direction = ItemType == EItemType::DraggableInvertLeft ? 1.0f : -1.0f;
+        TargetRotation.Yaw = Direction * FMath::Abs(AnimatedDoorOpenAngle);
+    }
+    else
+    {
+        TargetRotation.Yaw = 0.0f;
+    }
+
+    if (StartRotation.Equals(TargetRotation, 0.01f))
+    {
+        DoorRotation = TargetRotation;
+        RefreshDoorClosedState();
+        ForceNetUpdate();
+        return;
+    }
+
+    MulticastStartDoorAnimation(
+        TargetRotation,
+        FMath::Max(DoorAnimationDuration, KINDA_SMALL_NUMBER));
+}
+
+void ADrag_Item::MulticastStartDoorAnimation_Implementation(
+    FRotator TargetRotation,
+    float Duration)
+{
+    if (!ItemMesh)
+    {
+        return;
+    }
+
+    if (DragComponent && DragComponent->bIsRotating)
+    {
+        DragComponent->StopDrag();
+    }
+
+    // Begin from the pose currently visible on this machine. A replicated rotator
+    // may encode -90 degrees as 270 degrees; normalizing both ends prevents that
+    // equivalent representation from becoming a visible full revolution.
+    DoorAnimationStartRotation = ItemMesh->GetRelativeRotation().GetNormalized();
+    DoorAnimationTargetRotation = TargetRotation.GetNormalized();
+    DoorAnimationElapsed = 0.0f;
+    ActiveDoorAnimationDuration = FMath::Max(Duration, KINDA_SMALL_NUMBER);
+    bDoorAnimationActive = true;
+
+    ItemMesh->SetRelativeRotation(DoorAnimationStartRotation);
+    DoorRotation = DoorAnimationStartRotation;
+    StartMoveSound(false);
+}
+
+void ADrag_Item::UpdateDoorAnimation(float DeltaTime)
+{
+    if (!bDoorAnimationActive || !ItemMesh)
+    {
+        return;
+    }
+
+    DoorAnimationElapsed += DeltaTime;
+    const float Alpha = FMath::Clamp(
+        DoorAnimationElapsed / ActiveDoorAnimationDuration,
+        0.0f,
+        1.0f);
+    const float EasedAlpha = FMath::InterpEaseInOut(
+        0.0f,
+        1.0f,
+        Alpha,
+        FMath::Max(1.0f, DoorAnimationEaseExponent));
+
+    // Never lerp raw Euler values: -90 and 270 describe the same pose, but a raw
+    // lerp between 270 and 0 rotates the door 270 degrees through the wall. Find
+    // the signed shortest delta for every axis instead.
+    const auto LerpAngleShortestPath = [EasedAlpha](float Start, float Target)
+    {
+        return Start + FMath::FindDeltaAngleDegrees(Start, Target) * EasedAlpha;
+    };
+
+    const FRotator NewRotation(
+        LerpAngleShortestPath(DoorAnimationStartRotation.Pitch, DoorAnimationTargetRotation.Pitch),
+        LerpAngleShortestPath(DoorAnimationStartRotation.Yaw, DoorAnimationTargetRotation.Yaw),
+        LerpAngleShortestPath(DoorAnimationStartRotation.Roll, DoorAnimationTargetRotation.Roll));
+
+    ItemMesh->SetRelativeRotation(NewRotation);
+    DoorRotation = NewRotation;
+
+    if (Alpha < 1.0f)
+    {
+        return;
+    }
+
+    bDoorAnimationActive = false;
+    DoorRotation = DoorAnimationTargetRotation;
+    ItemMesh->SetRelativeRotation(DoorRotation);
+    StopMoveSound();
+
+    if (HasAuthority())
+    {
+        RefreshDoorClosedState();
+        ForceNetUpdate();
     }
 }
 
@@ -99,15 +221,19 @@ void ADrag_Item::RefreshDoorClosedState()
 
 void ADrag_Item::RefreshShelfOpenState()
 {
-    if (!ItemMesh) return;
+    if (!ItemMesh || !DragComponent) return;
 
-    // Get current shelf position relative to its starting point
-    FVector CurrentPosition = ItemMesh->GetRelativeLocation();
-    float CurrentDistance =
-        FMath::Abs(CurrentPosition.Y);
+    const FVector CurrentPosition = ItemMesh->GetRelativeLocation();
+    const bool bCupBoard = DragComponent && DragComponent->bIsCupBoard;
+    const float CurrentDistance = bCupBoard
+        ? FVector::Distance(CurrentPosition, DragComponent->CupBoardClosedLocation)
+        : FMath::Abs(CurrentPosition.Y);
+    const float MaxDistance = bCupBoard
+        ? DragComponent->CupBoardMaxDistance
+        : DragComponent->ShelfMaxDistance;
 
     // Determine if shelf is open or closed
-    bool bIsNowOpen = CurrentDistance > (DragComponent->ShelfMaxDistance * 0.5f);  // More than 50% pulled out
+    const bool bIsNowOpen = CurrentDistance > (MaxDistance * 0.5f);  // More than 50% open
 
     // Only trigger state changes if it changed
     if (bIsNowOpen != bIsShelfOpen)
@@ -125,8 +251,23 @@ void ADrag_Item::RefreshShelfOpenState()
         }
     }
 
-    // Update collision if needed (e.g., items inside become accessible)
-    UpdateShelfCollision();
+    // A cupboard panel must continue blocking pawns after it slides sideways.
+    if (!bCupBoard)
+    {
+        UpdateShelfCollision();
+    }
+}
+
+void ADrag_Item::OnRep_ShelfPosition()
+{
+    // Keep local prediction responsive for the player currently dragging, while
+    // applying the authoritative position to every other client.
+    if (!ItemMesh || (DragComponent && DragComponent->bIsRotating))
+    {
+        return;
+    }
+
+    ItemMesh->SetRelativeLocation(ShelfPosition);
 }
 
 void ADrag_Item::OnShelfOpened()
@@ -219,6 +360,13 @@ void ADrag_Item::BeginPlay()
 {
     Super::BeginPlay();
 
+    // Preserve authored non-zero mesh offsets and make the initial linear-drag
+    // position authoritative for shelves and cupboard panels.
+    if (HasAuthority() && ItemMesh)
+    {
+        ShelfPosition = ItemMesh->GetRelativeLocation();
+    }
+
     // Configure collision channels so the server (and client) physics correctly
     // filters which pawns can collide with this door based on timeline.
     if (ItemTimeline == EItemTimeline::Future)
@@ -260,6 +408,7 @@ void ADrag_Item::Tick(float DeltaTime)
 	Super::Tick(DeltaTime);
 
     UpdateMeshForLocalPlayer();
+    UpdateDoorAnimation(DeltaTime);
 
     if (GEngine)
     {

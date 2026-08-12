@@ -23,7 +23,13 @@ void UDrag_Component::BeginPlay()
 {
 	Super::BeginPlay();
 
-	// ...
+	if (const ADrag_Item* DragItem = Cast<ADrag_Item>(GetOwner()))
+	{
+		if (DragItem->ItemMesh)
+		{
+			CupBoardClosedLocation = DragItem->ItemMesh->GetRelativeLocation();
+		}
+	}
 	
 }
 
@@ -45,7 +51,11 @@ void UDrag_Component::TickComponent(float DeltaTime, ELevelTick TickType, FActor
 	}
 
 	
-	if (bIsShelf)
+	if (bIsCupBoard)
+	{
+		CupBoardDrag();
+	}
+	else if (bIsShelf)
 	{
 		ShelfDrag();
 	}
@@ -67,10 +77,11 @@ void UDrag_Component::StartDrag(APlayerController* PC)
 	// Start the looping movement sound on the owning door/shelf actor.
 	if (ADrag_Item* Drag_Item = Cast<ADrag_Item>(GetOwner()))
 	{
-		Drag_Item->StartMoveSound(bIsShelf);
+		const bool bLinearDrag = bIsShelf || bIsCupBoard;
+		Drag_Item->StartMoveSound(bLinearDrag);
 
 		// Notify Blueprints that a drag interaction has begun.
-		Drag_Item->NotifyDragStarted(bIsShelf);
+		Drag_Item->NotifyDragStarted(bLinearDrag);
 	}
 
 	//UE_LOG(LogTemp, Log, TEXT("Drag started"));
@@ -248,6 +259,61 @@ void UDrag_Component::ShelfDrag()
 		else
 		{
 			Shelf->RefreshShelfOpenState();
+		}
+	}
+}
+
+void UDrag_Component::CupBoardDrag()
+{
+	ADrag_Item* CupBoard = Cast<ADrag_Item>(GetOwner());
+	if (!CupBoard || !CupBoard->ItemMesh || !RotatingController)
+	{
+		return;
+	}
+
+	APawn* PlayerPawn = RotatingController->GetPawn();
+	if (!PlayerPawn)
+	{
+		return;
+	}
+
+	float MouseX = 0.0f;
+	float MouseY = 0.0f;
+	RotatingController->GetInputMouseDelta(MouseX, MouseY);
+
+	const FVector SlideAxis = CupBoardSlideAxis.GetSafeNormal();
+	if (SlideAxis.IsNearlyZero())
+	{
+		return;
+	}
+
+	const FVector OldRelativeLocation = CupBoard->ItemMesh->GetRelativeLocation();
+	const float CurrentOffset = FVector::DotProduct(
+		OldRelativeLocation - CupBoardClosedLocation,
+		SlideAxis);
+	const float NewOffset = FMath::Clamp(
+		CurrentOffset - MouseX * CupBoardSlideSpeed,
+		0.0f,
+		CupBoardMaxDistance);
+
+	FVector NewRelativeLocation = CupBoardClosedLocation + SlideAxis * NewOffset;
+	if (CupBoard->ItemMesh->IsOverlappingActor(PlayerPawn))
+	{
+		NewRelativeLocation = OldRelativeLocation;
+	}
+
+	CupBoard->ItemMesh->SetRelativeLocation(NewRelativeLocation);
+	CupBoard->ShelfPosition = NewRelativeLocation;
+
+	if (AHronoCharacter* Character = Cast<AHronoCharacter>(PlayerPawn))
+	{
+		if (!Character->HasAuthority())
+		{
+			Character->Server_SetShelfPosition(CupBoard, NewRelativeLocation);
+		}
+		else
+		{
+			CupBoard->RefreshShelfOpenState();
 		}
 	}
 }

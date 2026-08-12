@@ -140,6 +140,25 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Door")
 	float DoorClosedYawTolerance = 1.0f;
 
+	/** Opens or closes the door with a smooth ease-in/ease-out animation.
+	 *  Call this on the server (for example from an authoritative trigger event).
+	 *  The animation is multicast so every player sees the panel moving. */
+	UFUNCTION(BlueprintCallable, Category = "Door|Animation", meta = (DisplayName = "Animate Door Open/Close"))
+	void AnimateDoor(bool bOpen);
+
+	/** Absolute yaw angle used by AnimateDoor when opening. The direction is
+	 *  selected automatically from ItemType (InvertLeft opens in +Yaw). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Door|Animation", meta = (ClampMin = "0.0", UIMin = "0.0", UIMax = "180.0"))
+	float AnimatedDoorOpenAngle = 90.0f;
+
+	/** Time, in seconds, required to fully open or close the door. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Door|Animation", meta = (ClampMin = "0.01", UIMin = "0.1"))
+	float DoorAnimationDuration = 1.25f;
+
+	/** Shape of the ease-in/ease-out motion. 1 is linear; 2-3 feels heavier. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Door|Animation", meta = (ClampMin = "1.0", UIMin = "1.0", UIMax = "5.0"))
+	float DoorAnimationEaseExponent = 2.0f;
+
 	/** Authority-only: recomputes bIsClosed from the door's current Yaw and
 	 *  broadcasts OnDoorStateChanged when the open/closed state changes. */
 	void RefreshDoorClosedState();
@@ -160,8 +179,11 @@ public:
 
 	// In Drag_Item.h
 public:
-	UPROPERTY(BlueprintReadWrite, Replicated, Category = "Shelf")
+	UPROPERTY(BlueprintReadWrite, ReplicatedUsing = OnRep_ShelfPosition, Category = "Shelf")
 	FVector ShelfPosition = FVector::ZeroVector;
+
+	UFUNCTION()
+	void OnRep_ShelfPosition();
 
 	UFUNCTION(BlueprintCallable, Category = "Shelf")  // Changed this line
 		void RefreshShelfOpenState();
@@ -174,6 +196,26 @@ public:
 
 
 protected:
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastStartDoorAnimation(FRotator TargetRotation, float Duration);
+
+	void UpdateDoorAnimation(float DeltaTime);
+
+	UPROPERTY(Transient)
+	bool bDoorAnimationActive = false;
+
+	UPROPERTY(Transient)
+	float DoorAnimationElapsed = 0.0f;
+
+	UPROPERTY(Transient)
+	float ActiveDoorAnimationDuration = 1.0f;
+
+	UPROPERTY(Transient)
+	FRotator DoorAnimationStartRotation = FRotator::ZeroRotator;
+
+	UPROPERTY(Transient)
+	FRotator DoorAnimationTargetRotation = FRotator::ZeroRotator;
+
 	UFUNCTION(BlueprintCallable, Category = "Shelf")
 	void OnShelfOpened();
 
