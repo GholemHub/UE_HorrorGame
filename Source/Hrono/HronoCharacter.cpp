@@ -617,7 +617,11 @@ void AHronoCharacter::HandleDrag(const FHitResult& HitResult)
 
 	DragComponent->StartDrag(PC);
 
-	if (DragComponent->bIsShelf)
+	if (DragComponent->bIsCupBoard)
+	{
+		UE_LOG(LogTemp, Log, TEXT("Started dragging cupboard door"));
+	}
+	else if (DragComponent->bIsShelf)
 	{
 		UE_LOG(LogTemp, Log, TEXT("Started dragging shelf"));
 	}
