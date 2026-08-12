@@ -292,7 +292,7 @@ void UDrag_Component::CupBoardDrag()
 		OldRelativeLocation - CupBoardClosedLocation,
 		SlideAxis);
 	const float NewOffset = FMath::Clamp(
-		CurrentOffset + MouseX * CupBoardSlideSpeed,
+		CurrentOffset - MouseX * CupBoardSlideSpeed,
 		0.0f,
 		CupBoardMaxDistance);
 

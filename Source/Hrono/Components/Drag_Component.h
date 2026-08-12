@@ -73,9 +73,9 @@ public:
 	float ShelfMaxDistance = 50.f;  // How far shelf can pull out
 
 	/** Local-space direction in which the cupboard panel opens.
-	 *  Use (0, 1, 0) for left-to-right or (0, -1, 0) for right-to-left. */
+	 *  Use (0, -1, 0) for right-to-left or (0, 1, 0) for left-to-right. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CupBoard")
-	FVector CupBoardSlideAxis = FVector(0.0f, 1.0f, 0.0f);
+	FVector CupBoardSlideAxis = FVector(0.0f, -1.0f, 0.0f);
 
 	/** Mouse sensitivity for the sliding cupboard panel. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CupBoard", meta = (ClampMin = "0.0"))
