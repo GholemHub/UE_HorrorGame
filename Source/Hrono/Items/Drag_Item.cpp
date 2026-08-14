@@ -66,11 +66,11 @@ void ADrag_Item::OnRep_DoorRotation()
         return;
     }
 
-    if (ItemMesh)
-    {
-        // Apply the exact authoritative rotation so every machine matches the server.
-        ItemMesh->SetRelativeRotation(DoorRotation);
-    }
+	if (USceneComponent* DoorMovementComponent = GetPrimaryDoorMovementComponent())
+	{
+		// Apply the exact authoritative rotation so every machine matches the server.
+		DoorMovementComponent->SetRelativeRotation(DoorRotation);
+	}
 }
 
 void ADrag_Item::AnimateDoor(bool bOpen)
@@ -85,12 +85,21 @@ void ADrag_Item::AnimateDoor(bool bOpen)
         return;
     }
 
-    if (!ItemMesh)
-    {
-        return;
-    }
+	if (!bAllowAnimateDoorOpenClose)
+	{
+		UE_LOG(LogTemp, Log,
+			TEXT("AnimateDoor ignored for %s because Allow Animate Door Open Close is disabled"),
+			*GetName());
+		return;
+	}
 
-    const FRotator StartRotation = ItemMesh->GetRelativeRotation();
+	USceneComponent* DoorMovementComponent = GetPrimaryDoorMovementComponent();
+	if (!DoorMovementComponent)
+	{
+		return;
+	}
+
+	const FRotator StartRotation = DoorMovementComponent->GetRelativeRotation();
     FRotator TargetRotation = StartRotation;
 
     if (bOpen)
@@ -120,9 +129,10 @@ void ADrag_Item::MulticastStartDoorAnimation_Implementation(
     FRotator TargetRotation,
     float Duration)
 {
-    if (!ItemMesh)
-    {
-        return;
+	USceneComponent* DoorMovementComponent = GetPrimaryDoorMovementComponent();
+	if (!DoorMovementComponent)
+	{
+		return;
     }
 
     if (DragComponent && DragComponent->bIsRotating)
@@ -133,20 +143,21 @@ void ADrag_Item::MulticastStartDoorAnimation_Implementation(
     // Begin from the pose currently visible on this machine. A replicated rotator
     // may encode -90 degrees as 270 degrees; normalizing both ends prevents that
     // equivalent representation from becoming a visible full revolution.
-    DoorAnimationStartRotation = ItemMesh->GetRelativeRotation().GetNormalized();
+	DoorAnimationStartRotation = DoorMovementComponent->GetRelativeRotation().GetNormalized();
     DoorAnimationTargetRotation = TargetRotation.GetNormalized();
     DoorAnimationElapsed = 0.0f;
     ActiveDoorAnimationDuration = FMath::Max(Duration, KINDA_SMALL_NUMBER);
     bDoorAnimationActive = true;
 
-    ItemMesh->SetRelativeRotation(DoorAnimationStartRotation);
+	DoorMovementComponent->SetRelativeRotation(DoorAnimationStartRotation);
     DoorRotation = DoorAnimationStartRotation;
     StartMoveSound(false);
 }
 
 void ADrag_Item::UpdateDoorAnimation(float DeltaTime)
 {
-    if (!bDoorAnimationActive || !ItemMesh)
+	USceneComponent* DoorMovementComponent = GetPrimaryDoorMovementComponent();
+	if (!bDoorAnimationActive || !DoorMovementComponent)
     {
         return;
     }
@@ -175,7 +186,7 @@ void ADrag_Item::UpdateDoorAnimation(float DeltaTime)
         LerpAngleShortestPath(DoorAnimationStartRotation.Yaw, DoorAnimationTargetRotation.Yaw),
         LerpAngleShortestPath(DoorAnimationStartRotation.Roll, DoorAnimationTargetRotation.Roll));
 
-    ItemMesh->SetRelativeRotation(NewRotation);
+	DoorMovementComponent->SetRelativeRotation(NewRotation);
     DoorRotation = NewRotation;
 
     if (Alpha < 1.0f)
@@ -185,7 +196,7 @@ void ADrag_Item::UpdateDoorAnimation(float DeltaTime)
 
     bDoorAnimationActive = false;
     DoorRotation = DoorAnimationTargetRotation;
-    ItemMesh->SetRelativeRotation(DoorRotation);
+	DoorMovementComponent->SetRelativeRotation(DoorRotation);
     StopMoveSound();
 
     if (HasAuthority())
@@ -193,6 +204,59 @@ void ADrag_Item::UpdateDoorAnimation(float DeltaTime)
         RefreshDoorClosedState();
         ForceNetUpdate();
     }
+}
+
+USceneComponent* ADrag_Item::GetPrimaryDoorMovementComponent() const
+{
+	return ItemMesh;
+}
+
+UDrag_Component* ADrag_Item::FindDragComponentForHit(const UPrimitiveComponent* HitComponent) const
+{
+	TInlineComponentArray<UDrag_Component*> DragComponents(this);
+	for (UDrag_Component* Candidate : DragComponents)
+	{
+		if (IsValid(Candidate) && Candidate->MatchesHitComponent(HitComponent))
+		{
+			return Candidate;
+		}
+	}
+
+	// Preserve the old single-door behavior if a Blueprint has unusual nested collision.
+	return DragComponent;
+}
+
+USceneComponent* ADrag_Item::FindDoorMovementComponent(FName DoorComponentName) const
+{
+	USceneComponent* PrimaryComponent = GetPrimaryDoorMovementComponent();
+	if (PrimaryComponent
+		&& (DoorComponentName.IsNone() || PrimaryComponent->GetFName() == DoorComponentName))
+	{
+		return PrimaryComponent;
+	}
+
+	return nullptr;
+}
+
+void ADrag_Item::ApplyDoorRotationFromServer(FName DoorComponentName, const FRotator& NewRotation)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	USceneComponent* DoorMovementComponent = FindDoorMovementComponent(DoorComponentName);
+	if (!DoorMovementComponent)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[%s] Rejected unknown door component '%s'"),
+			*GetName(), *DoorComponentName.ToString());
+		return;
+	}
+
+	DoorMovementComponent->SetRelativeRotation(NewRotation);
+	DoorRotation = NewRotation;
+	RefreshDoorClosedState();
+	ForceNetUpdate();
 }
 
 void ADrag_Item::RefreshDoorClosedState()
@@ -410,65 +474,25 @@ void ADrag_Item::Tick(float DeltaTime)
     UpdateMeshForLocalPlayer();
     UpdateDoorAnimation(DeltaTime);
 
-    if (GEngine)
+    if (GEngine && bShowDoorDebugOnScreen)
     {
-   
+		const USceneComponent* DoorMovementComponent = GetPrimaryDoorMovementComponent();
+		const FRotator Rotation = DoorMovementComponent
+			? DoorMovementComponent->GetRelativeRotation()
+			: FRotator::ZeroRotator;
+		const FString RoleName = HasAuthority() ? TEXT("SERVER") : TEXT("CLIENT");
+		const int32 Key = HasAuthority() ? 1 : 2;
 
-        FRotator Rot = ItemMesh->GetRelativeRotation();
-        if (HasAuthority())
-        {
-            FString Role1 = HasAuthority() ? TEXT("SERVER") : TEXT("CLIENT");
-
-            FString Msg = FString::Printf(
-                TEXT("[%s] Door Rot: %.1f %.1f %.1f"),
-                *Role1,
-                Rot.Pitch, Rot.Yaw, Rot.Roll
-            );
-
-            int32 Key = HasAuthority() ? 1 : 2;
-
-            GEngine->AddOnScreenDebugMessage(
-                Key,
-                0.0f,
-                FColor::Yellow,
-                Msg
-            );
-
-            GEngine->AddOnScreenDebugMessage(
-                Key,
-                0.0f,
-                FColor::Yellow,
-                FString::Printf(TEXT("bIsClosed :: %i"), bIsClosed)
-            );
-        }
-        else {
-            FString Role1 = HasAuthority() ? TEXT("SERVER") : TEXT("CLIENT");
-
-            FString Msg = FString::Printf(
-                TEXT("[%s] Door Rot: %.1f %.1f %.1f"),
-                *Role1,
-                Rot.Pitch, Rot.Yaw, Rot.Roll
-            );
-
-            int32 Key = HasAuthority() ? 1 : 2;
-
-            GEngine->AddOnScreenDebugMessage(
-                Key,
-                0.0f,
-                FColor::Yellow,
-                Msg
-            );
-
-            GEngine->AddOnScreenDebugMessage(
-                Key,
-                0.0f,
-                FColor::Yellow,
-                FString::Printf(TEXT("bIsClosed :: %i"), bIsClosed)
-            );
-        }
-
+		GEngine->AddOnScreenDebugMessage(
+			Key,
+			0.0f,
+			FColor::Yellow,
+			FString::Printf(
+				TEXT("[%s] Door Yaw: %.1f | Closed: %s"),
+				*RoleName,
+				Rotation.Yaw,
+				bIsClosed ? TEXT("true") : TEXT("false")));
     }
-   
 }
 
 

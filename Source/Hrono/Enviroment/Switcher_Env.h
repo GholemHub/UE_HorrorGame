@@ -32,6 +32,22 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerInteract(AActor* Interactor);
 
+	/**
+	 * Changes this switch on the authoritative server and lets RepNotify apply the
+	 * result to every connected machine. Returns true only when the state changed.
+	 */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Switch")
+	bool SetLightState(bool bNewIsLightOn);
+
+	/**
+	 * Applies a visual state directly to every light assigned in LightActors.
+	 * Besides Light_Env, this supports Blueprint actors containing Point/Spot/Rect
+	 * light components. It is intentionally local so RepNotify can call it on clients.
+	 * Returns the number of light components/actors that received the state.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Switch")
+	int32 ApplyLightStateToLinkedActors(bool bNewIsLightOn);
+
 	/** Automatically fires in this actor's Blueprint whenever the switch state changes. */
 	UFUNCTION(BlueprintImplementableEvent, Category = "Switch", meta = (DisplayName = "On Switch Toggled"))
 	void OnSwitchToggled(bool bNewIsLightOn);

@@ -57,6 +57,11 @@ void ALight_Env::OnSwith(bool NewState)
 
 void ALight_Env::SetLightEnabled(bool bNewState)
 {
+	if (bLightEnabled == bNewState)
+	{
+		return;
+	}
+
 	bLightEnabled = bNewState;
 	Light->SetVisibility(bLightEnabled);
 

@@ -362,7 +362,8 @@ FHitResult AHronoCharacter::PerformInteractTrace(bool bIsDrag)
 		UE_LOG(LogTemp, Warning, TEXT("Door Timeline: %s, Character Timeline: %s"),
 			ANSI_TO_TCHAR(DoorTimelineStr), ANSI_TO_TCHAR(CharTimelineStr));
 
-		if (Door->ItemTimeline != CharacterTimeline)
+		if (Door->ItemTimeline != EItemTimeline::Both
+			&& Door->ItemTimeline != CharacterTimeline)
 		{
 			UE_LOG(LogTemp, Warning, TEXT("Timeline mismatch! Clearing HitResult"));
 			HitResult = FHitResult();
@@ -583,7 +584,9 @@ void AHronoCharacter::HandleDrag(const FHitResult& HitResult)
 		return;
 	}
 
-	auto DragComponent = Item->FindComponentByClass<UDrag_Component>();
+	// Multi-door actors own more than one UDrag_Component. Select the one whose
+	// interaction primitive was actually hit instead of always taking the first.
+	auto DragComponent = Item->FindDragComponentForHit(HitResult.GetComponent());
 	if (!DragComponent)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("HandleDrag FAILED: No DragComponent found!"));
@@ -654,16 +657,25 @@ void AHronoCharacter::DoUnDrag()
 
 void AHronoCharacter::Server_SetDoorRotation_Implementation(ADrag_Item* Door, FRotator NewRotation)
 {
-	if (!Door || !Door->ItemMesh) return;
+	if (!Door)
+	{
+		return;
+	}
 
-	// Server is authoritative: apply the rotation to the door's collision body so the
-	// movement validation sees the same open/closed state as the requesting client,
-	// then replicate it (DoorRotation -> OnRep_DoorRotation) to every other machine.
-	Door->ItemMesh->SetRelativeRotation(NewRotation);
-	Door->DoorRotation = NewRotation;
+	Door->ApplyDoorRotationFromServer(NAME_None, NewRotation);
+}
 
-	// Recompute and replicate the closed/open flag from the new Yaw.
-	Door->RefreshDoorClosedState();
+void AHronoCharacter::Server_SetDoorPanelRotation_Implementation(
+	ADrag_Item* Door,
+	FName DoorComponentName,
+	FRotator NewRotation)
+{
+	if (!Door)
+	{
+		return;
+	}
+
+	Door->ApplyDoorRotationFromServer(DoorComponentName, NewRotation);
 }
 
 void AHronoCharacter::ServerDropCurrentItem_Implementation()
