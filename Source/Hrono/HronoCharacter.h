@@ -317,6 +317,10 @@ public:
 	UFUNCTION(Server, Unreliable)
 	void Server_SetDoorRotation(ADrag_Item* Door, FRotator NewRotation);
 
+	/** Streams rotation for a specific panel/pivot of a multi-door Drag_Item. */
+	UFUNCTION(Server, Unreliable)
+	void Server_SetDoorPanelRotation(ADrag_Item* Door, FName DoorComponentName, FRotator NewRotation);
+
 	/** Returns the first person mesh **/
 	USkeletalMeshComponent* GetFirstPersonMesh() const { return FirstPersonMesh; }
 

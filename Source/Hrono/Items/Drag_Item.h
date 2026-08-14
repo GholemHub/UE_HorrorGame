@@ -24,6 +24,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnDragStarted, bool, bIsShelf);
 class USoundBase;
 class UAudioComponent;
 class USplineComponent;
+class UPrimitiveComponent;
 
 UCLASS()
 class HRONO_API ADrag_Item : public ABase_Item
@@ -144,7 +145,14 @@ public:
 	 *  Call this on the server (for example from an authoritative trigger event).
 	 *  The animation is multicast so every player sees the panel moving. */
 	UFUNCTION(BlueprintCallable, Category = "Door|Animation", meta = (DisplayName = "Animate Door Open/Close"))
-	void AnimateDoor(bool bOpen);
+	virtual void AnimateDoor(bool bOpen);
+
+	/**
+	 * When false, Animate Door Open/Close ignores every request. Manual player
+	 * dragging remains available because it does not use AnimateDoor.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Door|Animation")
+	bool bAllowAnimateDoorOpenClose = true;
 
 	/** Absolute yaw angle used by AnimateDoor when opening. The direction is
 	 *  selected automatically from ItemType (InvertLeft opens in +Yaw). */
@@ -159,9 +167,27 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Door|Animation", meta = (ClampMin = "1.0", UIMin = "1.0", UIMax = "5.0"))
 	float DoorAnimationEaseExponent = 2.0f;
 
+	/** Optional legacy per-frame rotation panel. Disabled by default to avoid every
+	 *  placed door overwriting the same two on-screen debug keys. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Door|Debug")
+	bool bShowDoorDebugOnScreen = false;
+
 	/** Authority-only: recomputes bIsClosed from the door's current Yaw and
 	 *  broadcasts OnDoorStateChanged when the open/closed state changes. */
-	void RefreshDoorClosedState();
+	virtual void RefreshDoorClosedState();
+
+	/** Component rotated by the primary DragComponent. Subclasses can provide a
+	 *  dedicated hinge pivot while ItemMesh remains the clickable door mesh. */
+	virtual USceneComponent* GetPrimaryDoorMovementComponent() const;
+
+	/** Selects the correct drag component for the primitive hit by the interaction trace. */
+	virtual UDrag_Component* FindDragComponentForHit(const UPrimitiveComponent* HitComponent) const;
+
+	/** Resolves a replicated door/pivot identifier to a movement component. */
+	virtual USceneComponent* FindDoorMovementComponent(FName DoorComponentName) const;
+
+	/** Authority-only entry point used by Character RPCs for primary or subclass door panels. */
+	virtual void ApplyDoorRotationFromServer(FName DoorComponentName, const FRotator& NewRotation);
 
 	// In Drag_Item.h
 public:

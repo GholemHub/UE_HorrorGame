@@ -2,6 +2,8 @@
 
 
 #include "Components/Drag_Component.h"
+#include "Components/PrimitiveComponent.h"
+#include "Components/SceneComponent.h"
 #include "Items/Drag_Item.h"
 #include "HronoCharacter.h"
 #include "InputCoreTypes.h"
@@ -23,14 +25,53 @@ void UDrag_Component::BeginPlay()
 {
 	Super::BeginPlay();
 
-	if (const ADrag_Item* DragItem = Cast<ADrag_Item>(GetOwner()))
+	if (USceneComponent* MovementComponent = GetTargetMovementComponent())
 	{
-		if (DragItem->ItemMesh)
-		{
-			CupBoardClosedLocation = DragItem->ItemMesh->GetRelativeLocation();
-		}
+		CupBoardClosedLocation = MovementComponent->GetRelativeLocation();
 	}
 	
+}
+
+USceneComponent* UDrag_Component::GetTargetMovementComponent() const
+{
+	if (IsValid(TargetMovementComponentOverride))
+	{
+		return TargetMovementComponentOverride;
+	}
+
+	if (const ADrag_Item* DragItem = Cast<ADrag_Item>(GetOwner()))
+	{
+		return DragItem->GetPrimaryDoorMovementComponent();
+	}
+
+	return nullptr;
+}
+
+UPrimitiveComponent* UDrag_Component::GetInteractionPrimitive() const
+{
+	if (IsValid(InteractionPrimitiveOverride))
+	{
+		return InteractionPrimitiveOverride;
+	}
+
+	if (const ADrag_Item* DragItem = Cast<ADrag_Item>(GetOwner()))
+	{
+		return DragItem->ItemMesh;
+	}
+
+	return nullptr;
+}
+
+bool UDrag_Component::MatchesHitComponent(const UPrimitiveComponent* HitComponent) const
+{
+	if (!IsValid(HitComponent))
+	{
+		return false;
+	}
+
+	const UPrimitiveComponent* InteractionPrimitive = GetInteractionPrimitive();
+	return InteractionPrimitive == HitComponent
+		|| (InteractionPrimitive && HitComponent->IsAttachedTo(InteractionPrimitive));
 }
 
 
@@ -74,6 +115,17 @@ void UDrag_Component::StartDrag(APlayerController* PC)
 	bIsRotating = true;
 	RotatingController = PC;
 
+	UE_LOG(LogTemp, Log,
+		TEXT("[DoorDragStart] Owner=%s DragComponent=%s HitPrimitive=%s Target=%s MouseDir=%.1f CustomLimits=%s Limits=[%.1f, %.1f]"),
+		*GetNameSafe(GetOwner()),
+		*GetNameSafe(this),
+		*GetNameSafe(GetInteractionPrimitive()),
+		*GetNameSafe(GetTargetMovementComponent()),
+		DoorMouseInputDirection,
+		bUseCustomDoorAngleLimits ? TEXT("true") : TEXT("false"),
+		MinimumDoorYaw,
+		MaximumDoorYaw);
+
 	// Start the looping movement sound on the owning door/shelf actor.
 	if (ADrag_Item* Drag_Item = Cast<ADrag_Item>(GetOwner()))
 	{
@@ -109,6 +161,13 @@ void UDrag_Component::XDrag()
 	auto Drag_Item = Cast<ADrag_Item>(Owner);
 	if (!Drag_Item) return;
 
+	USceneComponent* MovementComponent = GetTargetMovementComponent();
+	UPrimitiveComponent* InteractionPrimitive = GetInteractionPrimitive();
+	if (!MovementComponent || !InteractionPrimitive)
+	{
+		return;
+	}
+
 	APawn* PlayerPawn = RotatingController->GetPawn();
 	if (!PlayerPawn) return;
 
@@ -134,22 +193,36 @@ void UDrag_Component::XDrag()
 
 	float DirectionMultiplier =
 		(Side < 0.f) ? -1.f : 1.f;
-	FRotator OldRotation = Drag_Item->ItemMesh->GetRelativeRotation();
+	FRotator OldRotation = MovementComponent->GetRelativeRotation();
 
 	FRotator NewRotation = OldRotation;
 
-	if (Drag_Item->ItemType == EItemType::DraggableInvertLeft)
+	if (bUseCustomDoorAngleLimits)
 	{
+		const float MinYaw = FMath::Min(MinimumDoorYaw, MaximumDoorYaw);
+		const float MaxYaw = FMath::Max(MinimumDoorYaw, MaximumDoorYaw);
 		NewRotation.Yaw = FMath::Clamp(
-			NewRotation.Yaw + MouseX * RotationSpeed * DirectionMultiplier * -1,
+			FMath::UnwindDegrees(NewRotation.Yaw)
+				+ MouseX * RotationSpeed * DoorMouseInputDirection,
+			MinYaw,
+			MaxYaw);
+	}
+	else if (Drag_Item->ItemType == EItemType::DraggableInvertLeft)
+	{
+		// Cabinet panels have a fixed outward gesture. Do not flip it again from
+		// the player's side of the pivot: mouse-left must always open the left
+		// panel (positive Yaw).
+		NewRotation.Yaw = FMath::Clamp(
+			NewRotation.Yaw + MouseX * RotationSpeed * -1.0f,
 			0.f,
 			90.f
 		);
 	}
 	else if (Drag_Item->ItemType == EItemType::DraggableInvertRight)
 	{
+		// Mouse-right must always open the right panel (negative Yaw).
 		NewRotation.Yaw = FMath::Clamp(
-			NewRotation.Yaw + MouseX * RotationSpeed * DirectionMultiplier * -1,
+			NewRotation.Yaw + MouseX * RotationSpeed * -1.0f,
 			-90.f,
 			0.f
 			
@@ -165,15 +238,14 @@ void UDrag_Component::XDrag()
 	}
 
 
-	bool bOverlappingPlayer = Drag_Item->ItemMesh->IsOverlappingActor(PlayerPawn);
+	bool bOverlappingPlayer = InteractionPrimitive->IsOverlappingActor(PlayerPawn);
 	if (bOverlappingPlayer)
 	{
 		NewRotation = OldRotation;
 	}
 
 	// Apply rotation locally for immediate feedback (prediction)
-	Drag_Item->ItemMesh->SetRelativeRotation(NewRotation);
-	Drag_Item->DoorRotation = NewRotation;
+	MovementComponent->SetRelativeRotation(NewRotation);
 
 	// Send the new rotation to the server so it updates the authoritative collision
 	// body and replicates it to every other client. The door is a level actor and
@@ -182,13 +254,14 @@ void UDrag_Component::XDrag()
 	{
 		if (!Character->HasAuthority())
 		{
-			Character->Server_SetDoorRotation(Drag_Item, NewRotation);
+			Character->Server_SetDoorPanelRotation(
+				Drag_Item,
+				MovementComponent->GetFName(),
+				NewRotation);
 		}
 		else
 		{
-			// Listen-server host drags the door locally with authority, so refresh
-			// the replicated closed/open state here (no RPC round-trip happens).
-			Drag_Item->RefreshDoorClosedState();
+			Drag_Item->ApplyDoorRotationFromServer(MovementComponent->GetFName(), NewRotation);
 		}
 	}
 }

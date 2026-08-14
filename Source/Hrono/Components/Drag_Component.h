@@ -6,6 +6,8 @@
 #include "Components/ActorComponent.h"
 #include "Drag_Component.generated.h"
 
+class UPrimitiveComponent;
+class USceneComponent;
 
 UCLASS( ClassGroup=(Custom), meta=(BlueprintSpawnableComponent) )
 class HRONO_API UDrag_Component : public UActorComponent
@@ -29,6 +31,32 @@ public:
 	
 	UFUNCTION()
 	void StopDrag();
+
+	/** Scene component that actually rotates. Null uses the owner's primary door mesh/pivot. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Door")
+	TObjectPtr<USceneComponent> TargetMovementComponentOverride;
+
+	/** Primitive that must be hit to select this drag component. Null uses ItemMesh. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Door")
+	TObjectPtr<UPrimitiveComponent> InteractionPrimitiveOverride;
+
+	/** Independent limits are required by double doors: left opens positive, right negative. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Door")
+	bool bUseCustomDoorAngleLimits = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Door", meta = (EditCondition = "bUseCustomDoorAngleLimits"))
+	float MinimumDoorYaw = -90.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Door", meta = (EditCondition = "bUseCustomDoorAngleLimits"))
+	float MaximumDoorYaw = 90.0f;
+
+	/** Multiplies horizontal mouse input for a custom door. Use -1 to invert a panel. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Door", meta = (EditCondition = "bUseCustomDoorAngleLimits"))
+	float DoorMouseInputDirection = 1.0f;
+
+	USceneComponent* GetTargetMovementComponent() const;
+	UPrimitiveComponent* GetInteractionPrimitive() const;
+	bool MatchesHitComponent(const UPrimitiveComponent* HitComponent) const;
 	
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Components")
 	bool bIsShelf = false;
