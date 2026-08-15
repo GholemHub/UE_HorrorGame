@@ -17,6 +17,8 @@
 #include "Components/SpotLightComponent.h"
 #include "Interface/Enviroment_Interface.h"
 #include "Items/Base_Item.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "Materials/MaterialInterface.h"
 
 #include "Components/InventoryComponent.h"
 
@@ -112,6 +114,84 @@ void AHronoCharacter::OnRep_CharacterTimeline()
 {
 	ApplyTimelineCollision();
 	//RefreshTimelineVisibilityForLocalPlayer();
+}
+
+bool AHronoCharacter::EnsureMirrorPostProcessInstance()
+{
+	if (MirrorPostProcessInstance)
+	{
+		return true;
+	}
+
+	if (!IsLocallyControlled() || !FirstPersonCameraComponent)
+	{
+		return false;
+	}
+
+	if (!MirrorPostProcessMaterial)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("[MirrorView] %s has no MirrorPostProcessMaterial. Assign M_PP_MirrorPast in the character Blueprint."),
+			*GetNameSafe(this));
+		return false;
+	}
+
+	MirrorPostProcessInstance = UMaterialInstanceDynamic::Create(
+		MirrorPostProcessMaterial,
+		this,
+		TEXT("MirrorPostProcessInstance"));
+
+	if (!MirrorPostProcessInstance)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[MirrorView] Failed to create a dynamic material instance for %s"),
+			*GetNameSafe(this));
+		return false;
+	}
+
+	// Avoid applying the base material and its dynamic instance as two passes.
+	// Two horizontal mirror passes would cancel one another.
+	FirstPersonCameraComponent->RemoveBlendable(MirrorPostProcessMaterial);
+	FirstPersonCameraComponent->AddOrUpdateBlendable(MirrorPostProcessInstance, 1.0f);
+	return true;
+}
+
+void AHronoCharacter::SetMirroredViewEnabled(bool bEnabled)
+{
+	SetMirrorAmount(bEnabled ? 1.0f : 0.0f);
+}
+
+void AHronoCharacter::SetMirrorAmount(float NewMirrorAmount)
+{
+	MirrorAmount = FMath::Clamp(NewMirrorAmount, 0.0f, 1.0f);
+	bMirrorViewActive = false;
+
+	if (!IsLocallyControlled())
+	{
+		return;
+	}
+
+	if (!EnsureMirrorPostProcessInstance())
+	{
+		return;
+	}
+
+	MirrorPostProcessInstance->SetScalarParameterValue(MirrorParameterName, MirrorAmount);
+	bMirrorViewActive = MirrorAmount >= 0.5f;
+
+	UE_LOG(LogTemp, Log, TEXT("[MirrorView] Character=%s Amount=%.2f InputScale=%.0f"),
+		*GetNameSafe(this),
+		MirrorAmount,
+		GetMirroredHorizontalInputScale());
+}
+
+void AHronoCharacter::ApplyMirrorFromCharacterTimeline()
+{
+	SetMirroredViewEnabled(CharacterTimeline == EItemTimeline::Past);
+}
+
+float AHronoCharacter::GetMirroredHorizontalInputScale() const
+{
+	return IsMirroredViewEnabled() ? -1.0f : 1.0f;
 }
 
 
@@ -282,6 +362,9 @@ void AHronoCharacter::BeginPlay()
 	}
 
 	ApplyTimelineCollision();
+	// Mirroring is opt-in. Past characters start with a normal camera and the
+	// effect changes only after an explicit Blueprint call.
+	SetMirrorAmount(0.0f);
 	//RefreshTimelineVisibilityForLocalPlayer();
 
 	// DEBUG: Print timeline
@@ -840,6 +923,10 @@ void AHronoCharacter::MoveInput(const FInputActionValue& Value)
 {
 	// get the Vector2D move axis
 	FVector2D MovementVector = Value.Get<FVector2D>();
+	if (bCorrectMoveInputWhenMirrored && IsMirroredViewEnabled())
+	{
+		MovementVector.X *= -1.0f;
+	}
 
 	// pass the axis values to the move input
 	DoMove(MovementVector.X, MovementVector.Y);
@@ -880,6 +967,10 @@ void AHronoCharacter::LookInput(const FInputActionValue& Value)
 {
 	// get the Vector2D look axis
 	FVector2D LookAxisVector = Value.Get<FVector2D>();
+	if (bCorrectLookInputWhenMirrored && IsMirroredViewEnabled())
+	{
+		LookAxisVector.X *= -1.0f;
+	}
 
 	// pass the axis values to the aim input
 	DoAim(LookAxisVector.X, LookAxisVector.Y);

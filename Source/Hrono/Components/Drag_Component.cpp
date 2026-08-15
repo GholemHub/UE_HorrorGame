@@ -229,6 +229,13 @@ void UDrag_Component::XDrag()
 
 	float MouseX, MouseY;
 	RotatingController->GetInputMouseDelta(MouseX, MouseY);
+	if (const AHronoCharacter* Character = Cast<AHronoCharacter>(PlayerPawn))
+	{
+		if (Character->bCorrectDragInputWhenMirrored)
+		{
+			MouseX *= Character->GetMirroredHorizontalInputScale();
+		}
+	}
 
 	float InputSideMultiplier = ActiveDoorSideMultiplier;
 	if (!bUseWardrobeFrontBackInput)
@@ -452,6 +459,13 @@ void UDrag_Component::CupBoardDrag()
 	float MouseX = 0.0f;
 	float MouseY = 0.0f;
 	RotatingController->GetInputMouseDelta(MouseX, MouseY);
+	if (const AHronoCharacter* Character = Cast<AHronoCharacter>(PlayerPawn))
+	{
+		if (Character->bCorrectDragInputWhenMirrored)
+		{
+			MouseX *= Character->GetMirroredHorizontalInputScale();
+		}
+	}
 
 	const FVector SlideAxis = CupBoardSlideAxis.GetSafeNormal();
 	if (SlideAxis.IsNearlyZero())

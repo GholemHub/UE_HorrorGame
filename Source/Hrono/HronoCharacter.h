@@ -20,6 +20,8 @@ class ADrag_Item;
 class USpotLightComponent;
 class AChair;
 class USoundBase;
+class UMaterialInterface;
+class UMaterialInstanceDynamic;
 struct FInputActionValue;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
@@ -140,6 +142,61 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, ReplicatedUsing = OnRep_CharacterTimeline, Category = "Timeline")
 	EItemTimeline CharacterTimeline = EItemTimeline::Past;
 
+	// =========================================================
+	// MIRRORED PAST VIEW
+	// =========================================================
+
+	/** Post-process material containing the scalar parameter named by
+	 *  MirrorParameterName. Assign M_PP_MirrorPast in HE_CharacterHrono1. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Timeline|Mirror")
+	TObjectPtr<UMaterialInterface> MirrorPostProcessMaterial;
+
+	/** Name of the scalar parameter that blends normal UVs (0) and mirrored UVs (1). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Timeline|Mirror")
+	FName MirrorParameterName = TEXT("Mirrored");
+
+	/** Correct horizontal mouse-look while the final camera image is mirrored. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Timeline|Mirror|Input")
+	bool bCorrectLookInputWhenMirrored = true;
+
+	/** Correct A/D movement while the final camera image is mirrored. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Timeline|Mirror|Input")
+	bool bCorrectMoveInputWhenMirrored = true;
+
+	/** Correct horizontal mouse input used to drag doors and cupboards. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Timeline|Mirror|Input")
+	bool bCorrectDragInputWhenMirrored = true;
+
+	/** Current value sent to the material's Mirrored parameter. */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Timeline|Mirror")
+	float MirrorAmount = 0.0f;
+
+	/** True only when the local camera has a valid mirror material and the effect is on. */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Timeline|Mirror")
+	bool bMirrorViewActive = false;
+
+	/** One-call Blueprint API: 1 enables the effect and corrected controls; 0 disables both. */
+	UFUNCTION(BlueprintCallable, Category = "Timeline|Mirror", meta = (DisplayName = "Set Mirrored View Enabled"))
+	void SetMirroredViewEnabled(bool bEnabled);
+
+	/** Directly changes the material scalar parameter. Use 0 or 1 for gameplay. */
+	UFUNCTION(BlueprintCallable, Category = "Timeline|Mirror", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	void SetMirrorAmount(float NewMirrorAmount);
+
+	/** Optional manual Blueprint helper: applies Past=1 and Future=0 when explicitly called. */
+	UFUNCTION(BlueprintCallable, Category = "Timeline|Mirror")
+	void ApplyMirrorFromCharacterTimeline();
+
+	UFUNCTION(BlueprintPure, Category = "Timeline|Mirror")
+	bool IsMirroredViewEnabled() const { return bMirrorViewActive; }
+
+	UFUNCTION(BlueprintPure, Category = "Timeline|Mirror")
+	float GetMirrorAmount() const { return MirrorAmount; }
+
+	/** Horizontal scale for screen-relative interactions: -1 while mirrored, otherwise +1. */
+	UFUNCTION(BlueprintPure, Category = "Timeline|Mirror|Input")
+	float GetMirroredHorizontalInputScale() const;
+
 	/** True only while the character overlaps a HidingWardrobe safety volume and
 	 *  every wardrobe door is fully closed. Replicated and readable in Blueprints. */
 	UPROPERTY(ReplicatedUsing = OnRep_IsSafeInHidingWardrobe, VisibleInstanceOnly,
@@ -229,6 +286,10 @@ protected:
 	void OnRep_CharacterTimeline();
 
 	void ApplyTimelineCollision();
+	bool EnsureMirrorPostProcessInstance();
+
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInstanceDynamic> MirrorPostProcessInstance;
 	
 
 	UPROPERTY(EditAnywhere, Category = "Sprint", meta = (ClampMin = 0, ClampMax = 1, Units = "s"))
