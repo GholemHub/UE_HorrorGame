@@ -31,6 +31,27 @@ void AHronoCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutL
 	DOREPLIFETIME(AHronoCharacter, bSprinting);
 	DOREPLIFETIME(AHronoCharacter, CurrentChair);
 	DOREPLIFETIME(AHronoCharacter, bIsSitting);
+	DOREPLIFETIME(AHronoCharacter, bIsSafeInHidingWardrobe);
+}
+
+void AHronoCharacter::SetSafeInHidingWardrobe(bool bNewSafe)
+{
+	if (!HasAuthority() || bIsSafeInHidingWardrobe == bNewSafe)
+	{
+		return;
+	}
+
+	bIsSafeInHidingWardrobe = bNewSafe;
+	UE_LOG(LogTemp, Log, TEXT("[WardrobeSafety] Character=%s Safe=%s"),
+		*GetNameSafe(this),
+		bIsSafeInHidingWardrobe ? TEXT("true") : TEXT("false"));
+	OnRep_IsSafeInHidingWardrobe();
+	ForceNetUpdate();
+}
+
+void AHronoCharacter::OnRep_IsSafeInHidingWardrobe()
+{
+	OnHidingSafetyChanged.Broadcast(bIsSafeInHidingWardrobe);
 }
 
 AHronoCharacter::AHronoCharacter()

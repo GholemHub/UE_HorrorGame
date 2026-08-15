@@ -54,6 +54,22 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Door", meta = (EditCondition = "bUseCustomDoorAngleLimits"))
 	float DoorMouseInputDirection = 1.0f;
 
+	/** Wardrobe-only view-relative input mode. It projects the panel's positive-Yaw
+	 *  movement onto Camera Right, so the panel follows the mouse on screen from
+	 *  both outside and inside. Ordinary doors must leave this disabled. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Door")
+	bool bUseWardrobeFrontBackInput = false;
+
+	/** Enable this only when the actor/mesh Forward axis points into the wardrobe
+	 *  instead of toward its front. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Door",
+		meta = (EditCondition = "bUseWardrobeFrontBackInput"))
+	bool bInvertDoorFrontSide = false;
+
+	/** Side captured when drag begins. It remains stable for the entire gesture. */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Door|Debug")
+	bool bPlayerBehindDoor = false;
+
 	USceneComponent* GetTargetMovementComponent() const;
 	UPrimitiveComponent* GetInteractionPrimitive() const;
 	bool MatchesHitComponent(const UPrimitiveComponent* HitComponent) const;
@@ -85,6 +101,13 @@ public:
 
 	UPROPERTY()
 	APlayerController* RotatingController = nullptr;
+
+	/** +1 from the front, -1 from behind when side-aware input is enabled. */
+	float ActiveDoorSideMultiplier = 1.0f;
+
+	/** View-relative Yaw sign locked for the lifetime of one mouse drag. */
+	float ActiveViewRelativeYawDirection = -1.0f;
+	bool bHasActiveViewRelativeYawDirection = false;
 
 	UPROPERTY()
 	FRotator StartRelativeRotation;

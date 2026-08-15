@@ -26,6 +26,7 @@ DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FUpdateSprintMeterDelegate, float, Percentage);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSprintStateChangedDelegate, bool, bSprinting);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FHidingSafetyChangedDelegate, bool, bIsSafe);
 
 
 
@@ -139,7 +140,26 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, ReplicatedUsing = OnRep_CharacterTimeline, Category = "Timeline")
 	EItemTimeline CharacterTimeline = EItemTimeline::Past;
 
+	/** True only while the character overlaps a HidingWardrobe safety volume and
+	 *  every wardrobe door is fully closed. Replicated and readable in Blueprints. */
+	UPROPERTY(ReplicatedUsing = OnRep_IsSafeInHidingWardrobe, VisibleInstanceOnly,
+		BlueprintReadOnly, Category = "Hiding|Safety")
+	bool bIsSafeInHidingWardrobe = false;
+
+	/** Fired on the server and clients whenever wardrobe safety changes. */
+	UPROPERTY(BlueprintAssignable, Category = "Hiding|Safety")
+	FHidingSafetyChangedDelegate OnHidingSafetyChanged;
+
+	UFUNCTION(BlueprintPure, Category = "Hiding|Safety")
+	bool IsSafeInHidingWardrobe() const { return bIsSafeInHidingWardrobe; }
+
+	/** Authority-only setter used by HidingWardrobe safety volumes. */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Hiding|Safety")
+	void SetSafeInHidingWardrobe(bool bNewSafe);
+
 protected:
+	UFUNCTION()
+	void OnRep_IsSafeInHidingWardrobe();
 
 	UPROPERTY(ReplicatedUsing = OnRep_Sprinting)
 

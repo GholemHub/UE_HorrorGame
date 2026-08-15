@@ -1,5 +1,7 @@
 #include "Items/HidingWardrobe.h"
 
+#include "Components/BoxComponent.h"
+#include "Components/CapsuleComponent.h"
 #include "Components/Drag_Component.h"
 #include "Components/StaticMeshComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -32,6 +34,7 @@ AHidingWardrobe::AHidingWardrobe()
 	DragComponent->bUseCustomDoorAngleLimits = true;
 	DragComponent->MinimumDoorYaw = 0.0f;
 	DragComponent->MaximumDoorYaw = 110.0f;
+	DragComponent->bUseWardrobeFrontBackInput = true;
 	// The left panel opens toward positive Yaw, but dragging its handle outward
 	// produces negative MouseX. Invert that input so mouse-left opens the door.
 	DragComponent->DoorMouseInputDirection = -1.0f;
@@ -42,6 +45,7 @@ AHidingWardrobe::AHidingWardrobe()
 	RightDoorDragComponent->bUseCustomDoorAngleLimits = true;
 	RightDoorDragComponent->MinimumDoorYaw = -110.0f;
 	RightDoorDragComponent->MaximumDoorYaw = 0.0f;
+	RightDoorDragComponent->bUseWardrobeFrontBackInput = true;
 	RightDoorDragComponent->DoorMouseInputDirection = -1.0f;
 
 	HidingPoint = CreateDefaultSubobject<USceneComponent>(TEXT("HidingPoint"));
@@ -49,6 +53,23 @@ AHidingWardrobe::AHidingWardrobe()
 
 	ExitPoint = CreateDefaultSubobject<USceneComponent>(TEXT("ExitPoint"));
 	ExitPoint->SetupAttachment(SceneRoot);
+
+	SafetyVolume = CreateDefaultSubobject<UBoxComponent>(TEXT("SafetyVolume"));
+	SafetyVolume->SetupAttachment(FrameMesh);
+	SafetyVolume->InitBoxExtent(FVector(60.0f, 60.0f, 100.0f));
+	SafetyVolume->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	SafetyVolume->SetCollisionObjectType(ECC_WorldDynamic);
+	SafetyVolume->SetCollisionResponseToAllChannels(ECR_Ignore);
+	SafetyVolume->SetCollisionResponseToChannel(ECC_Pawn, ECR_Overlap);
+	SafetyVolume->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_PAST, ECR_Overlap);
+	SafetyVolume->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_FUTURE, ECR_Overlap);
+	SafetyVolume->SetGenerateOverlapEvents(true);
+	SafetyVolume->OnComponentBeginOverlap.AddDynamic(
+		this,
+		&AHidingWardrobe::HandleSafetyVolumeBeginOverlap);
+	SafetyVolume->OnComponentEndOverlap.AddDynamic(
+		this,
+		&AHidingWardrobe::HandleSafetyVolumeEndOverlap);
 
 	// Super::AnimateDoor uses this value for the primary/left panel.
 	ItemType = EItemType::DraggableInvertLeft;
@@ -78,6 +99,7 @@ void AHidingWardrobe::BeginPlay()
 		DragComponent->bUseCustomDoorAngleLimits = true;
 		DragComponent->MinimumDoorYaw = 0.0f;
 		DragComponent->MaximumDoorYaw = 110.0f;
+		DragComponent->bUseWardrobeFrontBackInput = true;
 		DragComponent->DoorMouseInputDirection = -1.0f;
 	}
 
@@ -88,6 +110,7 @@ void AHidingWardrobe::BeginPlay()
 		RightDoorDragComponent->bUseCustomDoorAngleLimits = true;
 		RightDoorDragComponent->MinimumDoorYaw = -110.0f;
 		RightDoorDragComponent->MaximumDoorYaw = 0.0f;
+		RightDoorDragComponent->bUseWardrobeFrontBackInput = true;
 		RightDoorDragComponent->DoorMouseInputDirection = -1.0f;
 	}
 
@@ -115,6 +138,11 @@ void AHidingWardrobe::BeginPlay()
 
 void AHidingWardrobe::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	if (HasAuthority())
+	{
+		ClearWardrobeSafety();
+	}
+
 	if (IsValid(HiddenPlayer))
 	{
 		ApplyHidingState(HiddenPlayer, false);
@@ -199,6 +227,7 @@ void AHidingWardrobe::RefreshDoorClosedState()
 	const bool bNewClosed = bLeftClosed && bRightClosed;
 	if (bNewClosed == bIsClosed)
 	{
+		RefreshWardrobeSafety();
 		return;
 	}
 
@@ -209,6 +238,7 @@ void AHidingWardrobe::RefreshDoorClosedState()
 		bIsClosed ? DoorCloseSound : DoorOpenSound,
 		GetActorLocation());
 	OnDoorStateChanged.Broadcast(bIsClosed);
+	RefreshWardrobeSafety();
 }
 
 void AHidingWardrobe::AnimateDoor(bool bOpen)
@@ -398,6 +428,99 @@ void AHidingWardrobe::OnRep_HiddenPlayer(AHronoCharacter* PreviousPlayer)
 	}
 }
 
+void AHidingWardrobe::HandleSafetyVolumeBeginOverlap(
+	UPrimitiveComponent* OverlappedComponent,
+	AActor* OtherActor,
+	UPrimitiveComponent* OtherComponent,
+	int32 OtherBodyIndex,
+	bool bFromSweep,
+	const FHitResult& SweepResult)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	AHronoCharacter* Player = Cast<AHronoCharacter>(OtherActor);
+	if (!IsValid(Player) || OtherComponent != Player->GetCapsuleComponent())
+	{
+		return;
+	}
+
+	CharactersInsideSafetyVolume.Add(Player);
+	Player->SetSafeInHidingWardrobe(bIsClosed);
+	UE_LOG(LogTemp, Log,
+		TEXT("[WardrobeSafetyVolume] %s entered %s. DoorsClosed=%s"),
+		*GetNameSafe(Player),
+		*GetNameSafe(this),
+		bIsClosed ? TEXT("true") : TEXT("false"));
+}
+
+void AHidingWardrobe::HandleSafetyVolumeEndOverlap(
+	UPrimitiveComponent* OverlappedComponent,
+	AActor* OtherActor,
+	UPrimitiveComponent* OtherComponent,
+	int32 OtherBodyIndex)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	AHronoCharacter* Player = Cast<AHronoCharacter>(OtherActor);
+	if (!IsValid(Player) || OtherComponent != Player->GetCapsuleComponent())
+	{
+		return;
+	}
+
+	CharactersInsideSafetyVolume.Remove(Player);
+	Player->SetSafeInHidingWardrobe(false);
+	UE_LOG(LogTemp, Log,
+		TEXT("[WardrobeSafetyVolume] %s exited %s. Safe=false"),
+		*GetNameSafe(Player),
+		*GetNameSafe(this));
+}
+
+void AHidingWardrobe::RefreshWardrobeSafety()
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	for (auto Iterator = CharactersInsideSafetyVolume.CreateIterator(); Iterator; ++Iterator)
+	{
+		AHronoCharacter* Player = Iterator->Get();
+		const bool bStillInside = IsValid(Player)
+			&& SafetyVolume
+			&& SafetyVolume->IsOverlappingComponent(Player->GetCapsuleComponent());
+		if (!bStillInside)
+		{
+			if (IsValid(Player))
+			{
+				Player->SetSafeInHidingWardrobe(false);
+			}
+			Iterator.RemoveCurrent();
+			continue;
+		}
+
+		Player->SetSafeInHidingWardrobe(bIsClosed);
+	}
+}
+
+void AHidingWardrobe::ClearWardrobeSafety()
+{
+	for (const TWeakObjectPtr<AHronoCharacter>& PlayerPtr : CharactersInsideSafetyVolume)
+	{
+		if (AHronoCharacter* Player = PlayerPtr.Get())
+		{
+			Player->SetSafeInHidingWardrobe(false);
+		}
+	}
+
+	CharactersInsideSafetyVolume.Empty();
+}
+
 void AHidingWardrobe::ApplyHidingState(AHronoCharacter* Player, bool bEntering)
 {
 	if (!IsValid(Player))
@@ -406,8 +529,19 @@ void AHidingWardrobe::ApplyHidingState(AHronoCharacter* Player, bool bEntering)
 	}
 
 	UCharacterMovementComponent* Movement = Player->GetCharacterMovement();
+	UCapsuleComponent* Capsule = Player->GetCapsuleComponent();
 	if (bEntering)
 	{
+		bHiddenPlayerActorCollisionWasEnabled = Player->GetActorEnableCollision();
+		if (Capsule)
+		{
+			HiddenPlayerCapsuleCollisionBeforeHiding = Capsule->GetCollisionEnabled();
+			HiddenPlayerDoorPastResponseBeforeHiding =
+				Capsule->GetCollisionResponseToChannel(COLLISION_CHANNEL_DOOR_PAST);
+			HiddenPlayerDoorFutureResponseBeforeHiding =
+				Capsule->GetCollisionResponseToChannel(COLLISION_CHANNEL_DOOR_FUTURE);
+		}
+
 		if (HidingPoint)
 		{
 			Player->SetActorLocationAndRotation(
@@ -418,7 +552,17 @@ void AHidingWardrobe::ApplyHidingState(AHronoCharacter* Player, bool bEntering)
 				ETeleportType::TeleportPhysics);
 		}
 
-		Player->SetActorEnableCollision(false);
+		// Keep query collision active so SafetyVolume can detect the hidden player,
+		// while disabled movement prevents the capsule from pushing the doors.
+		Player->SetActorEnableCollision(true);
+		if (Capsule)
+		{
+			Capsule->SetGenerateOverlapEvents(true);
+			Capsule->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+			Capsule->SetCollisionResponseToChannel(COLLISION_CHANNEL_DOOR_PAST, ECR_Ignore);
+			Capsule->SetCollisionResponseToChannel(COLLISION_CHANNEL_DOOR_FUTURE, ECR_Ignore);
+			Capsule->UpdateOverlaps();
+		}
 		if (Movement)
 		{
 			Movement->StopMovementImmediately();
@@ -437,12 +581,38 @@ void AHidingWardrobe::ApplyHidingState(AHronoCharacter* Player, bool bEntering)
 				ETeleportType::TeleportPhysics);
 		}
 
-		Player->SetActorEnableCollision(true);
+		if (Capsule)
+		{
+			Capsule->SetCollisionResponseToChannel(
+				COLLISION_CHANNEL_DOOR_PAST,
+				HiddenPlayerDoorPastResponseBeforeHiding);
+			Capsule->SetCollisionResponseToChannel(
+				COLLISION_CHANNEL_DOOR_FUTURE,
+				HiddenPlayerDoorFutureResponseBeforeHiding);
+			Capsule->SetCollisionEnabled(HiddenPlayerCapsuleCollisionBeforeHiding);
+			Capsule->UpdateOverlaps();
+		}
+		Player->SetActorEnableCollision(bHiddenPlayerActorCollisionWasEnabled);
 		if (Movement)
 		{
 			Movement->SetMovementMode(MOVE_Walking);
 		}
 	}
+
+	if (SafetyVolume)
+	{
+		SafetyVolume->UpdateOverlaps();
+	}
+	if (HasAuthority()
+		&& bEntering
+		&& SafetyVolume
+		&& Capsule
+		&& SafetyVolume->IsOverlappingComponent(Capsule))
+	{
+		CharactersInsideSafetyVolume.Add(Player);
+		Player->SetSafeInHidingWardrobe(bIsClosed);
+	}
+	RefreshWardrobeSafety();
 }
 
 void AHidingWardrobe::ConfigureRightDoorCollision()
