@@ -102,7 +102,7 @@ public:
 	FTransform HoldOffset;
 
 	UFUNCTION()
-	void OnRep_OwningCharacter();
+	virtual void OnRep_OwningCharacter();
 
 	UFUNCTION(BlueprintCallable, Category = "Item")
 

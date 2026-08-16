@@ -6,6 +6,7 @@
 #include "Animation/AnimInstance.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
+#include "Components/PrimitiveComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "EnhancedInputComponent.h"
 #include "InputActionValue.h"
@@ -17,6 +18,9 @@
 #include "Components/SpotLightComponent.h"
 #include "Interface/Enviroment_Interface.h"
 #include "Items/Base_Item.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "Materials/MaterialInterface.h"
+#include "Engine/Engine.h"
 
 #include "Components/InventoryComponent.h"
 
@@ -31,6 +35,28 @@ void AHronoCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutL
 	DOREPLIFETIME(AHronoCharacter, bSprinting);
 	DOREPLIFETIME(AHronoCharacter, CurrentChair);
 	DOREPLIFETIME(AHronoCharacter, bIsSitting);
+	DOREPLIFETIME(AHronoCharacter, bIsSafeInHidingWardrobe);
+	DOREPLIFETIME(AHronoCharacter, bTimelineMirrorRequested);
+}
+
+void AHronoCharacter::SetSafeInHidingWardrobe(bool bNewSafe)
+{
+	if (!HasAuthority() || bIsSafeInHidingWardrobe == bNewSafe)
+	{
+		return;
+	}
+
+	bIsSafeInHidingWardrobe = bNewSafe;
+	UE_LOG(LogTemp, Log, TEXT("[WardrobeSafety] Character=%s Safe=%s"),
+		*GetNameSafe(this),
+		bIsSafeInHidingWardrobe ? TEXT("true") : TEXT("false"));
+	OnRep_IsSafeInHidingWardrobe();
+	ForceNetUpdate();
+}
+
+void AHronoCharacter::OnRep_IsSafeInHidingWardrobe()
+{
+	OnHidingSafetyChanged.Broadcast(bIsSafeInHidingWardrobe);
 }
 
 AHronoCharacter::AHronoCharacter()
@@ -87,10 +113,365 @@ AHronoCharacter::AHronoCharacter()
 
 }
 
-void AHronoCharacter::OnRep_CharacterTimeline()
+void AHronoCharacter::OnRep_CharacterTimeline(EItemTimeline PreviousTimeline)
 {
 	ApplyTimelineCollision();
-	//RefreshTimelineVisibilityForLocalPlayer();
+	ApplyMirrorFromCharacterTimeline();
+	RefreshTimelineVisibilityForLocalPlayer();
+
+	if (PreviousTimeline != CharacterTimeline)
+	{
+		OnCharacterTimelineChanged.Broadcast(PreviousTimeline, CharacterTimeline);
+	}
+}
+
+void AHronoCharacter::OnRep_TimelineMirrorRequested()
+{
+	SetMirroredViewEnabled(bTimelineMirrorRequested);
+}
+
+void AHronoCharacter::SwitchPlayerTimeline()
+{
+	const EItemTimeline RequestedTimeline = CharacterTimeline == EItemTimeline::Past
+		? EItemTimeline::Future
+		: EItemTimeline::Past;
+
+	if (HasAuthority())
+	{
+		ApplyPlayerTimelineOnAuthority(RequestedTimeline);
+		return;
+	}
+
+	// Send the concrete target rather than another "toggle" command. If the same
+	// death event runs on server and owning client, both requests now converge on
+	// one timeline instead of toggling there and immediately back again.
+	ServerSetPlayerTimeline(RequestedTimeline);
+}
+
+void AHronoCharacter::SetPlayerTimeline(EItemTimeline NewTimeline)
+{
+	if (NewTimeline == EItemTimeline::Both)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("[TimelineSwitch] %s rejected Both: player timeline must be Past or Future"),
+			*GetNameSafe(this));
+		return;
+	}
+
+	if (HasAuthority())
+	{
+		ApplyPlayerTimelineOnAuthority(NewTimeline);
+		return;
+	}
+
+	ServerSetPlayerTimeline(NewTimeline);
+}
+
+void AHronoCharacter::ServerSetPlayerTimeline_Implementation(EItemTimeline NewTimeline)
+{
+	if (NewTimeline != EItemTimeline::Both)
+	{
+		ApplyPlayerTimelineOnAuthority(NewTimeline);
+	}
+}
+
+void AHronoCharacter::ClientApplyTimelineMirror_Implementation(EItemTimeline NewTimeline)
+{
+	SetMirroredViewEnabled(NewTimeline == EItemTimeline::Past);
+}
+
+void AHronoCharacter::ApplyPlayerTimelineOnAuthority(EItemTimeline NewTimeline)
+{
+	if (!HasAuthority() || NewTimeline == EItemTimeline::Both)
+	{
+		return;
+	}
+
+	if (NewTimeline == CharacterTimeline)
+	{
+		// A duplicate client/server death notification may request the target that
+		// was already applied. Reinforce presentation without changing state again.
+		bTimelineMirrorRequested = CharacterTimeline == EItemTimeline::Past;
+		OnRep_TimelineMirrorRequested();
+		ClientApplyTimelineMirror(CharacterTimeline);
+		UE_LOG(LogTemp, Log,
+			TEXT("[TimelineSwitch] Duplicate target ignored for %s: already %s"),
+			*GetNameSafe(this),
+			*StaticEnum<EItemTimeline>()->GetNameStringByValue(static_cast<int64>(CharacterTimeline)));
+		return;
+	}
+
+	const double ServerTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+	if (LastTimelineSwitchServerTime >= 0.0
+		&& ServerTime - LastTimelineSwitchServerTime < TimelineSwitchDuplicateGuardSeconds)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("[TimelineSwitch] Duplicate toggle blocked for %s: requested=%s after %.3fs"),
+			*GetNameSafe(this),
+			*StaticEnum<EItemTimeline>()->GetNameStringByValue(static_cast<int64>(NewTimeline)),
+			ServerTime - LastTimelineSwitchServerTime);
+		return;
+	}
+	LastTimelineSwitchServerTime = ServerTime;
+
+	const EItemTimeline PreviousTimeline = CharacterTimeline;
+	CharacterTimeline = NewTimeline;
+	bTimelineMirrorRequested = NewTimeline == EItemTimeline::Past;
+
+	MoveCarriedItemsToTimeline(NewTimeline);
+	ApplyTimelineCollision();
+	OnRep_TimelineMirrorRequested();
+	ClientApplyTimelineMirror(NewTimeline);
+	RefreshTimelineVisibilityForLocalPlayer();
+
+	if (PreviousTimeline != CharacterTimeline)
+	{
+		OnCharacterTimelineChanged.Broadcast(PreviousTimeline, CharacterTimeline);
+	}
+
+	UE_LOG(LogTemp, Log,
+		TEXT("[TimelineSwitch] Character=%s %s -> %s CarriedItems=%d Mirrored=%s"),
+		*GetNameSafe(this),
+		*StaticEnum<EItemTimeline>()->GetNameStringByValue(static_cast<int64>(PreviousTimeline)),
+		*StaticEnum<EItemTimeline>()->GetNameStringByValue(static_cast<int64>(CharacterTimeline)),
+		InventoryComponent ? InventoryComponent->Items.Num() : 0,
+		bTimelineMirrorRequested ? TEXT("true") : TEXT("false"));
+
+	ForceNetUpdate();
+}
+
+void AHronoCharacter::MoveCarriedItemsToTimeline(EItemTimeline NewTimeline)
+{
+	if (!HasAuthority() || !InventoryComponent)
+	{
+		return;
+	}
+
+	for (ABase_Item* Item : InventoryComponent->Items)
+	{
+		if (IsValid(Item))
+		{
+			Item->SetItemTimeline(NewTimeline);
+		}
+	}
+
+	InventoryComponent->UpdateItemVisibility();
+}
+
+void AHronoCharacter::RefreshTimelineVisibilityForLocalPlayer()
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	APlayerController* LocalPlayerController = World->GetFirstPlayerController();
+	AHronoCharacter* LocalViewer = LocalPlayerController
+		? Cast<AHronoCharacter>(LocalPlayerController->GetPawn())
+		: nullptr;
+	if (!LocalViewer || !LocalViewer->IsLocallyControlled())
+	{
+		return;
+	}
+
+	const EItemTimeline ViewerTimeline = LocalViewer->CharacterTimeline;
+	auto& HiddenComponentVisibility = LocalViewer->TimelineHiddenPrimitiveVisibility;
+	auto& HiddenCharacters = LocalViewer->TimelineHiddenCharacters;
+
+	for (auto ComponentIt = HiddenComponentVisibility.CreateIterator(); ComponentIt; ++ComponentIt)
+	{
+		if (!ComponentIt.Key().IsValid())
+		{
+			ComponentIt.RemoveCurrent();
+		}
+	}
+	for (auto CharacterIt = HiddenCharacters.CreateIterator(); CharacterIt; ++CharacterIt)
+	{
+		if (!CharacterIt->IsValid())
+		{
+			CharacterIt.RemoveCurrent();
+		}
+	}
+
+	for (TActorIterator<ABase_Item> It(World); It; ++It)
+	{
+		if (ABase_Item* TimelineActor = *It)
+		{
+			TimelineActor->UpdateVisibilityForLocalPlayer(ViewerTimeline);
+		}
+	}
+
+	for (TActorIterator<AHronoCharacter> It(World); It; ++It)
+	{
+		AHronoCharacter* OtherCharacter = *It;
+		if (!IsValid(OtherCharacter))
+		{
+			continue;
+		}
+
+		// The first-person arms remain owner-only. The inherited Character mesh is
+		// the network/world representation and must never be OnlyOwnerSee.
+		if (USkeletalMeshComponent* WorldCharacterMesh = OtherCharacter->GetMesh())
+		{
+			WorldCharacterMesh->SetOnlyOwnerSee(false);
+			WorldCharacterMesh->SetOwnerNoSee(true);
+		}
+		if (USkeletalMeshComponent* ArmsMesh = OtherCharacter->GetFirstPersonMesh())
+		{
+			ArmsMesh->SetOnlyOwnerSee(true);
+			ArmsMesh->SetOwnerNoSee(false);
+		}
+
+		// Never modify the local player's authored component visibility. OwnerNoSee
+		// already prevents the local world mesh from overlapping the first-person arms.
+		if (OtherCharacter == LocalViewer)
+		{
+			continue;
+		}
+
+		const EItemTimeline OtherTimeline = OtherCharacter->CharacterTimeline;
+		const bool bSameTimeline = ViewerTimeline == EItemTimeline::Both
+			|| OtherTimeline == EItemTimeline::Both
+			|| ViewerTimeline == OtherTimeline;
+		const TWeakObjectPtr<AHronoCharacter> OtherKey(OtherCharacter);
+
+		TInlineComponentArray<UPrimitiveComponent*> RenderComponents(OtherCharacter);
+		if (!bSameTimeline)
+		{
+			const bool bWasAlreadyHidden = HiddenCharacters.Contains(OtherKey);
+			for (UPrimitiveComponent* RenderComponent : RenderComponents)
+			{
+				if (!IsValid(RenderComponent))
+				{
+					continue;
+				}
+
+				const TWeakObjectPtr<UPrimitiveComponent> ComponentKey(RenderComponent);
+				if (!HiddenComponentVisibility.Contains(ComponentKey))
+				{
+					HiddenComponentVisibility.Add(ComponentKey, RenderComponent->IsVisible());
+				}
+				RenderComponent->SetVisibility(false, false);
+			}
+			HiddenCharacters.Add(OtherKey);
+
+			if (!bWasAlreadyHidden)
+			{
+				UE_LOG(LogTemp, Log,
+					TEXT("[TimelinePlayerVisibility] Viewer=%s(%s) hides Player=%s(%s)"),
+					*GetNameSafe(LocalViewer),
+					*StaticEnum<EItemTimeline>()->GetNameStringByValue(static_cast<int64>(ViewerTimeline)),
+					*GetNameSafe(OtherCharacter),
+					*StaticEnum<EItemTimeline>()->GetNameStringByValue(static_cast<int64>(OtherTimeline)));
+			}
+			continue;
+		}
+
+		if (HiddenCharacters.Remove(OtherKey) > 0)
+		{
+			for (auto ComponentIt = HiddenComponentVisibility.CreateIterator(); ComponentIt; ++ComponentIt)
+			{
+				UPrimitiveComponent* RenderComponent = ComponentIt.Key().Get();
+				if (!RenderComponent)
+				{
+					ComponentIt.RemoveCurrent();
+					continue;
+				}
+
+				if (RenderComponent->GetOwner() == OtherCharacter)
+				{
+					RenderComponent->SetVisibility(ComponentIt.Value(), false);
+					ComponentIt.RemoveCurrent();
+				}
+			}
+
+			UE_LOG(LogTemp, Log,
+				TEXT("[TimelinePlayerVisibility] Viewer=%s(%s) shows Player=%s(%s)"),
+				*GetNameSafe(LocalViewer),
+				*StaticEnum<EItemTimeline>()->GetNameStringByValue(static_cast<int64>(ViewerTimeline)),
+				*GetNameSafe(OtherCharacter),
+				*StaticEnum<EItemTimeline>()->GetNameStringByValue(static_cast<int64>(OtherTimeline)));
+		}
+	}
+}
+
+bool AHronoCharacter::EnsureMirrorPostProcessInstance()
+{
+	if (MirrorPostProcessInstance)
+	{
+		return true;
+	}
+
+	if (!IsLocallyControlled() || !FirstPersonCameraComponent)
+	{
+		return false;
+	}
+
+	if (!MirrorPostProcessMaterial)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("[MirrorView] %s has no MirrorPostProcessMaterial. Assign M_PP_MirrorPast in the character Blueprint."),
+			*GetNameSafe(this));
+		return false;
+	}
+
+	MirrorPostProcessInstance = UMaterialInstanceDynamic::Create(
+		MirrorPostProcessMaterial,
+		this,
+		TEXT("MirrorPostProcessInstance"));
+
+	if (!MirrorPostProcessInstance)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[MirrorView] Failed to create a dynamic material instance for %s"),
+			*GetNameSafe(this));
+		return false;
+	}
+
+	// Avoid applying the base material and its dynamic instance as two passes.
+	// Two horizontal mirror passes would cancel one another.
+	FirstPersonCameraComponent->RemoveBlendable(MirrorPostProcessMaterial);
+	FirstPersonCameraComponent->AddOrUpdateBlendable(MirrorPostProcessInstance, 1.0f);
+	return true;
+}
+
+void AHronoCharacter::SetMirroredViewEnabled(bool bEnabled)
+{
+	SetMirrorAmount(bEnabled ? 1.0f : 0.0f);
+}
+
+void AHronoCharacter::SetMirrorAmount(float NewMirrorAmount)
+{
+	MirrorAmount = FMath::Clamp(NewMirrorAmount, 0.0f, 1.0f);
+	bMirrorViewActive = false;
+
+	if (!IsLocallyControlled())
+	{
+		return;
+	}
+
+	if (!EnsureMirrorPostProcessInstance())
+	{
+		return;
+	}
+
+	MirrorPostProcessInstance->SetScalarParameterValue(MirrorParameterName, MirrorAmount);
+	bMirrorViewActive = MirrorAmount >= 0.5f;
+
+	UE_LOG(LogTemp, Log, TEXT("[MirrorView] Character=%s Amount=%.2f InputScale=%.0f"),
+		*GetNameSafe(this),
+		MirrorAmount,
+		GetMirroredHorizontalInputScale());
+}
+
+void AHronoCharacter::ApplyMirrorFromCharacterTimeline()
+{
+	SetMirroredViewEnabled(CharacterTimeline == EItemTimeline::Past);
+}
+
+float AHronoCharacter::GetMirroredHorizontalInputScale() const
+{
+	return IsMirroredViewEnabled() ? -1.0f : 1.0f;
 }
 
 
@@ -261,11 +642,24 @@ void AHronoCharacter::BeginPlay()
 	}
 
 	ApplyTimelineCollision();
-	//RefreshTimelineVisibilityForLocalPlayer();
+	// Past always renders as the mirror world, including the initial spawn.
+	bTimelineMirrorRequested = CharacterTimeline == EItemTimeline::Past;
+	OnRep_TimelineMirrorRequested();
+	RefreshTimelineVisibilityForLocalPlayer();
 
 	// DEBUG: Print timeline
 	const char* TimelineStr = (CharacterTimeline == EItemTimeline::Future) ? "FUTURE" : "PAST";
 	UE_LOG(LogTemp, Warning, TEXT("Character Timeline: %s"), ANSI_TO_TCHAR(TimelineStr));
+}
+
+void AHronoCharacter::PawnClientRestart()
+{
+	Super::PawnClientRestart();
+
+	// Possession can become local after BeginPlay. Reapply the local-only camera
+	// material here so an initially Past client is always mirrored.
+	ApplyMirrorFromCharacterTimeline();
+	RefreshTimelineVisibilityForLocalPlayer();
 }
 
 void AHronoCharacter::Tick(float DeltaTime)
@@ -408,12 +802,37 @@ void AHronoCharacter::DoInteract()
 		return;
 	}
 
+	UE_LOG(LogTemp, Warning,
+		TEXT("[InteractionDebug] E PRESSED Player=%s Authority=%d Timeline=%s CurrentItem=%s"),
+		*GetName(), HasAuthority(),
+		*StaticEnum<EItemTimeline>()->GetNameStringByValue(static_cast<int64>(CharacterTimeline)),
+		*GetNameSafe(GetCurrentInventoryItem()));
+
 	FHitResult HitResult = PerformInteractTrace(false);
 
 	if (HitResult.bBlockingHit)
 	{
+		const FString HitDebug = FString::Printf(
+			TEXT("E HIT: %s | Component: %s | Interface: %s"),
+			*GetNameSafe(HitResult.GetActor()),
+			*GetNameSafe(HitResult.GetComponent()),
+			HitResult.GetActor() && HitResult.GetActor()->Implements<UEnviroment_Interface>()
+				? TEXT("YES") : TEXT("NO"));
+		UE_LOG(LogTemp, Warning, TEXT("[InteractionDebug] %s"), *HitDebug);
+		if (GEngine)
+		{
+			GEngine->AddOnScreenDebugMessage(-1, 3.0f, FColor::Cyan, HitDebug);
+		}
 		UGameplayStatics::PlaySoundAtLocation(this, InteractSound, GetActorLocation());
 		HandleInteraction(HitResult);
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[InteractionDebug] E TRACE MISSED Player=%s"), *GetName());
+		if (GEngine)
+		{
+			GEngine->AddOnScreenDebugMessage(-1, 3.0f, FColor::Red, TEXT("E TRACE MISSED"));
+		}
 	}
 }
 
@@ -719,6 +1138,37 @@ void AHronoCharacter::DropCurrentItem()
 	InventoryComponent->RemoveItem(ItemToDrop);
 }
 
+ABase_Item* AHronoCharacter::GetCurrentInventoryItem() const
+{
+	return InventoryComponent ? InventoryComponent->GetCurrentItem() : nullptr;
+}
+
+bool AHronoCharacter::ReleaseInventoryItemForPlacement(ABase_Item* Item)
+{
+	if (!HasAuthority() || !InventoryComponent || !IsValid(Item))
+	{
+		return false;
+	}
+
+	if (!InventoryComponent->Items.Contains(Item) || Item->OwningCharacter != this)
+	{
+		return false;
+	}
+
+	// Drop first so Base_Item clears attachment, ownership and held-state effects.
+	// The rune will immediately disable physics and move itself into its slot.
+	Item->Drop();
+	InventoryComponent->RemoveItem(Item);
+
+	if (CurrentHeldItem == Item)
+	{
+		CurrentHeldItem = nullptr;
+	}
+
+	ForceNetUpdate();
+	return true;
+}
+
 void AHronoCharacter::Server_SetShelfPosition_Implementation(ADrag_Item* Shelf, const FVector& NewPosition)
 {
 	if (!Shelf) return;
@@ -738,7 +1188,12 @@ void AHronoCharacter::OnEnyInteractTrace(FHitResult HitResult)
 {
 	if (AActor* HitActor = HitResult.GetActor())
 	{
-		if (HitActor->Implements<UEnviroment_Interface>())
+		const bool bImplementsInterface = HitActor->Implements<UEnviroment_Interface>();
+		UE_LOG(LogTemp, Warning,
+			TEXT("[InteractionDebug] TRACE CALLBACK Player=%s Actor=%s Component=%s Interface=%d Authority=%d"),
+			*GetName(), *GetNameSafe(HitActor), *GetNameSafe(HitResult.GetComponent()),
+			bImplementsInterface, HasAuthority());
+		if (bImplementsInterface)
 		{
 			if (HasAuthority())
 			{
@@ -808,6 +1263,11 @@ void AHronoCharacter::OnMakeInteractImpulse(FHitResult HitResult)
 }
 void AHronoCharacter::Server_InteractWithEnvironment_Implementation(AActor* InteractableActor)
 {
+	UE_LOG(LogTemp, Warning,
+		TEXT("[InteractionDebug] SERVER RPC Player=%s Actor=%s Valid=%d Interface=%d Distance=%.1f"),
+		*GetName(), *GetNameSafe(InteractableActor), IsValid(InteractableActor),
+		InteractableActor && InteractableActor->Implements<UEnviroment_Interface>(),
+		InteractableActor ? FVector::Distance(GetActorLocation(), InteractableActor->GetActorLocation()) : -1.0f);
 	// The server verifies the actor is valid and implements the interface, then interacts
 	if (InteractableActor && InteractableActor->Implements<UEnviroment_Interface>())
 	{
@@ -819,6 +1279,10 @@ void AHronoCharacter::MoveInput(const FInputActionValue& Value)
 {
 	// get the Vector2D move axis
 	FVector2D MovementVector = Value.Get<FVector2D>();
+	if (bCorrectMoveInputWhenMirrored && IsMirroredViewEnabled())
+	{
+		MovementVector.X *= -1.0f;
+	}
 
 	// pass the axis values to the move input
 	DoMove(MovementVector.X, MovementVector.Y);
@@ -859,6 +1323,10 @@ void AHronoCharacter::LookInput(const FInputActionValue& Value)
 {
 	// get the Vector2D look axis
 	FVector2D LookAxisVector = Value.Get<FVector2D>();
+	if (bCorrectLookInputWhenMirrored && IsMirroredViewEnabled())
+	{
+		LookAxisVector.X *= -1.0f;
+	}
 
 	// pass the axis values to the aim input
 	DoAim(LookAxisVector.X, LookAxisVector.Y);

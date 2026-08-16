@@ -37,6 +37,7 @@ enum class EItemType : uint8
 	Chair,
 	Dozimetr,
 	Clock,
-	TableRitual
+	TableRitual,
+	Rune
 };
 

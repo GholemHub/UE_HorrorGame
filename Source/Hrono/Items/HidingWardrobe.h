@@ -6,6 +6,7 @@
 #include "HidingWardrobe.generated.h"
 
 class AHronoCharacter;
+class UBoxComponent;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FWardrobePlayerEvent, AHronoCharacter*, Player);
 
@@ -52,6 +53,11 @@ public:
 	/** Safe position used when the player leaves the wardrobe. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Wardrobe|Hiding")
 	TObjectPtr<USceneComponent> ExitPoint;
+
+	/** Overlap volume inside the wardrobe. A character is safe only while inside
+	 *  this box and while both doors are fully closed. Resize it in the Blueprint. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Wardrobe|Safety")
+	TObjectPtr<UBoxComponent> SafetyVolume;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Wardrobe|Hiding")
 	bool bAllowHiding = true;
@@ -110,6 +116,22 @@ protected:
 	UFUNCTION()
 	void OnRep_HiddenPlayer(AHronoCharacter* PreviousPlayer);
 
+	UFUNCTION()
+	void HandleSafetyVolumeBeginOverlap(
+		UPrimitiveComponent* OverlappedComponent,
+		AActor* OtherActor,
+		UPrimitiveComponent* OtherComponent,
+		int32 OtherBodyIndex,
+		bool bFromSweep,
+		const FHitResult& SweepResult);
+
+	UFUNCTION()
+	void HandleSafetyVolumeEndOverlap(
+		UPrimitiveComponent* OverlappedComponent,
+		AActor* OtherActor,
+		UPrimitiveComponent* OtherComponent,
+		int32 OtherBodyIndex);
+
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastStartRightDoorAnimation(FRotator TargetRotation, float Duration);
 
@@ -117,10 +139,17 @@ private:
 	void UpdateRightDoorAnimation(float DeltaTime);
 	void ApplyHidingState(AHronoCharacter* Player, bool bEntering);
 	void ConfigureRightDoorCollision();
+	void RefreshWardrobeSafety();
+	void ClearWardrobeSafety();
 
 	bool bRightDoorAnimationActive = false;
 	float RightDoorAnimationElapsed = 0.0f;
 	float ActiveRightDoorAnimationDuration = 1.0f;
 	FRotator RightDoorAnimationStartRotation = FRotator::ZeroRotator;
 	FRotator RightDoorAnimationTargetRotation = FRotator::ZeroRotator;
+	TSet<TWeakObjectPtr<AHronoCharacter>> CharactersInsideSafetyVolume;
+	bool bHiddenPlayerActorCollisionWasEnabled = true;
+	ECollisionEnabled::Type HiddenPlayerCapsuleCollisionBeforeHiding = ECollisionEnabled::QueryAndPhysics;
+	ECollisionResponse HiddenPlayerDoorPastResponseBeforeHiding = ECR_Block;
+	ECollisionResponse HiddenPlayerDoorFutureResponseBeforeHiding = ECR_Block;
 };
