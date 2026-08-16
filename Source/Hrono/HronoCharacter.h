@@ -22,6 +22,7 @@ class AChair;
 class USoundBase;
 class UMaterialInterface;
 class UMaterialInstanceDynamic;
+class UPrimitiveComponent;
 struct FInputActionValue;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
@@ -29,6 +30,10 @@ DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FUpdateSprintMeterDelegate, float, Percentage);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSprintStateChangedDelegate, bool, bSprinting);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FHidingSafetyChangedDelegate, bool, bIsSafe);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
+	FCharacterTimelineChangedDelegate,
+	EItemTimeline, PreviousTimeline,
+	EItemTimeline, NewTimeline);
 
 
 
@@ -142,6 +147,27 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, ReplicatedUsing = OnRep_CharacterTimeline, Category = "Timeline")
 	EItemTimeline CharacterTimeline = EItemTimeline::Past;
 
+	/** Fired after this character completes a replicated timeline change. */
+	UPROPERTY(BlueprintAssignable, Category = "Timeline")
+	FCharacterTimelineChangedDelegate OnCharacterTimelineChanged;
+
+	/** Toggles Past <-> Future. Client calls are safely routed to the server. */
+	UFUNCTION(BlueprintCallable, Category = "Timeline", meta = (DisplayName = "Switch Player Timeline"))
+	void SwitchPlayerTimeline();
+
+	/** Moves the player and every carried inventory item to a specific timeline. */
+	UFUNCTION(BlueprintCallable, Category = "Timeline", meta = (DisplayName = "Set Player Timeline"))
+	void SetPlayerTimeline(EItemTimeline NewTimeline);
+
+	/** Immediately refreshes local visibility for every Base_Item timeline actor. */
+	UFUNCTION(BlueprintCallable, Category = "Timeline")
+	void RefreshTimelineVisibilityForLocalPlayer();
+
+	/** Prevents a multicast death event from toggling the same player twice in one frame. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Timeline",
+		meta = (ClampMin = "0.0", Units = "s"))
+	float TimelineSwitchDuplicateGuardSeconds = 0.25f;
+
 	// =========================================================
 	// MIRRORED PAST VIEW
 	// =========================================================
@@ -183,7 +209,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Timeline|Mirror", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	void SetMirrorAmount(float NewMirrorAmount);
 
-	/** Optional manual Blueprint helper: applies Past=1 and Future=0 when explicitly called. */
+	/** Optional manual helper. Automatic use happens only during an explicit timeline switch. */
 	UFUNCTION(BlueprintCallable, Category = "Timeline|Mirror")
 	void ApplyMirrorFromCharacterTimeline();
 
@@ -196,6 +222,15 @@ public:
 	/** Horizontal scale for screen-relative interactions: -1 while mirrored, otherwise +1. */
 	UFUNCTION(BlueprintPure, Category = "Timeline|Mirror|Input")
 	float GetMirroredHorizontalInputScale() const;
+
+	/** Returns the item currently selected and visible in this character's inventory. */
+	UFUNCTION(BlueprintPure, Category = "Items")
+	class ABase_Item* GetCurrentInventoryItem() const;
+
+	/** Removes a specific held item from this inventory without destroying it.
+	 *  Intended for item sockets such as pentagram rune slots. Server only. */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Items")
+	bool ReleaseInventoryItemForPlacement(class ABase_Item* Item);
 
 	/** True only while the character overlaps a HidingWardrobe safety volume and
 	 *  every wardrobe door is fully closed. Replicated and readable in Blueprints. */
@@ -283,13 +318,36 @@ protected:
 	float InteractTraceDistance = 300.0f;
 
 	UFUNCTION()
-	void OnRep_CharacterTimeline();
+	void OnRep_CharacterTimeline(EItemTimeline PreviousTimeline);
+
+	UFUNCTION()
+	void OnRep_TimelineMirrorRequested();
+
+	UFUNCTION(Server, Reliable)
+	void ServerSetPlayerTimeline(EItemTimeline NewTimeline);
+
+	/** Guaranteed owning-client presentation update; replicated properties remain the source of truth. */
+	UFUNCTION(Client, Reliable)
+	void ClientApplyTimelineMirror(EItemTimeline NewTimeline);
 
 	void ApplyTimelineCollision();
+	void ApplyPlayerTimelineOnAuthority(EItemTimeline NewTimeline);
+	void MoveCarriedItemsToTimeline(EItemTimeline NewTimeline);
 	bool EnsureMirrorPostProcessInstance();
+
+	/** Replicated mirror state kept in sync with CharacterTimeline: Past=true, Future=false. */
+	UPROPERTY(ReplicatedUsing = OnRep_TimelineMirrorRequested)
+	bool bTimelineMirrorRequested = false;
+
+	double LastTimelineSwitchServerTime = -1.0;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UMaterialInstanceDynamic> MirrorPostProcessInstance;
+
+	/** Local-only visibility layer for remote player render components. It stores
+	 *  their authored/gameplay visibility while a timeline mismatch hides them. */
+	TMap<TWeakObjectPtr<UPrimitiveComponent>, bool> TimelineHiddenPrimitiveVisibility;
+	TSet<TWeakObjectPtr<AHronoCharacter>> TimelineHiddenCharacters;
 	
 
 	UPROPERTY(EditAnywhere, Category = "Sprint", meta = (ClampMin = 0, ClampMax = 1, Units = "s"))
@@ -324,6 +382,7 @@ protected:
 	virtual void SetupPlayerInputComponent(UInputComponent* InputComponent) override;
 
 	virtual void BeginPlay() override;
+	virtual void PawnClientRestart() override;
 	virtual void Tick(float DeltaTime) override;
 
 	UFUNCTION(BlueprintCallable, Category = "Items")
