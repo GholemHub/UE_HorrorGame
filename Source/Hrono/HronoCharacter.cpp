@@ -11,6 +11,7 @@
 #include "EnhancedInputComponent.h"
 #include "InputActionValue.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "GameFramework/PrimitiveComponentUtilities.h"
 #include "Hrono.h"
 #include "Net/UnrealNetwork.h"
 #include "Components/Drag_Component.h"
@@ -96,6 +97,13 @@ AHronoCharacter::AHronoCharacter()
 	InteractionPoint = CreateDefaultSubobject<USceneComponent>(TEXT("InteractionPoint"));
 	InteractionPoint->SetupAttachment(GetFirstPersonCameraComponent());
 
+	// The authored Future point remains the base pose. Past gets a separate child
+	// point so its offset can be tuned in HE_CharacterHrono1 without duplicating
+	// the existing camera-relative setup.
+	PastInteractionPoint = CreateDefaultSubobject<USceneComponent>(TEXT("PastInteractionPoint"));
+	PastInteractionPoint->SetupAttachment(InteractionPoint);
+	PastInteractionPoint->SetRelativeLocation(FVector(10.0f, -20.0f, -8.0f));
+
 	InventoryComponent = CreateDefaultSubobject<UInventoryComponent>(TEXT("InventoryComponent"));
 
 	SpotLight = CreateDefaultSubobject<USpotLightComponent>(TEXT("SpotLight1"));
@@ -107,6 +115,9 @@ AHronoCharacter::AHronoCharacter()
 	SpotLight->AttenuationRadius = 1050.0f;
 	SpotLight->InnerConeAngle = 18.7f;
 	SpotLight->OuterConeAngle = 45.24f;
+	// Keep the local flashlight in the main view, but exclude its direct-light
+	// contribution from Hardware Lumen / ray-traced mirror reflections.
+	SpotLight->SetAffectReflection(false);
 
 
 	GetCharacterMovement()->NavAgentProps.bCanCrouch = true;
@@ -115,6 +126,7 @@ AHronoCharacter::AHronoCharacter()
 
 void AHronoCharacter::OnRep_CharacterTimeline(EItemTimeline PreviousTimeline)
 {
+	RefreshHeldItemsInteractionPoint();
 	ApplyTimelineCollision();
 	ApplyMirrorFromCharacterTimeline();
 	RefreshTimelineVisibilityForLocalPlayer();
@@ -123,6 +135,16 @@ void AHronoCharacter::OnRep_CharacterTimeline(EItemTimeline PreviousTimeline)
 	{
 		OnCharacterTimelineChanged.Broadcast(PreviousTimeline, CharacterTimeline);
 	}
+}
+
+USceneComponent* AHronoCharacter::GetActiveInteractionPoint() const
+{
+	if (CharacterTimeline == EItemTimeline::Past && IsValid(PastInteractionPoint))
+	{
+		return PastInteractionPoint;
+	}
+
+	return InteractionPoint;
 }
 
 void AHronoCharacter::OnRep_TimelineMirrorRequested()
@@ -192,6 +214,7 @@ void AHronoCharacter::ApplyPlayerTimelineOnAuthority(EItemTimeline NewTimeline)
 		// A duplicate client/server death notification may request the target that
 		// was already applied. Reinforce presentation without changing state again.
 		bTimelineMirrorRequested = CharacterTimeline == EItemTimeline::Past;
+		RefreshHeldItemsInteractionPoint();
 		OnRep_TimelineMirrorRequested();
 		ClientApplyTimelineMirror(CharacterTimeline);
 		UE_LOG(LogTemp, Log,
@@ -219,6 +242,7 @@ void AHronoCharacter::ApplyPlayerTimelineOnAuthority(EItemTimeline NewTimeline)
 	bTimelineMirrorRequested = NewTimeline == EItemTimeline::Past;
 
 	MoveCarriedItemsToTimeline(NewTimeline);
+	RefreshHeldItemsInteractionPoint();
 	ApplyTimelineCollision();
 	OnRep_TimelineMirrorRequested();
 	ClientApplyTimelineMirror(NewTimeline);
@@ -258,6 +282,22 @@ void AHronoCharacter::MoveCarriedItemsToTimeline(EItemTimeline NewTimeline)
 	InventoryComponent->UpdateItemVisibility();
 }
 
+void AHronoCharacter::RefreshHeldItemsInteractionPoint()
+{
+	if (!InventoryComponent)
+	{
+		return;
+	}
+
+	for (ABase_Item* Item : InventoryComponent->Items)
+	{
+		if (IsValid(Item) && Item->OwningCharacter == this)
+		{
+			Item->RefreshHeldAttachmentPoint();
+		}
+	}
+}
+
 void AHronoCharacter::RefreshTimelineVisibilityForLocalPlayer()
 {
 	UWorld* World = GetWorld();
@@ -276,14 +316,14 @@ void AHronoCharacter::RefreshTimelineVisibilityForLocalPlayer()
 	}
 
 	const EItemTimeline ViewerTimeline = LocalViewer->CharacterTimeline;
-	auto& HiddenComponentVisibility = LocalViewer->TimelineHiddenPrimitiveVisibility;
+	auto& PrimitiveOwnerNoSeeStates = LocalViewer->TimelinePrimitiveOwnerNoSeeStates;
 	auto& HiddenCharacters = LocalViewer->TimelineHiddenCharacters;
 
-	for (auto ComponentIt = HiddenComponentVisibility.CreateIterator(); ComponentIt; ++ComponentIt)
+	for (auto StateIt = PrimitiveOwnerNoSeeStates.CreateIterator(); StateIt; ++StateIt)
 	{
-		if (!ComponentIt.Key().IsValid())
+		if (!StateIt.Key().IsValid())
 		{
-			ComponentIt.RemoveCurrent();
+			StateIt.RemoveCurrent();
 		}
 	}
 	for (auto CharacterIt = HiddenCharacters.CreateIterator(); CharacterIt; ++CharacterIt)
@@ -323,10 +363,19 @@ void AHronoCharacter::RefreshTimelineVisibilityForLocalPlayer()
 			ArmsMesh->SetOwnerNoSee(false);
 		}
 
-		// Never modify the local player's authored component visibility. OwnerNoSee
-		// already prevents the local world mesh from overlapping the first-person arms.
+		TInlineComponentArray<UPrimitiveComponent*> RenderComponents(OtherCharacter);
+
+		// OwnerNoSee removes the local body from the raster camera. Explicitly
+		// removing it from ray tracing also removes the local Lumen reflection.
 		if (OtherCharacter == LocalViewer)
 		{
+			for (UPrimitiveComponent* RenderComponent : RenderComponents)
+			{
+				if (IsValid(RenderComponent))
+				{
+					RenderComponent->SetVisibleInRayTracing(false);
+				}
+			}
 			continue;
 		}
 
@@ -336,7 +385,6 @@ void AHronoCharacter::RefreshTimelineVisibilityForLocalPlayer()
 			|| ViewerTimeline == OtherTimeline;
 		const TWeakObjectPtr<AHronoCharacter> OtherKey(OtherCharacter);
 
-		TInlineComponentArray<UPrimitiveComponent*> RenderComponents(OtherCharacter);
 		if (!bSameTimeline)
 		{
 			const bool bWasAlreadyHidden = HiddenCharacters.Contains(OtherKey);
@@ -347,12 +395,25 @@ void AHronoCharacter::RefreshTimelineVisibilityForLocalPlayer()
 					continue;
 				}
 
-				const TWeakObjectPtr<UPrimitiveComponent> ComponentKey(RenderComponent);
-				if (!HiddenComponentVisibility.Contains(ComponentKey))
+				// First-person arms are never the remote world representation.
+				if (RenderComponent == OtherCharacter->GetFirstPersonMesh())
 				{
-					HiddenComponentVisibility.Add(ComponentKey, RenderComponent->IsVisible());
+					RenderComponent->SetVisibleInRayTracing(false);
+					continue;
 				}
-				RenderComponent->SetVisibility(false, false);
+
+				const TWeakObjectPtr<UPrimitiveComponent> ComponentKey(RenderComponent);
+				if (!PrimitiveOwnerNoSeeStates.Contains(ComponentKey))
+				{
+					PrimitiveOwnerNoSeeStates.Add(ComponentKey, RenderComponent->bOwnerNoSee);
+				}
+
+				// Additional visibility ownership makes OwnerNoSee local to this
+				// viewer. UE 5.8 still keeps the primitive in the hardware RT scene,
+				// so it remains visible in the roughness-0 Lumen mirror.
+				RenderComponent->SetOwnerNoSee(true);
+				UPrimitiveComponentUtilities::AddVisibilityOwner(RenderComponent, LocalViewer);
+				RenderComponent->SetVisibleInRayTracing(true);
 			}
 			HiddenCharacters.Add(OtherKey);
 
@@ -368,24 +429,29 @@ void AHronoCharacter::RefreshTimelineVisibilityForLocalPlayer()
 			continue;
 		}
 
-		if (HiddenCharacters.Remove(OtherKey) > 0)
+		const bool bWasHidden = HiddenCharacters.Remove(OtherKey) > 0;
+		for (UPrimitiveComponent* RenderComponent : RenderComponents)
 		{
-			for (auto ComponentIt = HiddenComponentVisibility.CreateIterator(); ComponentIt; ++ComponentIt)
+			if (!IsValid(RenderComponent))
 			{
-				UPrimitiveComponent* RenderComponent = ComponentIt.Key().Get();
-				if (!RenderComponent)
-				{
-					ComponentIt.RemoveCurrent();
-					continue;
-				}
-
-				if (RenderComponent->GetOwner() == OtherCharacter)
-				{
-					RenderComponent->SetVisibility(ComponentIt.Value(), false);
-					ComponentIt.RemoveCurrent();
-				}
+				continue;
 			}
 
+			UPrimitiveComponentUtilities::RemoveVisibilityOwner(RenderComponent, LocalViewer);
+			const TWeakObjectPtr<UPrimitiveComponent> ComponentKey(RenderComponent);
+			if (const bool* PreviousOwnerNoSee = PrimitiveOwnerNoSeeStates.Find(ComponentKey))
+			{
+				RenderComponent->SetOwnerNoSee(*PreviousOwnerNoSee);
+				PrimitiveOwnerNoSeeStates.Remove(ComponentKey);
+			}
+
+			// A same-timeline player may be visible directly, but must not appear
+			// in the Lumen mirror.
+			RenderComponent->SetVisibleInRayTracing(false);
+		}
+
+		if (bWasHidden)
+		{
 			UE_LOG(LogTemp, Log,
 				TEXT("[TimelinePlayerVisibility] Viewer=%s(%s) shows Player=%s(%s)"),
 				*GetNameSafe(LocalViewer),
@@ -642,6 +708,7 @@ void AHronoCharacter::BeginPlay()
 	}
 
 	ApplyTimelineCollision();
+	RefreshHeldItemsInteractionPoint();
 	// Past always renders as the mirror world, including the initial spawn.
 	bTimelineMirrorRequested = CharacterTimeline == EItemTimeline::Past;
 	OnRep_TimelineMirrorRequested();
@@ -659,6 +726,7 @@ void AHronoCharacter::PawnClientRestart()
 	// Possession can become local after BeginPlay. Reapply the local-only camera
 	// material here so an initially Past client is always mirrored.
 	ApplyMirrorFromCharacterTimeline();
+	RefreshHeldItemsInteractionPoint();
 	RefreshTimelineVisibilityForLocalPlayer();
 }
 

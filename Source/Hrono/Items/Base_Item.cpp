@@ -171,13 +171,35 @@ bool ABase_Item::AttachToCharacter()
 		}
 	}
 
+	if (!RefreshHeldAttachmentPoint())
+	{
+		return false;
+	}
+
+	bIsPickedUp = true;
+	OnHeldStateChanged(true, Player);
+	return true;
+}
+
+bool ABase_Item::RefreshHeldAttachmentPoint()
+{
+	AHronoCharacter* Player = Cast<AHronoCharacter>(OwningCharacter);
+	USceneComponent* TargetPoint = Player ? Player->GetActiveInteractionPoint() : nullptr;
+	if (!IsValid(Player) || !IsValid(TargetPoint))
+	{
+		UE_LOG(LogTemp, Error,
+			TEXT("[Item] Failed to resolve held attachment point for %s (Owner=%s)"),
+			*GetName(), *GetNameSafe(OwningCharacter));
+		return false;
+	}
+
 	const bool bAttached = AttachToComponent(
-		Player->InteractionPoint,
-		FAttachmentTransformRules::SnapToTargetNotIncludingScale
-	);
+		TargetPoint,
+		FAttachmentTransformRules::SnapToTargetNotIncludingScale);
 	if (!bAttached)
 	{
-		UE_LOG(LogTemp, Error, TEXT("[Item] Failed to attach %s to %s"), *GetName(), *GetNameSafe(Player->InteractionPoint));
+		UE_LOG(LogTemp, Error,
+			TEXT("[Item] Failed to attach %s to %s"), *GetName(), *GetNameSafe(TargetPoint));
 		return false;
 	}
 
@@ -190,9 +212,8 @@ bool ABase_Item::AttachToCharacter()
 			HoldOffset.GetRotation().Rotator());
 	}
 
-	bIsPickedUp = true;
-	OnHeldStateChanged(true, Player);
-	UE_LOG(LogTemp, Warning, TEXT("[Item] Attached %s to %s"), *GetName(), *GetNameSafe(Player->InteractionPoint));
+	UE_LOG(LogTemp, Log,
+		TEXT("[Item] Attached %s to timeline point %s"), *GetName(), *GetNameSafe(TargetPoint));
 	return true;
 }
 #include "Items/Dozimetr.h"

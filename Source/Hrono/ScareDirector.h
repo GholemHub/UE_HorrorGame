@@ -6,6 +6,8 @@
 #include "ScareDirector.generated.h"
 
 class AScareDirector;
+class ABase_Item;
+class USceneComponent;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FGhostThreatStateChangedSignature, EGhostThreatState, OldState, EGhostThreatState, NewState);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FGhostHuntStateChangedSignature, EGhostHuntState, OldState, EGhostHuntState, NewState);
@@ -279,6 +281,26 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hunt|Lights")
 	bool bTurnOffAllLightsOnThreatStateChange = true;
 
+	/** Babaj spawned when aggression first enters the final HuntEligible stage. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hunt|Babaj")
+	TSubclassOf<AActor> BabajClass;
+
+	/**
+	 * Optional exact set of placed BP_ItemPointSpawn actors. When empty, the Director
+	 * automatically finds every actor of BabajSpawnPointClass in the current level.
+	 */
+	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category = "Hunt|Babaj")
+	TArray<TObjectPtr<ABase_Item>> BabajSpawnPoints;
+
+	/** Spawn-point Blueprint class used by automatic discovery when BabajSpawnPoints is empty. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hunt|Babaj")
+	TSubclassOf<ABase_Item> BabajSpawnPointClass;
+
+	/** Babaj is destroyed automatically after this time. Runtime is always capped at 40 seconds. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hunt|Babaj",
+		meta = (ClampMin = "0.1", ClampMax = "40.0", Units = "s"))
+	float BabajLifetime = 40.0f;
+
 	/** Optional paranormal room/origin. Falls back to the Demon, then this Director. */
 	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category = "Hunt|AI")
 	TObjectPtr<AActor> HuntOriginActor;
@@ -366,6 +388,8 @@ private:
 	void DispatchHuntStateChanged(EGhostHuntState OldState, EGhostHuntState NewState);
 	void AnimateAllDoorsForThreatState(bool bOpen, const FString& Reason);
 	void TurnOffAllLightsForThreatState(EGhostThreatState NewState);
+	void SpawnBabajForFinalAggression();
+	USceneComponent* ResolveBabajSpawnComponent(const ABase_Item* SpawnPoint) const;
 	void StartDebugScreenTimer();
 	void HandleDebugScreenTimer();
 	void PrintHuntDebugMessage(const FString& Message, const FLinearColor& Color, float Duration = 5.0f, bool bAlsoLog = true) const;
@@ -416,6 +440,7 @@ private:
 	FString LastHuntStateChangeReason = TEXT("No hunt transition yet");
 	TWeakObjectPtr<AActor> TargetedPlayer;
 	TWeakObjectPtr<AActor> DebugTestPlayer;
+	TWeakObjectPtr<AActor> ActiveBabaj;
 	TArray<EGhostHuntOmen> SelectedHuntOmens;
 
 	struct FDebugTuningBackup
