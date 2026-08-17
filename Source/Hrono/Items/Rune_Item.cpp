@@ -247,11 +247,11 @@ void ARune_Item::CheckForCompletedRitual(int32 RequiredRuneCount)
 	}
 
 	bRitualCompleted = true;
-	RitualTargetPlayer->SetPlayerTimeline(TimelineToRestore);
 	ForceNetUpdate();
 	BroadcastRitualCompleted();
 
-	UE_LOG(LogTemp, Warning, TEXT("[RuneRitual] COMPLETE Player=%s restored to %s"),
+	UE_LOG(LogTemp, Warning, TEXT("[RuneRitual] GROUP COMPLETE TargetMetadata=%s OriginalTimeline=%s. "
+		"RunePentagram will transfer the player who inserted the third rune."),
 		*GetNameSafe(RitualTargetPlayer),
 		*StaticEnum<EItemTimeline>()->GetNameStringByValue(static_cast<int64>(TimelineToRestore)));
 }
