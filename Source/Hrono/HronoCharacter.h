@@ -116,6 +116,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<USceneComponent> InteractionPoint;
 
+	/** Alternate held-item attachment used while this character is in the Past timeline. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components|Interaction")
+	TObjectPtr<USceneComponent> PastInteractionPoint;
+
+	/** Returns the held-item attachment point selected by CharacterTimeline. */
+	UFUNCTION(BlueprintPure, Category = "Interaction|Timeline")
+	USceneComponent* GetActiveInteractionPoint() const;
+
 	// =========================================================
 	// AUDIO (placeholder sounds — assign any sound in Blueprint)
 	// =========================================================
@@ -333,6 +341,7 @@ protected:
 	void ApplyTimelineCollision();
 	void ApplyPlayerTimelineOnAuthority(EItemTimeline NewTimeline);
 	void MoveCarriedItemsToTimeline(EItemTimeline NewTimeline);
+	void RefreshHeldItemsInteractionPoint();
 	bool EnsureMirrorPostProcessInstance();
 
 	/** Replicated mirror state kept in sync with CharacterTimeline: Past=true, Future=false. */
@@ -344,9 +353,10 @@ protected:
 	UPROPERTY(Transient)
 	TObjectPtr<UMaterialInstanceDynamic> MirrorPostProcessInstance;
 
-	/** Local-only visibility layer for remote player render components. It stores
-	 *  their authored/gameplay visibility while a timeline mismatch hides them. */
-	TMap<TWeakObjectPtr<UPrimitiveComponent>, bool> TimelineHiddenPrimitiveVisibility;
+	/** Authored OwnerNoSee values temporarily overridden for the local raster view. */
+	TMap<TWeakObjectPtr<UPrimitiveComponent>, bool> TimelinePrimitiveOwnerNoSeeStates;
+
+	/** Local-only set used to avoid repeated timeline visibility log messages. */
 	TSet<TWeakObjectPtr<AHronoCharacter>> TimelineHiddenCharacters;
 	
 

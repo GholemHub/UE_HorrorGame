@@ -88,6 +88,9 @@ public:
 
 	bool AttachToCharacter();
 
+	/** Reattaches an already held item to its owner's timeline-specific interaction point. */
+	bool RefreshHeldAttachmentPoint();
+
 	/**
 	 * Called after this item has been attached to a character's hand, and again
 	 * when it is dropped. Use this to enable expensive item-only effects while held.

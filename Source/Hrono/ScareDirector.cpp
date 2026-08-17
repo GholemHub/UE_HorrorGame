@@ -3,6 +3,7 @@
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "Components/SceneComponent.h"
 #include "Components/Drag_Component.h"
 #include "Enviroment/Light_Env.h"
 #include "Enviroment/Switcher_Env.h"
@@ -10,10 +11,12 @@
 #include "GameFramework/Pawn.h"
 #include "HronoCharacter.h"
 #include "Interface/GhostHuntAIInterface.h"
+#include "Items/Base_Item.h"
 #include "Items/Drag_Item.h"
 #include "Kismet/KismetSystemLibrary.h"
 #include "Net/UnrealNetwork.h"
 #include "TimerManager.h"
+#include "UObject/ConstructorHelpers.h"
 
 #if !UE_BUILD_SHIPPING
 #include "HAL/IConsoleManager.h"
@@ -47,6 +50,20 @@ AScareDirector::AScareDirector()
 		EGhostHuntOmen::MirrorAnomaly,
 		EGhostHuntOmen::GhostManifestation
 	};
+
+	static ConstructorHelpers::FClassFinder<AActor> BabajClassFinder(
+		TEXT("/Game/_Alex/AI/BP_Babaj"));
+	if (BabajClassFinder.Succeeded())
+	{
+		BabajClass = BabajClassFinder.Class;
+	}
+
+	static ConstructorHelpers::FClassFinder<ABase_Item> BabajSpawnPointClassFinder(
+		TEXT("/Game/_Alex/Room/BP_ItemPointSpawn"));
+	if (BabajSpawnPointClassFinder.Succeeded())
+	{
+		BabajSpawnPointClass = BabajSpawnPointClassFinder.Class;
+	}
 }
 
 void AScareDirector::BeginPlay()
@@ -534,17 +551,132 @@ void AScareDirector::DispatchThreatStateChanged(EGhostThreatState OldState, EGho
 		TurnOffAllLightsForThreatState(NewState);
 	}
 
-	if (HasAuthority() && bAnimateDoorsOnThreatStateChanges)
+	if (HasAuthority())
 	{
-		if (NewState == EGhostThreatState::Manifesting)
+		if (NewState == EGhostThreatState::HuntEligible)
+		{
+			SpawnBabajForFinalAggression();
+		}
+
+		if (bAnimateDoorsOnThreatStateChanges && NewState == EGhostThreatState::Manifesting)
 		{
 			AnimateAllDoorsForThreatState(false, TEXT("Aggression entered Manifesting"));
 		}
-		else if (NewState == EGhostThreatState::HuntEligible)
+		else if (bAnimateDoorsOnThreatStateChanges && NewState == EGhostThreatState::HuntEligible)
 		{
 			AnimateAllDoorsForThreatState(true, TEXT("Aggression entered HuntEligible"));
 		}
 	}
+}
+
+void AScareDirector::SpawnBabajForFinalAggression()
+{
+	if (!HasAuthority() || !GetWorld())
+	{
+		return;
+	}
+
+	if (ActiveBabaj.IsValid())
+	{
+		UE_LOG(LogGhostHuntDirector, Verbose,
+			TEXT("[%s] Babaj %s is already active; duplicate final-aggression spawn skipped."),
+			*GetName(), *ActiveBabaj->GetName());
+		return;
+	}
+
+	if (!BabajClass)
+	{
+		UE_LOG(LogGhostHuntDirector, Error,
+			TEXT("[%s] BabajClass is not configured."), *GetName());
+		return;
+	}
+
+	TArray<ABase_Item*> ValidSpawnPoints;
+	if (!BabajSpawnPoints.IsEmpty())
+	{
+		for (ABase_Item* SpawnPoint : BabajSpawnPoints)
+		{
+			if (IsValid(SpawnPoint))
+			{
+				ValidSpawnPoints.AddUnique(SpawnPoint);
+			}
+		}
+	}
+	else if (BabajSpawnPointClass)
+	{
+		for (TActorIterator<ABase_Item> It(GetWorld(), BabajSpawnPointClass); It; ++It)
+		{
+			if (IsValid(*It))
+			{
+				ValidSpawnPoints.Add(*It);
+			}
+		}
+	}
+
+	if (ValidSpawnPoints.IsEmpty())
+	{
+		UE_LOG(LogGhostHuntDirector, Error,
+			TEXT("[%s] Cannot spawn BP_Babaj: no valid BP_ItemPointSpawn actors were configured or found."),
+			*GetName());
+		return;
+	}
+
+	ABase_Item* SpawnPoint = ValidSpawnPoints[FMath::RandRange(0, ValidSpawnPoints.Num() - 1)];
+	USceneComponent* SpawnComponent = ResolveBabajSpawnComponent(SpawnPoint);
+	const FTransform SpawnTransform = SpawnComponent
+		? SpawnComponent->GetComponentTransform()
+		: SpawnPoint->GetActorTransform();
+
+	FActorSpawnParameters SpawnParameters;
+	SpawnParameters.Owner = this;
+	SpawnParameters.SpawnCollisionHandlingOverride =
+		ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
+
+	AActor* SpawnedBabaj = GetWorld()->SpawnActor<AActor>(
+		BabajClass,
+		SpawnTransform,
+		SpawnParameters);
+
+	if (!IsValid(SpawnedBabaj))
+	{
+		UE_LOG(LogGhostHuntDirector, Error,
+			TEXT("[%s] Failed to spawn BP_Babaj at %s."), *GetName(), *SpawnPoint->GetName());
+		return;
+	}
+
+	const float Lifetime = FMath::Clamp(BabajLifetime, 0.1f, 40.0f);
+	SpawnedBabaj->SetLifeSpan(Lifetime);
+	ActiveBabaj = SpawnedBabaj;
+
+	UE_LOG(LogGhostHuntDirector, Log,
+		TEXT("[%s] Spawned %s at %s for %.1f seconds (final aggression stage)."),
+		*GetName(), *SpawnedBabaj->GetName(), *SpawnPoint->GetName(), Lifetime);
+}
+
+USceneComponent* AScareDirector::ResolveBabajSpawnComponent(const ABase_Item* SpawnPoint) const
+{
+	if (!IsValid(SpawnPoint))
+	{
+		return nullptr;
+	}
+
+	TArray<USceneComponent*> SceneComponents;
+	SpawnPoint->GetComponents(SceneComponents);
+	for (USceneComponent* SceneComponent : SceneComponents)
+	{
+		if (!IsValid(SceneComponent))
+		{
+			continue;
+		}
+
+		const FName ComponentName = SceneComponent->GetFName();
+		if (ComponentName == TEXT("PointSetComponent") || ComponentName == TEXT("PointSet"))
+		{
+			return SceneComponent;
+		}
+	}
+
+	return SpawnPoint->GetRootComponent();
 }
 
 void AScareDirector::TurnOffAllLightsForThreatState(EGhostThreatState NewState)
