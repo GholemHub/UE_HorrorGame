@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "HronoSharedTools.h"
 #include "Interface/Enviroment_Interface.h"
 #include "RunePentagram.generated.h"
 
@@ -85,6 +86,16 @@ public:
 		Category = "Pentagram|Runtime")
 	bool bPentagramCompleted = false;
 
+	/** Character whose interaction successfully inserted the third rune. */
+	UPROPERTY(ReplicatedUsing = OnRep_CompletingPlayer, VisibleInstanceOnly, BlueprintReadOnly,
+		Category = "Pentagram|Runtime")
+	TObjectPtr<AHronoCharacter> CompletingPlayer;
+
+	/** Timeline assigned to CompletingPlayer after the third rune was inserted. */
+	UPROPERTY(ReplicatedUsing = OnRep_CompletingPlayer, VisibleInstanceOnly, BlueprintReadOnly,
+		Category = "Pentagram|Runtime")
+	EItemTimeline CompletingPlayerNewTimeline = EItemTimeline::Both;
+
 	/** Continuously displays setup, slot progress, collision and last interaction in PIE. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Pentagram|Debug")
 	bool bShowDebugStatusOnScreen = true;
@@ -99,6 +110,15 @@ public:
 	/** Fired exactly once on the server and on every client when all three slots are filled. */
 	UPROPERTY(BlueprintAssignable, Category = "Pentagram|Events")
 	FPentagramCompletedDelegate OnPentagramCompleted;
+
+	/**
+	 * Automatic Blueprint event invoked once after all three correct runes are inserted.
+	 * It is intentionally not BlueprintCallable: Blueprint receives this event but
+	 * cannot manually trigger it. The only parameter is the last placing player.
+	 */
+	UFUNCTION(BlueprintImplementableEvent, Category = "Pentagram|Events",
+		meta = (DisplayName = "On All Three Runes Inserted"))
+	void BP_OnAllThreeRunesInserted(AHronoCharacter* PlayerWhoPlacedLastRune);
 
 	/** Blueprint event equivalent of OnPentagramCompleted. */
 	UFUNCTION(BlueprintImplementableEvent, Category = "Pentagram|Events",
@@ -140,13 +160,19 @@ protected:
 	UFUNCTION()
 	void OnRep_PentagramCompleted();
 
+	UFUNCTION()
+	void OnRep_CompletingPlayer();
+
 private:
 	bool TryInsertCurrentRune(AHronoCharacter* Character);
-	bool TryPlaceRuneInMatchingSlot(ARune_Item* Rune);
+	bool TryPlaceRuneInMatchingSlot(ARune_Item* Rune, AHronoCharacter* PlacingCharacter);
 	bool HasValidRequiredRuneSetup() const;
-	void CheckPentagramCompletion();
+	void CheckPentagramCompletion(AHronoCharacter* PlayerWhoPlacedRune);
 	void BroadcastPentagramCompleted();
+	void DeliverThirdRuneEvents();
 	void RefreshReplicatedRuneAttachments();
 	void ConfigureInteractionCollision(UPrimitiveComponent* Component) const;
 	void SetLastInteractionDebug(const FString& NewStatus, bool bSuccess);
+
+	bool bThirdRuneEventsDelivered = false;
 };

@@ -150,6 +150,8 @@ void ARunePentagram::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLi
 	DOREPLIFETIME(ARunePentagram, PlacedRuneTwo);
 	DOREPLIFETIME(ARunePentagram, PlacedRuneThree);
 	DOREPLIFETIME(ARunePentagram, bPentagramCompleted);
+	DOREPLIFETIME(ARunePentagram, CompletingPlayer);
+	DOREPLIFETIME(ARunePentagram, CompletingPlayerNewTimeline);
 }
 
 void ARunePentagram::Interact_Implementation(AActor* Interactor)
@@ -217,12 +219,14 @@ bool ARunePentagram::TryInsertCurrentRune(AHronoCharacter* Character)
 		return false;
 	}
 
-	return TryPlaceRuneInMatchingSlot(Rune);
+	return TryPlaceRuneInMatchingSlot(Rune, Character);
 }
 
-bool ARunePentagram::TryPlaceRuneInMatchingSlot(ARune_Item* Rune)
+bool ARunePentagram::TryPlaceRuneInMatchingSlot(
+	ARune_Item* Rune,
+	AHronoCharacter* PlacingCharacter)
 {
-	if (!IsValid(Rune))
+	if (!IsValid(Rune) || !IsValid(PlacingCharacter))
 	{
 		return false;
 	}
@@ -293,7 +297,7 @@ bool ARunePentagram::TryPlaceRuneInMatchingSlot(ARune_Item* Rune)
 
 	MulticastRuneInteractionResult(
 		true, Rune, TargetSlotId, RunePentagramNames::Accepted);
-	CheckPentagramCompletion();
+	CheckPentagramCompletion(PlacingCharacter);
 	return true;
 }
 
@@ -314,20 +318,40 @@ int32 ARunePentagram::GetPlacedRuneCount() const
 		(IsValid(PlacedRuneThree) ? 1 : 0);
 }
 
-void ARunePentagram::CheckPentagramCompletion()
+void ARunePentagram::CheckPentagramCompletion(AHronoCharacter* PlayerWhoPlacedRune)
 {
 	if (!HasAuthority() || bPentagramCompleted || GetPlacedRuneCount() != 3)
 	{
 		return;
 	}
+	if (!IsValid(PlayerWhoPlacedRune))
+	{
+		UE_LOG(LogTemp, Error,
+			TEXT("[RunePentagram] Cannot complete %s: third-rune player is invalid"),
+			*GetName());
+		return;
+	}
+
+	CompletingPlayer = PlayerWhoPlacedRune;
+	const EItemTimeline PreviousTimeline = CompletingPlayer->GetTimeline();
+	const EItemTimeline RequestedTimeline = PreviousTimeline == EItemTimeline::Past
+		? EItemTimeline::Future
+		: EItemTimeline::Past;
+
+	// Use the character's server-authoritative API so mirroring, carried items,
+	// collision and same-timeline player visibility are updated together.
+	CompletingPlayer->SetPlayerTimeline(RequestedTimeline);
+	CompletingPlayerNewTimeline = CompletingPlayer->GetTimeline();
 
 	bPentagramCompleted = true;
 	ForceNetUpdate();
-	BroadcastPentagramCompleted();
+	DeliverThirdRuneEvents();
 
 	UE_LOG(LogTemp, Warning,
-		TEXT("[RunePentagram] COMPLETE Pentagram=%s All three correct runes are placed"),
-		*GetName());
+		TEXT("[RunePentagram] COMPLETE Pentagram=%s ThirdRunePlayer=%s Timeline=%s->%s"),
+		*GetName(), *GetNameSafe(CompletingPlayer),
+		*StaticEnum<EItemTimeline>()->GetNameStringByValue(static_cast<int64>(PreviousTimeline)),
+		*StaticEnum<EItemTimeline>()->GetNameStringByValue(static_cast<int64>(CompletingPlayerNewTimeline)));
 }
 
 void ARunePentagram::MulticastRuneInteractionResult_Implementation(
@@ -375,8 +399,29 @@ void ARunePentagram::OnRep_PentagramCompleted()
 {
 	if (bPentagramCompleted)
 	{
-		BroadcastPentagramCompleted();
+		DeliverThirdRuneEvents();
 	}
+}
+
+void ARunePentagram::OnRep_CompletingPlayer()
+{
+	if (bPentagramCompleted)
+	{
+		DeliverThirdRuneEvents();
+	}
+}
+
+void ARunePentagram::DeliverThirdRuneEvents()
+{
+	if (bThirdRuneEventsDelivered || !bPentagramCompleted || !IsValid(CompletingPlayer) ||
+		CompletingPlayerNewTimeline == EItemTimeline::Both)
+	{
+		return;
+	}
+
+	bThirdRuneEventsDelivered = true;
+	BP_OnAllThreeRunesInserted(CompletingPlayer);
+	BroadcastPentagramCompleted();
 }
 
 void ARunePentagram::BroadcastPentagramCompleted()
@@ -402,7 +447,7 @@ FString ARunePentagram::GetPentagramDebugStatus() const
 		RuneSlotThreeCollision && RuneSlotThreeCollision->GetCollisionEnabled() != ECollisionEnabled::NoCollision;
 
 	return FString::Printf(
-		TEXT("PENTAGRAM [%s] %s | Setup:%s Collision:%s\n1: %s\n2: %s\n3: %s\nLast: %s"),
+		TEXT("PENTAGRAM [%s] %s | Setup:%s Collision:%s\n1: %s\n2: %s\n3: %s\nCompleting Player: %s -> %s\nLast: %s"),
 		NetworkState,
 		bPentagramCompleted ? TEXT("COMPLETE") : TEXT("WAITING"),
 		HasValidRequiredRuneSetup() ? TEXT("OK") : TEXT("INVALID"),
@@ -410,6 +455,8 @@ FString ARunePentagram::GetPentagramDebugStatus() const
 		*SlotState(PlacedRuneOne, RequiredRuneIdOne),
 		*SlotState(PlacedRuneTwo, RequiredRuneIdTwo),
 		*SlotState(PlacedRuneThree, RequiredRuneIdThree),
+		*GetNameSafe(CompletingPlayer),
+		*StaticEnum<EItemTimeline>()->GetNameStringByValue(static_cast<int64>(CompletingPlayerNewTimeline)),
 		*LastInteractionDebug);
 }
 

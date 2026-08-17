@@ -17,15 +17,15 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_FourParams(
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(
 	FRuneRitualCompletedDelegate,
 	ARune_Item*, CompletingRune,
-	AHronoCharacter*, RestoredPlayer,
-	EItemTimeline, RestoredTimeline);
+	AHronoCharacter*, RitualTargetPlayer,
+	EItemTimeline, OriginalTimeline);
 
 /**
  * Pickable ritual rune used by BP_TableRitualManager.
  *
  * The server validates the rune ID and slot, locks an accepted rune into the
- * supplied world transform, and restores the killed player's original timeline
- * once the configured number of unique slots has been filled.
+ * supplied world transform. RunePentagram decides which player is transferred
+ * after all three unique slots have been filled.
  */
 UCLASS(Blueprintable)
 class HRONO_API ARune_Item : public ABase_Item
@@ -39,12 +39,12 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Replicated, Category = "Rune", meta = (ExposeOnSpawn = "true"))
 	FName RuneId = TEXT("Rune.None");
 
-	/** Player whose original timeline will be restored by this ritual. */
+	/** Optional death-ritual target metadata retained for Blueprint logic. */
 	UPROPERTY(ReplicatedUsing = OnRep_RitualTarget, VisibleInstanceOnly, BlueprintReadOnly,
 		Category = "Rune|Ritual")
 	TObjectPtr<AHronoCharacter> RitualTargetPlayer;
 
-	/** Timeline the target occupied before death. Set this before switching them on death. */
+	/** Timeline the optional target occupied before death. */
 	UPROPERTY(ReplicatedUsing = OnRep_RitualTarget, VisibleInstanceOnly, BlueprintReadOnly,
 		Category = "Rune|Ritual")
 	EItemTimeline TimelineToRestore = EItemTimeline::Past;
