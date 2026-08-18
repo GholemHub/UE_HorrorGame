@@ -30,6 +30,11 @@ DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FUpdateSprintMeterDelegate, float, Percentage);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSprintStateChangedDelegate, bool, bSprinting);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(
+	FStaminaChangedDelegate,
+	float, CurrentStamina,
+	float, MaxStamina,
+	float, Percentage);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FHidingSafetyChangedDelegate, bool, bIsSafe);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
 	FHidingWardrobeSafetyLostDelegate,
@@ -111,11 +116,37 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Dream")
 	bool bIsDreamCharacter = false;
 
-	/** Delegate called when the sprint meter should be updated */
+	/** Legacy percentage-only sprint meter event. */
+	UPROPERTY(BlueprintAssignable, Category = "Movement|Sprint")
 	FUpdateSprintMeterDelegate OnSprintMeterUpdated;
 
-	/** Delegate called when we start and stop sprinting */
+	/** Fired whenever authoritative sprinting starts or stops. */
+	UPROPERTY(BlueprintAssignable, Category = "Movement|Sprint")
 	FSprintStateChangedDelegate OnSprintStateChanged;
+
+	/** Fired whenever replicated stamina changes. Provides raw and normalized values. */
+	UPROPERTY(BlueprintAssignable, Category = "Movement|Sprint")
+	FStaminaChangedDelegate OnStaminaChanged;
+
+	UFUNCTION(BlueprintPure, Category = "Movement|Sprint")
+	float GetCurrentStamina() const { return CurrentStamina; }
+
+	UFUNCTION(BlueprintPure, Category = "Movement|Sprint")
+	float GetMaxStamina() const { return MaxStamina; }
+
+	UFUNCTION(BlueprintPure, Category = "Movement|Sprint")
+	float GetStaminaPercentage() const
+	{
+		return MaxStamina > KINDA_SMALL_NUMBER
+			? FMath::Clamp(CurrentStamina / MaxStamina, 0.0f, 1.0f)
+			: 0.0f;
+	}
+
+	UFUNCTION(BlueprintPure, Category = "Movement|Sprint")
+	bool IsSprinting() const { return bSprinting; }
+
+	UFUNCTION(BlueprintPure, Category = "Movement|Sprint")
+	bool IsRecoveringStamina() const { return bRecovering; }
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<USceneComponent> InteractionPoint;
@@ -270,18 +301,34 @@ protected:
 	UFUNCTION()
 	void OnRep_IsSafeInHidingWardrobe(bool bPreviousSafe);
 
-	UPROPERTY(ReplicatedUsing = OnRep_Sprinting)
-
+	UPROPERTY(ReplicatedUsing = OnRep_Sprinting, VisibleInstanceOnly, BlueprintReadOnly,
+		Category = "Movement|Sprint")
 	bool bSprinting = false;
+
 	UFUNCTION()
 	void OnRep_Sprinting();
 
 	UFUNCTION(Server, Reliable)
 	void ServerSetSprinting(bool bNewSprint);
-	/** If true, we're recovering stamina */
+
+	/** True after stamina is depleted and until StaminaRecoveryThreshold is reached. */
+	UPROPERTY(ReplicatedUsing = OnRep_StaminaRecovery, VisibleInstanceOnly, BlueprintReadOnly,
+		Category = "Movement|Sprint")
 	bool bRecovering = false;
 
-	UPROPERTY(EditAnywhere, Category = "Walk")
+	UFUNCTION()
+	void OnRep_StaminaRecovery();
+
+	/** Current server-authoritative stamina. */
+	UPROPERTY(ReplicatedUsing = OnRep_StaminaData, VisibleInstanceOnly, BlueprintReadOnly,
+		Category = "Movement|Sprint")
+	float CurrentStamina = 0.0f;
+
+	UFUNCTION()
+	void OnRep_StaminaData();
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement|Sprint|Speed",
+		meta = (ClampMin = "0.0", Units = "cm/s"))
 	float WalkSpeed = 250.0f;
 
 	/** Starts sprinting behavior */
@@ -292,8 +339,12 @@ protected:
 	UFUNCTION(BlueprintCallable, Category = "Input")
 	void DoEndSprint();
 
-	/** Called while sprinting at a fixed time interval */
-	void SprintFixedTick();
+	void UpdateStamina(float DeltaSeconds);
+	void SetCurrentStamina(float NewStamina);
+	void SetSprintingState(bool bNewSprint);
+	void SetStaminaRecoveryState(bool bNewRecovering);
+	void ApplySprintMovementSpeed();
+	void BroadcastStaminaChanged();
 
 	/** Called from Input Actions for movement input */
 	void MoveInput(const FInputActionValue& Value);
@@ -369,27 +420,48 @@ protected:
 	TSet<TWeakObjectPtr<AHronoCharacter>> TimelineHiddenCharacters;
 	
 
-	UPROPERTY(EditAnywhere, Category = "Sprint", meta = (ClampMin = 0, ClampMax = 1, Units = "s"))
-	float SprintFixedTickTime = 0.03333f;
+	/** Maximum stamina. CurrentStamina is initialized to this value by the server. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, ReplicatedUsing = OnRep_StaminaData,
+		Category = "Movement|Sprint|Stamina", meta = (ClampMin = "1.0"))
+	float MaxStamina = 100.0f;
 
-	/** Sprint stamina amount. Maxes at SprintTime */
-	float SprintMeter = 0.0f;
+	/** Stamina consumed per second while sprinting and actually moving. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement|Sprint|Stamina",
+		meta = (ClampMin = "0.0"))
+	float StaminaDrainRate = 20.0f;
 
-	/** How long we can sprint for, in seconds */
-	UPROPERTY(EditAnywhere, Category = "Sprint", meta = (ClampMin = 0, ClampMax = 10, Units = "s"))
-	float SprintTime = 3.0f;
+	/** Stamina restored per second when it is not being consumed. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement|Sprint|Stamina",
+		meta = (ClampMin = "0.0"))
+	float StaminaRegenerationRate = 15.0f;
+
+	/** Delay after the last stamina consumption before regeneration begins. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement|Sprint|Stamina",
+		meta = (ClampMin = "0.0", Units = "s"))
+	float StaminaRegenerationDelay = 1.0f;
+
+	/** Minimum stamina required when a new sprint input begins. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement|Sprint|Stamina",
+		meta = (ClampMin = "0.0"))
+	float MinimumStaminaToStartSprint = 10.0f;
+
+	/** After reaching zero, sprint remains locked until stamina reaches this value. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement|Sprint|Stamina",
+		meta = (ClampMin = "0.0"))
+	float StaminaRecoveryThreshold = 25.0f;
 
 	/** Walk speed while sprinting */
-	UPROPERTY(EditAnywhere, Category = "Sprint", meta = (ClampMin = 0, ClampMax = 10, Units = "cm/s"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement|Sprint|Speed",
+		meta = (ClampMin = "0.0", Units = "cm/s"))
 	float SprintSpeed = 600.0f;
 
 	/** Walk speed while recovering stamina */
-	UPROPERTY(EditAnywhere, Category = "Recovery", meta = (ClampMin = 0, ClampMax = 10, Units = "cm/s"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement|Sprint|Speed",
+		meta = (ClampMin = "0.0", Units = "cm/s"))
 	float RecoveringWalkSpeed = 150.0f;
 
-	/** Time it takes for the sprint meter to recover */
-	UPROPERTY(EditAnywhere, Category = "Recovery", meta = (ClampMin = 0, ClampMax = 10, Units = "s"))
-	float RecoveryTime = 0.0f;
+	/** Server-only countdown before stamina regeneration may resume. */
+	float StaminaRegenerationDelayRemaining = 0.0f;
 
 	/** Fire weapon input action */
 	UPROPERTY(EditAnywhere, Category = "Input")

@@ -34,6 +34,9 @@ void AHronoCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutL
 
 	DOREPLIFETIME(AHronoCharacter, CharacterTimeline);
 	DOREPLIFETIME(AHronoCharacter, bSprinting);
+	DOREPLIFETIME(AHronoCharacter, bRecovering);
+	DOREPLIFETIME(AHronoCharacter, CurrentStamina);
+	DOREPLIFETIME(AHronoCharacter, MaxStamina);
 	DOREPLIFETIME(AHronoCharacter, CurrentChair);
 	DOREPLIFETIME(AHronoCharacter, bIsSitting);
 	DOREPLIFETIME(AHronoCharacter, bIsSafeInHidingWardrobe);
@@ -67,6 +70,8 @@ void AHronoCharacter::OnRep_IsSafeInHidingWardrobe(bool bPreviousSafe)
 
 AHronoCharacter::AHronoCharacter()
 {
+	PrimaryActorTick.bCanEverTick = true;
+
 	// Set size for collision capsule
 	GetCapsuleComponent()->InitCapsuleSize(55.f, 96.0f);
 	
@@ -548,16 +553,7 @@ float AHronoCharacter::GetMirroredHorizontalInputScale() const
 
 void AHronoCharacter::ServerSetSprinting_Implementation(bool bNewSprint)
 {
-	bSprinting = bNewSprint;
-
-	if (bSprinting && !bRecovering)
-	{
-		GetCharacterMovement()->MaxWalkSpeed = SprintSpeed;
-	}
-	else
-	{
-		GetCharacterMovement()->MaxWalkSpeed = WalkSpeed;
-	}
+	SetSprintingState(bNewSprint);
 }
 
 void AHronoCharacter::ApplyTimelineCollision()
@@ -641,6 +637,7 @@ void AHronoCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 		// Sprinting
 		EnhancedInputComponent->BindAction(SprintAction, ETriggerEvent::Started, this, &AHronoCharacter::DoStartSprint);
 		EnhancedInputComponent->BindAction(SprintAction, ETriggerEvent::Completed, this, &AHronoCharacter::DoEndSprint);
+		EnhancedInputComponent->BindAction(SprintAction, ETriggerEvent::Canceled, this, &AHronoCharacter::DoEndSprint);
 
 		// Crouch
 		EnhancedInputComponent->BindAction(CrouchAction, ETriggerEvent::Started, this, &AHronoCharacter::DoCrouchStart);
@@ -695,6 +692,15 @@ void AHronoCharacter::BeginPlay()
 	// unless overridden by GameMode logic.
 	if (HasAuthority())
 	{
+		MaxStamina = FMath::Max(MaxStamina, 1.0f);
+		CurrentStamina = MaxStamina;
+		bSprinting = false;
+		bRecovering = false;
+		StaminaRegenerationDelayRemaining = 0.0f;
+		OnRep_StaminaData();
+		ApplySprintMovementSpeed();
+		ForceNetUpdate();
+
 		if (IsLocallyControlled())
 		{
 			CharacterTimeline = EItemTimeline::Future;
@@ -718,6 +724,7 @@ void AHronoCharacter::BeginPlay()
 	bTimelineMirrorRequested = CharacterTimeline == EItemTimeline::Past;
 	OnRep_TimelineMirrorRequested();
 	RefreshTimelineVisibilityForLocalPlayer();
+	ApplySprintMovementSpeed();
 
 	// DEBUG: Print timeline
 	const char* TimelineStr = (CharacterTimeline == EItemTimeline::Future) ? "FUTURE" : "PAST";
@@ -738,7 +745,11 @@ void AHronoCharacter::PawnClientRestart()
 void AHronoCharacter::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
-	
+
+	if (HasAuthority())
+	{
+		UpdateStamina(DeltaTime);
+	}
 }
 
 FHitResult AHronoCharacter::PerformInteractTrace(bool bIsDrag)
@@ -1464,61 +1475,192 @@ void AHronoCharacter::DoCrouchEnd()
 }
 void AHronoCharacter::OnRep_Sprinting()
 {
-	if (bSprinting && !bRecovering)
+	ApplySprintMovementSpeed();
+	OnSprintStateChanged.Broadcast(bSprinting);
+}
+
+void AHronoCharacter::OnRep_StaminaRecovery()
+{
+	ApplySprintMovementSpeed();
+}
+
+void AHronoCharacter::OnRep_StaminaData()
+{
+	MaxStamina = FMath::Max(MaxStamina, 1.0f);
+	CurrentStamina = FMath::Clamp(CurrentStamina, 0.0f, MaxStamina);
+	ApplySprintMovementSpeed();
+	BroadcastStaminaChanged();
+}
+
+void AHronoCharacter::DoStartSprint()
+{
+	if (!IsLocallyControlled())
 	{
-		GetCharacterMovement()->MaxWalkSpeed = SprintSpeed;
+		return;
+	}
+
+	if (HasAuthority())
+	{
+		SetSprintingState(true);
 	}
 	else
 	{
-		GetCharacterMovement()->MaxWalkSpeed = WalkSpeed;
+		ServerSetSprinting(true);
 	}
-}
-void AHronoCharacter::DoStartSprint()
-{
-	if (!IsLocallyControlled()) return;
-
-	bSprinting = true;
-	if (!bRecovering)
-	{
-		GetCharacterMovement()->MaxWalkSpeed = SprintSpeed;
-	}
-	ServerSetSprinting(true);
 }
 
 void AHronoCharacter::DoEndSprint()
 {
-	if (!IsLocallyControlled()) return;
+	if (!IsLocallyControlled())
+	{
+		return;
+	}
 
-	bSprinting = false;
-	GetCharacterMovement()->MaxWalkSpeed = WalkSpeed;
-	ServerSetSprinting(false);
+	if (HasAuthority())
+	{
+		SetSprintingState(false);
+	}
+	else
+	{
+		ServerSetSprinting(false);
+	}
 }
 
-
-void AHronoCharacter::SprintFixedTick()
+void AHronoCharacter::UpdateStamina(float DeltaSeconds)
 {
-	float Velocity = GetVelocity().Size();
-
-	UE_LOG(LogTemp, Verbose, TEXT("[SprintTick] bSprinting=%d bRecovering=%d Velocity=%.2f SprintMeter=%.2f"),
-		bSprinting, bRecovering, Velocity, SprintMeter);
-	if (bSprinting && !bRecovering && Velocity > WalkSpeed)
+	if (!HasAuthority() || DeltaSeconds <= 0.0f)
 	{
-		if (SprintMeter > 0.0f)
+		return;
+	}
+
+	MaxStamina = FMath::Max(MaxStamina, 1.0f);
+	if (CurrentStamina > MaxStamina)
+	{
+		SetCurrentStamina(MaxStamina);
+	}
+
+	const float HorizontalSpeed = GetVelocity().Size2D();
+	const bool bIsActuallyRunning = bSprinting
+		&& !bRecovering
+		&& HorizontalSpeed > WalkSpeed + 1.0f;
+
+	if (bIsActuallyRunning)
+	{
+		StaminaRegenerationDelayRemaining = FMath::Max(StaminaRegenerationDelay, 0.0f);
+		SetCurrentStamina(CurrentStamina - FMath::Max(StaminaDrainRate, 0.0f) * DeltaSeconds);
+
+		if (CurrentStamina <= KINDA_SMALL_NUMBER)
 		{
-			SprintMeter = FMath::Max(SprintMeter - SprintFixedTickTime, 0.0f);
-
-			UE_LOG(LogTemp, Warning, TEXT("[SprintTick] Drain stamina: %f"), SprintMeter);
-
-			if (SprintMeter <= 0.0f)
-			{
-				bRecovering = true;
-
-				GetCharacterMovement()->MaxWalkSpeed = RecoveringWalkSpeed;
-
-				UE_LOG(LogTemp, Error, TEXT("[SprintTick] OUT OF STAMINA -> RECOVERING MODE"));
-			}
+			SetCurrentStamina(0.0f);
+			SetStaminaRecoveryState(true);
+			SetSprintingState(false);
 		}
 	}
+	else
+	{
+		StaminaRegenerationDelayRemaining = FMath::Max(
+			StaminaRegenerationDelayRemaining - DeltaSeconds,
+			0.0f);
+
+		if (StaminaRegenerationDelayRemaining <= 0.0f && CurrentStamina < MaxStamina)
+		{
+			SetCurrentStamina(
+				CurrentStamina + FMath::Max(StaminaRegenerationRate, 0.0f) * DeltaSeconds);
+		}
+	}
+
+	const float RecoveryThreshold = FMath::Clamp(
+		StaminaRecoveryThreshold,
+		0.0f,
+		MaxStamina);
+	if (bRecovering && CurrentStamina >= RecoveryThreshold)
+	{
+		SetStaminaRecoveryState(false);
+	}
+}
+
+void AHronoCharacter::SetCurrentStamina(float NewStamina)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	const float ClampedStamina = FMath::Clamp(NewStamina, 0.0f, FMath::Max(MaxStamina, 1.0f));
+	if (FMath::IsNearlyEqual(CurrentStamina, ClampedStamina))
+	{
+		return;
+	}
+
+	CurrentStamina = ClampedStamina;
+	OnRep_StaminaData();
+}
+
+void AHronoCharacter::SetSprintingState(bool bNewSprint)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	const float RequiredStamina = FMath::Clamp(
+		MinimumStaminaToStartSprint,
+		0.0f,
+		FMath::Max(MaxStamina, 1.0f));
+	const bool bCanStartSprint = !bRecovering
+		&& CurrentStamina > KINDA_SMALL_NUMBER
+		&& CurrentStamina >= RequiredStamina;
+	const bool bAcceptedSprint = bNewSprint && bCanStartSprint;
+	if (bSprinting == bAcceptedSprint)
+	{
+		ApplySprintMovementSpeed();
+		return;
+	}
+
+	bSprinting = bAcceptedSprint;
+	OnRep_Sprinting();
+	ForceNetUpdate();
+}
+
+void AHronoCharacter::SetStaminaRecoveryState(bool bNewRecovering)
+{
+	if (!HasAuthority() || bRecovering == bNewRecovering)
+	{
+		return;
+	}
+
+	bRecovering = bNewRecovering;
+	OnRep_StaminaRecovery();
+	ForceNetUpdate();
+}
+
+void AHronoCharacter::ApplySprintMovementSpeed()
+{
+	UCharacterMovementComponent* Movement = GetCharacterMovement();
+	if (!Movement)
+	{
+		return;
+	}
+
+	if (bRecovering)
+	{
+		Movement->MaxWalkSpeed = RecoveringWalkSpeed;
+	}
+	else if (bSprinting && CurrentStamina > KINDA_SMALL_NUMBER)
+	{
+		Movement->MaxWalkSpeed = SprintSpeed;
+	}
+	else
+	{
+		Movement->MaxWalkSpeed = WalkSpeed;
+	}
+}
+
+void AHronoCharacter::BroadcastStaminaChanged()
+{
+	const float Percentage = GetStaminaPercentage();
+	OnSprintMeterUpdated.Broadcast(Percentage);
+	OnStaminaChanged.Broadcast(CurrentStamina, MaxStamina, Percentage);
 }
 
 void AHronoCharacter::Landed(const FHitResult& Hit)
