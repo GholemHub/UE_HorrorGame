@@ -55,9 +55,14 @@ public:
 	TObjectPtr<USceneComponent> ExitPoint;
 
 	/** Overlap volume inside the wardrobe. A character is safe only while inside
-	 *  this box and while both doors are fully closed. Resize it in the Blueprint. */
+	 *  this box and while both doors are below UnsafeDoorAngle. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Wardrobe|Safety")
 	TObjectPtr<UBoxComponent> SafetyVolume;
+
+	/** A player stops being safe as soon as either door reaches this angle. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Wardrobe|Safety",
+		meta = (ClampMin = "0.0", ClampMax = "170.0", Units = "deg"))
+	float UnsafeDoorAngle = 5.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Wardrobe|Hiding")
 	bool bAllowHiding = true;
@@ -138,6 +143,7 @@ protected:
 private:
 	void UpdateRightDoorAnimation(float DeltaTime);
 	void ApplyHidingState(AHronoCharacter* Player, bool bEntering);
+	bool AreDoorsClosedForSafety() const;
 	void ConfigureRightDoorCollision();
 	void RefreshWardrobeSafety();
 	void ClearWardrobeSafety();

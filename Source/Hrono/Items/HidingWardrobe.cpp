@@ -155,6 +155,14 @@ void AHidingWardrobe::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 	UpdateRightDoorAnimation(DeltaTime);
+
+	// Door transforms may be changed by dragging, native animation, or Blueprint.
+	// Check the live transforms every server tick while somebody is inside so safety
+	// cannot remain stale until an animation or interaction finishes.
+	if (HasAuthority() && CharactersInsideSafetyVolume.Num() > 0)
+	{
+		RefreshWardrobeSafety();
+	}
 }
 
 USceneComponent* AHidingWardrobe::GetPrimaryDoorMovementComponent() const
@@ -448,12 +456,13 @@ void AHidingWardrobe::HandleSafetyVolumeBeginOverlap(
 	}
 
 	CharactersInsideSafetyVolume.Add(Player);
-	Player->SetSafeInHidingWardrobe(bIsClosed);
+	const bool bDoorsSafe = AreDoorsClosedForSafety();
+	Player->SetSafeInHidingWardrobe(bDoorsSafe);
 	UE_LOG(LogTemp, Log,
-		TEXT("[WardrobeSafetyVolume] %s entered %s. DoorsClosed=%s"),
+		TEXT("[WardrobeSafetyVolume] %s entered %s. DoorsSafe=%s"),
 		*GetNameSafe(Player),
 		*GetNameSafe(this),
-		bIsClosed ? TEXT("true") : TEXT("false"));
+		bDoorsSafe ? TEXT("true") : TEXT("false"));
 }
 
 void AHidingWardrobe::HandleSafetyVolumeEndOverlap(
@@ -488,6 +497,8 @@ void AHidingWardrobe::RefreshWardrobeSafety()
 		return;
 	}
 
+	const bool bDoorsSafe = AreDoorsClosedForSafety();
+
 	for (auto Iterator = CharactersInsideSafetyVolume.CreateIterator(); Iterator; ++Iterator)
 	{
 		AHronoCharacter* Player = Iterator->Get();
@@ -504,8 +515,24 @@ void AHidingWardrobe::RefreshWardrobeSafety()
 			continue;
 		}
 
-		Player->SetSafeInHidingWardrobe(bIsClosed);
+		Player->SetSafeInHidingWardrobe(bDoorsSafe);
 	}
+}
+
+bool AHidingWardrobe::AreDoorsClosedForSafety() const
+{
+	const float LeftDoorYaw = LeftDoorPivot
+		? LeftDoorPivot->GetRelativeRotation().Yaw
+		: DoorRotation.Yaw;
+	const float RightDoorYaw = RightDoorPivot
+		? RightDoorPivot->GetRelativeRotation().Yaw
+		: RightDoorRotation.Yaw;
+	const float LeftDoorAngle = FMath::Abs(FMath::UnwindDegrees(LeftDoorYaw));
+	const float RightDoorAngle = FMath::Abs(FMath::UnwindDegrees(RightDoorYaw));
+
+	// Reaching the threshold is already unsafe: with the default value, 5 degrees
+	// is unsafe while anything strictly below 5 degrees remains protected.
+	return LeftDoorAngle < UnsafeDoorAngle && RightDoorAngle < UnsafeDoorAngle;
 }
 
 void AHidingWardrobe::ClearWardrobeSafety()
@@ -610,7 +637,7 @@ void AHidingWardrobe::ApplyHidingState(AHronoCharacter* Player, bool bEntering)
 		&& SafetyVolume->IsOverlappingComponent(Capsule))
 	{
 		CharactersInsideSafetyVolume.Add(Player);
-		Player->SetSafeInHidingWardrobe(bIsClosed);
+		Player->SetSafeInHidingWardrobe(AreDoorsClosedForSafety());
 	}
 	RefreshWardrobeSafety();
 }
