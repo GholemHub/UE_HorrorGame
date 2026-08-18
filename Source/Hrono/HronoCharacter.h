@@ -23,6 +23,7 @@ class USoundBase;
 class UMaterialInterface;
 class UMaterialInstanceDynamic;
 class UPrimitiveComponent;
+class AHronoCharacter;
 struct FInputActionValue;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
@@ -30,6 +31,9 @@ DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FUpdateSprintMeterDelegate, float, Percentage);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FSprintStateChangedDelegate, bool, bSprinting);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FHidingSafetyChangedDelegate, bool, bIsSafe);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
+	FHidingWardrobeSafetyLostDelegate,
+	AHronoCharacter*, ExposedPlayer);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
 	FCharacterTimelineChangedDelegate,
 	EItemTimeline, PreviousTimeline,
@@ -241,7 +245,7 @@ public:
 	bool ReleaseInventoryItemForPlacement(class ABase_Item* Item);
 
 	/** True only while the character overlaps a HidingWardrobe safety volume and
-	 *  every wardrobe door is fully closed. Replicated and readable in Blueprints. */
+	 *  both wardrobe doors are below that wardrobe's unsafe angle. */
 	UPROPERTY(ReplicatedUsing = OnRep_IsSafeInHidingWardrobe, VisibleInstanceOnly,
 		BlueprintReadOnly, Category = "Hiding|Safety")
 	bool bIsSafeInHidingWardrobe = false;
@@ -249,6 +253,11 @@ public:
 	/** Fired on the server and clients whenever wardrobe safety changes. */
 	UPROPERTY(BlueprintAssignable, Category = "Hiding|Safety")
 	FHidingSafetyChangedDelegate OnHidingSafetyChanged;
+
+	/** Fired once whenever this character transitions from wardrobe-safe to exposed.
+	 *  Bind to this on the server to re-check hazards already overlapping the player. */
+	UPROPERTY(BlueprintAssignable, Category = "Hiding|Safety")
+	FHidingWardrobeSafetyLostDelegate OnHidingWardrobeSafetyLost;
 
 	UFUNCTION(BlueprintPure, Category = "Hiding|Safety")
 	bool IsSafeInHidingWardrobe() const { return bIsSafeInHidingWardrobe; }
@@ -259,7 +268,7 @@ public:
 
 protected:
 	UFUNCTION()
-	void OnRep_IsSafeInHidingWardrobe();
+	void OnRep_IsSafeInHidingWardrobe(bool bPreviousSafe);
 
 	UPROPERTY(ReplicatedUsing = OnRep_Sprinting)
 

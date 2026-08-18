@@ -47,17 +47,22 @@ void AHronoCharacter::SetSafeInHidingWardrobe(bool bNewSafe)
 		return;
 	}
 
+	const bool bPreviousSafe = bIsSafeInHidingWardrobe;
 	bIsSafeInHidingWardrobe = bNewSafe;
 	UE_LOG(LogTemp, Log, TEXT("[WardrobeSafety] Character=%s Safe=%s"),
 		*GetNameSafe(this),
 		bIsSafeInHidingWardrobe ? TEXT("true") : TEXT("false"));
-	OnRep_IsSafeInHidingWardrobe();
+	OnRep_IsSafeInHidingWardrobe(bPreviousSafe);
 	ForceNetUpdate();
 }
 
-void AHronoCharacter::OnRep_IsSafeInHidingWardrobe()
+void AHronoCharacter::OnRep_IsSafeInHidingWardrobe(bool bPreviousSafe)
 {
 	OnHidingSafetyChanged.Broadcast(bIsSafeInHidingWardrobe);
+	if (bPreviousSafe && !bIsSafeInHidingWardrobe)
+	{
+		OnHidingWardrobeSafetyLost.Broadcast(this);
+	}
 }
 
 AHronoCharacter::AHronoCharacter()
