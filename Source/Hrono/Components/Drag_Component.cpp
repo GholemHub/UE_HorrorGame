@@ -109,7 +109,7 @@ void UDrag_Component::TickComponent(float DeltaTime, ELevelTick TickType, FActor
 	
 }
 
-void UDrag_Component::StartDrag(APlayerController* PC)
+void UDrag_Component::StartDrag(APlayerController* PC, FVector WorldGrabPoint)
 {
 	if (!PC) return;
 
@@ -119,6 +119,21 @@ void UDrag_Component::StartDrag(APlayerController* PC)
 	ActiveViewRelativeYawDirection = DoorMouseInputDirection;
 	bHasActiveViewRelativeYawDirection = false;
 	bPlayerBehindDoor = false;
+	bHasGrabPoint = false;
+	GrabDistance = 0.0f;
+
+	USceneComponent* MovementComponent = GetTargetMovementComponent();
+	FVector ViewLocation = FVector::ZeroVector;
+	FRotator ViewRotation = FRotator::ZeroRotator;
+	PC->GetPlayerViewPoint(ViewLocation, ViewRotation);
+
+	if (IsValid(MovementComponent) && !WorldGrabPoint.ContainsNaN())
+	{
+		GrabPointLocal = MovementComponent->GetComponentTransform()
+			.InverseTransformPosition(WorldGrabPoint);
+		GrabDistance = FVector::Distance(ViewLocation, WorldGrabPoint);
+		bHasGrabPoint = GrabDistance > KINDA_SMALL_NUMBER;
+	}
 
 	float PlayerFrontDot = 0.0f;
 	if (bUseWardrobeFrontBackInput)
@@ -200,6 +215,7 @@ void UDrag_Component::StopDrag()
 {
 	bIsRotating = false;
 	RotatingController = nullptr;
+	bHasGrabPoint = false;
 
 	// Stop the looping movement sound on the owning door/shelf actor.
 	if (ADrag_Item* Drag_Item = Cast<ADrag_Item>(GetOwner()))
@@ -210,8 +226,200 @@ void UDrag_Component::StopDrag()
 	//UE_LOG(LogTemp, Log, TEXT("Drag stopped"));
 }
 
+bool UDrag_Component::UpdateGrabTarget(FVector& OutTargetPoint)
+{
+	if (!IsValid(RotatingController) || !bHasGrabPoint)
+	{
+		return false;
+	}
+
+	FVector ViewLocation = FVector::ZeroVector;
+	FRotator ViewRotation = FRotator::ZeroRotator;
+	RotatingController->GetPlayerViewPoint(ViewLocation, ViewRotation);
+
+	float MouseX = 0.0f;
+	float MouseY = 0.0f;
+	RotatingController->GetInputMouseDelta(MouseX, MouseY);
+	static_cast<void>(MouseX);
+
+	GrabDistance = FMath::Clamp(
+		GrabDistance - MouseY * VerticalGrabPullSpeed,
+		FMath::Min(MinimumGrabDistance, MaximumGrabDistance),
+		FMath::Max(MinimumGrabDistance, MaximumGrabDistance));
+	OutTargetPoint = ViewLocation + ViewRotation.Vector() * GrabDistance;
+	return !OutTargetPoint.ContainsNaN();
+}
+
+bool UDrag_Component::CalculateLinearGrabLocation(
+	USceneComponent* MovementComponent,
+	const FVector& ClosedLocation,
+	const FVector& LocalSlideAxis,
+	float MaximumDistance,
+	FVector& OutRelativeLocation)
+{
+	if (!IsValid(MovementComponent) || !bHasGrabPoint)
+	{
+		return false;
+	}
+
+	const FVector SlideAxis = LocalSlideAxis.GetSafeNormal();
+	if (SlideAxis.IsNearlyZero())
+	{
+		return false;
+	}
+
+	FVector TargetPoint = FVector::ZeroVector;
+	if (!UpdateGrabTarget(TargetPoint))
+	{
+		return false;
+	}
+
+	const FVector CurrentGrabPoint = MovementComponent->GetComponentTransform()
+		.TransformPosition(GrabPointLocal);
+	FVector TargetDeltaInParentSpace = TargetPoint - CurrentGrabPoint;
+	if (const USceneComponent* Parent = MovementComponent->GetAttachParent())
+	{
+		TargetDeltaInParentSpace = Parent->GetComponentTransform()
+			.InverseTransformVector(TargetDeltaInParentSpace);
+	}
+
+	const FVector CurrentRelativeLocation = MovementComponent->GetRelativeLocation();
+	const float CurrentOffset = FVector::DotProduct(
+		CurrentRelativeLocation - ClosedLocation,
+		SlideAxis);
+	const float RequestedOffset = CurrentOffset
+		+ FVector::DotProduct(TargetDeltaInParentSpace, SlideAxis);
+	const float NewOffset = FMath::Clamp(
+		RequestedOffset,
+		0.0f,
+		FMath::Max(0.0f, MaximumDistance));
+
+	OutRelativeLocation = ClosedLocation + SlideAxis * NewOffset;
+	return true;
+}
+
+void UDrag_Component::DoorGrab(float DeltaTime)
+{
+	ADrag_Item* DragItem = Cast<ADrag_Item>(GetOwner());
+	USceneComponent* MovementComponent = GetTargetMovementComponent();
+	UPrimitiveComponent* InteractionPrimitive = GetInteractionPrimitive();
+	APawn* PlayerPawn = RotatingController ? RotatingController->GetPawn() : nullptr;
+	if (!IsValid(DragItem)
+		|| !IsValid(MovementComponent)
+		|| !IsValid(InteractionPrimitive)
+		|| !IsValid(PlayerPawn)
+		|| !bHasGrabPoint
+		|| DeltaTime <= 0.0f)
+	{
+		return;
+	}
+
+	FVector TargetPoint = FVector::ZeroVector;
+	if (!UpdateGrabTarget(TargetPoint))
+	{
+		return;
+	}
+
+	// The target follows both sources of player motion: translation moves the
+	// camera origin, mouse X/Y changes ViewRotation, and mouse Y also pushes or
+	// pulls the target along the ray so vertical input always affects the hinge.
+	const FVector HingeLocation = MovementComponent->GetComponentLocation();
+
+	FVector HingeAxis = FVector::UpVector;
+	if (const USceneComponent* Parent = MovementComponent->GetAttachParent())
+	{
+		HingeAxis = Parent->GetUpVector();
+	}
+	else if (const AActor* Owner = GetOwner())
+	{
+		HingeAxis = Owner->GetActorUpVector();
+	}
+	HingeAxis.Normalize();
+
+	const FVector CurrentGrabPoint = MovementComponent->GetComponentTransform()
+		.TransformPosition(GrabPointLocal);
+	FVector CurrentRadius = FVector::VectorPlaneProject(
+		CurrentGrabPoint - HingeLocation,
+		HingeAxis);
+	FVector TargetRadius = FVector::VectorPlaneProject(
+		TargetPoint - HingeLocation,
+		HingeAxis);
+
+	if (!CurrentRadius.Normalize() || !TargetRadius.Normalize())
+	{
+		return;
+	}
+
+	const float SignedAngleToTarget = FMath::RadiansToDegrees(FMath::Atan2(
+		FVector::DotProduct(HingeAxis, FVector::CrossProduct(CurrentRadius, TargetRadius)),
+		FVector::DotProduct(CurrentRadius, TargetRadius)));
+	const float FollowAlpha = FMath::Clamp(DeltaTime * DoorGrabFollowSpeed, 0.0f, 1.0f);
+	const float MaximumStep = MaximumDoorAngularSpeed * DeltaTime;
+	const float DoorAngleStep = FMath::Clamp(
+		SignedAngleToTarget * FollowAlpha,
+		-MaximumStep,
+		MaximumStep);
+
+	const FRotator OldRotation = MovementComponent->GetRelativeRotation();
+	FRotator NewRotation = OldRotation;
+	const float CurrentYaw = FMath::UnwindDegrees(OldRotation.Yaw);
+	float MinimumYaw = -90.0f;
+	float MaximumYaw = 0.0f;
+
+	if (bUseCustomDoorAngleLimits)
+	{
+		MinimumYaw = FMath::Min(MinimumDoorYaw, MaximumDoorYaw);
+		MaximumYaw = FMath::Max(MinimumDoorYaw, MaximumDoorYaw);
+	}
+	else if (DragItem->ItemType == EItemType::DraggableInvertLeft)
+	{
+		MinimumYaw = 0.0f;
+		MaximumYaw = 90.0f;
+	}
+	else if (DragItem->ItemType == EItemType::DraggableInvertRight)
+	{
+		MinimumYaw = -90.0f;
+		MaximumYaw = 0.0f;
+	}
+
+	NewRotation.Yaw = FMath::Clamp(
+		CurrentYaw + DoorAngleStep,
+		MinimumYaw,
+		MaximumYaw);
+
+	if (InteractionPrimitive->IsOverlappingActor(PlayerPawn))
+	{
+		NewRotation = OldRotation;
+	}
+
+	MovementComponent->SetRelativeRotation(NewRotation);
+
+	if (AHronoCharacter* Character = Cast<AHronoCharacter>(PlayerPawn))
+	{
+		if (!Character->HasAuthority())
+		{
+			Character->Server_SetDoorPanelRotation(
+				DragItem,
+				MovementComponent->GetFName(),
+				NewRotation);
+		}
+		else
+		{
+			DragItem->ApplyDoorRotationFromServer(
+				MovementComponent->GetFName(),
+				NewRotation);
+		}
+	}
+}
+
 void UDrag_Component::XDrag()
 {
+	if (bHasGrabPoint)
+	{
+		DoorGrab(GetWorld() ? GetWorld()->GetDeltaSeconds() : 0.0f);
+		return;
+	}
+
 	AActor* Owner = GetOwner();
 	if (!Owner || !RotatingController) return;
 
@@ -391,10 +599,6 @@ void UDrag_Component::ShelfDrag()
 		return;
 	}
 
-	float MouseX = 0.0f;
-	float MouseY = 0.0f;
-	RotatingController->GetInputMouseDelta(MouseX, MouseY);
-
 	const FVector SlideAxis = ShelfSlideAxis.GetSafeNormal();
 	if (SlideAxis.IsNearlyZero())
 	{
@@ -402,15 +606,28 @@ void UDrag_Component::ShelfDrag()
 	}
 
 	const FVector OldRelativeLocation = MovementComponent->GetRelativeLocation();
-	const float CurrentOffset = FVector::DotProduct(
-		OldRelativeLocation - ShelfClosedLocation,
-		SlideAxis);
-	const float NewOffset = FMath::Clamp(
-		CurrentOffset - MouseY * ShelfSpeed,
-		0.0f,
-		ShelfMaxDistance);
-
-	FVector NewRelativeLocation = ShelfClosedLocation + SlideAxis * NewOffset;
+	FVector NewRelativeLocation = OldRelativeLocation;
+	if (!CalculateLinearGrabLocation(
+		MovementComponent,
+		ShelfClosedLocation,
+		SlideAxis,
+		ShelfMaxDistance,
+		NewRelativeLocation))
+	{
+		// Compatibility fallback for a drag started without a valid hit point.
+		float MouseX = 0.0f;
+		float MouseY = 0.0f;
+		RotatingController->GetInputMouseDelta(MouseX, MouseY);
+		static_cast<void>(MouseX);
+		const float CurrentOffset = FVector::DotProduct(
+			OldRelativeLocation - ShelfClosedLocation,
+			SlideAxis);
+		const float NewOffset = FMath::Clamp(
+			CurrentOffset - MouseY * ShelfSpeed,
+			0.0f,
+			ShelfMaxDistance);
+		NewRelativeLocation = ShelfClosedLocation + SlideAxis * NewOffset;
+	}
 	if (InteractionPrimitive->IsOverlappingActor(PlayerPawn))
 	{
 		NewRelativeLocation = OldRelativeLocation;
@@ -441,7 +658,9 @@ void UDrag_Component::ShelfDrag()
 void UDrag_Component::CupBoardDrag()
 {
 	ADrag_Item* CupBoard = Cast<ADrag_Item>(GetOwner());
-	if (!CupBoard || !CupBoard->ItemMesh || !RotatingController)
+	USceneComponent* MovementComponent = GetTargetMovementComponent();
+	UPrimitiveComponent* InteractionPrimitive = GetInteractionPrimitive();
+	if (!CupBoard || !MovementComponent || !InteractionPrimitive || !RotatingController)
 	{
 		return;
 	}
@@ -452,39 +671,50 @@ void UDrag_Component::CupBoardDrag()
 		return;
 	}
 
-	float MouseX = 0.0f;
-	float MouseY = 0.0f;
-	RotatingController->GetInputMouseDelta(MouseX, MouseY);
-	if (const AHronoCharacter* Character = Cast<AHronoCharacter>(PlayerPawn))
-	{
-		if (Character->bCorrectDragInputWhenMirrored)
-		{
-			MouseX *= Character->GetMirroredHorizontalInputScale();
-		}
-	}
-
 	const FVector SlideAxis = CupBoardSlideAxis.GetSafeNormal();
 	if (SlideAxis.IsNearlyZero())
 	{
 		return;
 	}
 
-	const FVector OldRelativeLocation = CupBoard->ItemMesh->GetRelativeLocation();
-	const float CurrentOffset = FVector::DotProduct(
-		OldRelativeLocation - CupBoardClosedLocation,
-		SlideAxis);
-	const float NewOffset = FMath::Clamp(
-		CurrentOffset - MouseX * CupBoardSlideSpeed,
-		0.0f,
-		CupBoardMaxDistance);
+	const FVector OldRelativeLocation = MovementComponent->GetRelativeLocation();
+	FVector NewRelativeLocation = OldRelativeLocation;
+	if (!CalculateLinearGrabLocation(
+		MovementComponent,
+		CupBoardClosedLocation,
+		SlideAxis,
+		CupBoardMaxDistance,
+		NewRelativeLocation))
+	{
+		// Compatibility fallback for a drag started without a valid hit point.
+		float MouseX = 0.0f;
+		float MouseY = 0.0f;
+		RotatingController->GetInputMouseDelta(MouseX, MouseY);
+		static_cast<void>(MouseY);
+		if (const AHronoCharacter* Character = Cast<AHronoCharacter>(PlayerPawn))
+		{
+			if (Character->bCorrectDragInputWhenMirrored)
+			{
+				MouseX *= Character->GetMirroredHorizontalInputScale();
+			}
+		}
 
-	FVector NewRelativeLocation = CupBoardClosedLocation + SlideAxis * NewOffset;
-	if (CupBoard->ItemMesh->IsOverlappingActor(PlayerPawn))
+		const float CurrentOffset = FVector::DotProduct(
+			OldRelativeLocation - CupBoardClosedLocation,
+			SlideAxis);
+		const float NewOffset = FMath::Clamp(
+			CurrentOffset - MouseX * CupBoardSlideSpeed,
+			0.0f,
+			CupBoardMaxDistance);
+		NewRelativeLocation = CupBoardClosedLocation + SlideAxis * NewOffset;
+	}
+
+	if (InteractionPrimitive->IsOverlappingActor(PlayerPawn))
 	{
 		NewRelativeLocation = OldRelativeLocation;
 	}
 
-	CupBoard->ItemMesh->SetRelativeLocation(NewRelativeLocation);
+	MovementComponent->SetRelativeLocation(NewRelativeLocation);
 	CupBoard->ShelfPosition = NewRelativeLocation;
 
 	if (AHronoCharacter* Character = Cast<AHronoCharacter>(PlayerPawn))
@@ -495,7 +725,9 @@ void UDrag_Component::CupBoardDrag()
 		}
 		else
 		{
-			CupBoard->RefreshShelfOpenState();
+			CupBoard->ApplyShelfPositionFromServer(
+				MovementComponent->GetFName(),
+				NewRelativeLocation);
 		}
 	}
 }

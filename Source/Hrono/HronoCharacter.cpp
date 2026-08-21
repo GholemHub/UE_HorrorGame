@@ -1105,7 +1105,7 @@ void AHronoCharacter::HandleDrag(const FHitResult& HitResult)
 		return;
 	}
 
-	DragComponent->StartDrag(PC);
+	DragComponent->StartDrag(PC, HitResult.ImpactPoint);
 
 	if (DragComponent->bIsCupBoard)
 	{

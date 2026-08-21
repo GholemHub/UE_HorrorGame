@@ -101,23 +101,23 @@ AThreeDrawerCabinet::AThreeDrawerCabinet()
 
 	// ItemSpawnManagerSystem expands every tagged PointSet on a location actor
 	// into an independent spawn slot. Each point follows its own moving drawer.
-	static const FName ItemSpawnPointTag(TEXT("ItemSpawnPoint"));
+	static const FName DrawerItemSpawnPointTag(TEXT("ItemSpawnPoint"));
 
 	BottomDrawerPointSet = PointSet;
 	BottomDrawerPointSet->SetRelativeLocation(FVector(0.0f, 0.0f, 6.0f));
-	BottomDrawerPointSet->ComponentTags.AddUnique(ItemSpawnPointTag);
+	BottomDrawerPointSet->ComponentTags.AddUnique(DrawerItemSpawnPointTag);
 
 	MiddleDrawerPointSet =
 		CreateDefaultSubobject<USceneComponent>(TEXT("MiddleDrawerPointSet"));
 	MiddleDrawerPointSet->SetupAttachment(MiddleDrawerMesh);
 	MiddleDrawerPointSet->SetRelativeLocation(FVector(0.0f, 0.0f, 6.0f));
-	MiddleDrawerPointSet->ComponentTags.AddUnique(ItemSpawnPointTag);
+	MiddleDrawerPointSet->ComponentTags.AddUnique(DrawerItemSpawnPointTag);
 
 	TopDrawerPointSet =
 		CreateDefaultSubobject<USceneComponent>(TEXT("TopDrawerPointSet"));
 	TopDrawerPointSet->SetupAttachment(TopDrawerMesh);
 	TopDrawerPointSet->SetRelativeLocation(FVector(0.0f, 0.0f, 6.0f));
-	TopDrawerPointSet->ComponentTags.AddUnique(ItemSpawnPointTag);
+	TopDrawerPointSet->ComponentTags.AddUnique(DrawerItemSpawnPointTag);
 
 	if (DrawerOpenSoundFinder.Succeeded())
 	{

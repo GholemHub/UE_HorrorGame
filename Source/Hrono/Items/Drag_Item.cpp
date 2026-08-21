@@ -296,7 +296,7 @@ UDrag_Component* ADrag_Item::FindDragComponentForMovementComponent(
 	for (UDrag_Component* Candidate : DragComponents)
 	{
 		if (IsValid(Candidate)
-			&& Candidate->bIsShelf
+			&& (Candidate->bIsShelf || Candidate->bIsCupBoard)
 			&& Candidate->GetTargetMovementComponent() == MovementComponent)
 		{
 			return Candidate;
@@ -319,21 +319,29 @@ FVector ADrag_Item::ClampShelfPositionForComponent(
 			: FVector::ZeroVector;
 	}
 
-	const FVector SlideAxis = ShelfDragComponent->ShelfSlideAxis.GetSafeNormal();
+	const bool bCupBoard = ShelfDragComponent->bIsCupBoard;
+	const FVector ClosedLocation = bCupBoard
+		? ShelfDragComponent->CupBoardClosedLocation
+		: ShelfDragComponent->ShelfClosedLocation;
+	const FVector SlideAxis = (bCupBoard
+		? ShelfDragComponent->CupBoardSlideAxis
+		: ShelfDragComponent->ShelfSlideAxis).GetSafeNormal();
 	if (SlideAxis.IsNearlyZero())
 	{
-		return ShelfDragComponent->ShelfClosedLocation;
+		return ClosedLocation;
 	}
 
 	const float RequestedOffset = FVector::DotProduct(
-		RequestedPosition - ShelfDragComponent->ShelfClosedLocation,
+		RequestedPosition - ClosedLocation,
 		SlideAxis);
 	const float ClampedOffset = FMath::Clamp(
 		RequestedOffset,
 		0.0f,
-		FMath::Max(0.0f, ShelfDragComponent->ShelfMaxDistance));
+		FMath::Max(0.0f, bCupBoard
+			? ShelfDragComponent->CupBoardMaxDistance
+			: ShelfDragComponent->ShelfMaxDistance));
 
-	return ShelfDragComponent->ShelfClosedLocation + SlideAxis * ClampedOffset;
+	return ClosedLocation + SlideAxis * ClampedOffset;
 }
 
 void ADrag_Item::ApplyShelfPositionFromServer(
