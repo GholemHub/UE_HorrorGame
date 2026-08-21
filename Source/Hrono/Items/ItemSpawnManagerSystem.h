@@ -111,10 +111,11 @@ public:
 	ABase_Item* SpawnItemWithInfo(const FSpawnRequest& Data, FSpawnedItemInfo& OutInfo);
 
 	/**
-	 * Randomly selects from a mixed array of shelves and dedicated item points,
-	 * then spawns at most one item at each selected location. A value <= 0 for
-	 * ItemCount attempts to fill every supplied location. The location becomes
-	 * the request owner, so its ItemTimeline restricts the item timeline.
+	 * Randomly selects from a mixed array of shelves and dedicated item points.
+	 * An actor with multiple ItemSpawnPoint-tagged PointSet components contributes
+	 * one independent spawn slot per component. A value <= 0 for ItemCount
+	 * attempts to fill every slot. The owning actor's ItemTimeline restricts the
+	 * item timeline.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Item Spawn")
 	int32 SpawnItemsAtRandomLocations(
@@ -136,16 +137,16 @@ public:
 
 	/**
 	 * All shelves and dedicated item-point actors that may receive an item when
-	 * the manager starts. Both location types derive from ABase_Item.
+	 * the manager starts. A cabinet with three PointSets contributes three slots.
 	 */
 	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Item Spawn|Automatic")
 	TArray<TObjectPtr<ABase_Item>> PossibleSpawnLocations;
 
-	/** Automatically choose random entries from PossibleSpawnLocations on BeginPlay. */
+	/** Automatically choose random spawn slots from PossibleSpawnLocations on BeginPlay. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Item Spawn|Automatic")
 	bool bSpawnItemsOnBeginPlay = true;
 
-	/** Number of locations to fill automatically. A value <= 0 attempts to fill every location. */
+	/** Number of spawn slots to fill automatically. A value <= 0 attempts to fill every slot. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Item Spawn|Automatic", meta = (ClampMin = "0", UIMin = "0"))
 	int32 BeginPlayItemCount = 0;
 

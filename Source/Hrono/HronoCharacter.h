@@ -5,9 +5,6 @@
 #include "Logging/LogMacros.h"
 #include "HronoSharedTools.h"
 #include "HronoCollisionChannels.h"
-#include "Components/InventoryComponent.h"
-
-
 #include "HronoCharacter.generated.h"
 
 
@@ -59,9 +56,6 @@ class AHronoCharacter : public ACharacter
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta = (AllowPrivateAccess = "true"))
 	UCameraComponent* FirstPersonCameraComponent;
 
-	UPROPERTY(VisibleAnywhere)
-	class UInventoryComponent* InventoryComponent;
-
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components", meta = (AllowPrivateAccess = "true"))
 	USpotLightComponent* SpotLight;
 	
@@ -106,9 +100,6 @@ protected:
 
 	UPROPERTY(EditAnywhere, Category = "Input")
 	UInputAction* DragAction;
-
-	UPROPERTY(EditAnywhere, Category = "Input")
-	UInputAction* NextItemAction;
 
 public:
 	AHronoCharacter();
@@ -198,7 +189,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Timeline", meta = (DisplayName = "Switch Player Timeline"))
 	void SwitchPlayerTimeline();
 
-	/** Moves the player and every carried inventory item to a specific timeline. */
+	/** Moves the player and the held item to a specific timeline. */
 	UFUNCTION(BlueprintCallable, Category = "Timeline", meta = (DisplayName = "Set Player Timeline"))
 	void SetPlayerTimeline(EItemTimeline NewTimeline);
 
@@ -266,14 +257,14 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Timeline|Mirror|Input")
 	float GetMirroredHorizontalInputScale() const;
 
-	/** Returns the item currently selected and visible in this character's inventory. */
+	/** Returns the single item currently held by this character. */
 	UFUNCTION(BlueprintPure, Category = "Items")
-	class ABase_Item* GetCurrentInventoryItem() const;
+	class ABase_Item* GetHeldItem() const;
 
-	/** Removes a specific held item from this inventory without destroying it.
+	/** Releases the held item without destroying it.
 	 *  Intended for item sockets such as pentagram rune slots. Server only. */
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Items")
-	bool ReleaseInventoryItemForPlacement(class ABase_Item* Item);
+	bool ReleaseHeldItemForPlacement(class ABase_Item* Item);
 
 	/** True only while the character overlaps a HidingWardrobe safety volume and
 	 *  both wardrobe doors are below that wardrobe's unsafe angle. */
@@ -351,8 +342,6 @@ protected:
 
 	/** Called from Input Actions for looking input */
 	void LookInput(const FInputActionValue& Value);
-
-	void NextItemInput(const FInputActionValue& Value);
 
 	/** Handles aim inputs from either controls or UI interfaces */
 	UFUNCTION(BlueprintCallable, Category = "Input")
@@ -495,11 +484,16 @@ protected:
 
 	UFUNCTION(Server, Reliable)
 	void ServerPickupItem(class ABase_Item* Item);
+
+	/** Consumes the held key and unlocks a draggable actor on the authority. */
+	UFUNCTION(Server, Reliable)
+	void ServerUnlockWithHeldKey(ADrag_Item* Item);
 	UFUNCTION(BlueprintCallable, Category = "Items")
 	void PickupItem(class ABase_Item* Item);
 
-	UPROPERTY(BlueprintReadWrite, Category = "Items")
-	class ABase_Item* CurrentHeldItem;
+	/** The only item this character may carry. Authoritative on the server. */
+	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Items")
+	TObjectPtr<class ABase_Item> CurrentHeldItem;
 
 	UFUNCTION(BlueprintCallable, Category = "Items")
 	void DropCurrentItem();
@@ -536,6 +530,13 @@ public:
 	UFUNCTION(Server, Reliable, WithValidation)
 	void Server_SetShelfPosition(ADrag_Item* Shelf, const FVector& NewPosition);
 
+	/** Streams a position for one panel of a multi-drawer Drag_Item. */
+	UFUNCTION(Server, Reliable)
+	void Server_SetShelfPanelPosition(
+		ADrag_Item* Shelf,
+		FName ShelfComponentName,
+		FVector NewPosition);
+
 public:
 		// The Client will call this to tell the server to interact with an object
 		UFUNCTION(Server, Reliable)
@@ -561,8 +562,6 @@ public:
 	/** Returns this character's timeline */
 	EItemTimeline GetTimeline() const { return CharacterTimeline; }
 
-	UFUNCTION(Server, Reliable)
-	void ServerNextItemInput(float AxisValue);
 	virtual void OnStartCrouch(float HalfHeightAdjust, float ScaledHalfHeightAdjust) override;
 
 	private:

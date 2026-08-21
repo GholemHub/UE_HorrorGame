@@ -23,8 +23,6 @@
 #include "Materials/MaterialInterface.h"
 #include "Engine/Engine.h"
 
-#include "Components/InventoryComponent.h"
-
 #include "Kismet/GameplayStatics.h"
 #include "Sound/SoundBase.h"
 
@@ -41,6 +39,7 @@ void AHronoCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutL
 	DOREPLIFETIME(AHronoCharacter, bIsSitting);
 	DOREPLIFETIME(AHronoCharacter, bIsSafeInHidingWardrobe);
 	DOREPLIFETIME(AHronoCharacter, bTimelineMirrorRequested);
+	DOREPLIFETIME(AHronoCharacter, CurrentHeldItem);
 }
 
 void AHronoCharacter::SetSafeInHidingWardrobe(bool bNewSafe)
@@ -113,8 +112,6 @@ AHronoCharacter::AHronoCharacter()
 	PastInteractionPoint = CreateDefaultSubobject<USceneComponent>(TEXT("PastInteractionPoint"));
 	PastInteractionPoint->SetupAttachment(InteractionPoint);
 	PastInteractionPoint->SetRelativeLocation(FVector(10.0f, -20.0f, -8.0f));
-
-	InventoryComponent = CreateDefaultSubobject<UInventoryComponent>(TEXT("InventoryComponent"));
 
 	SpotLight = CreateDefaultSubobject<USpotLightComponent>(TEXT("SpotLight1"));
 	SpotLight->SetupAttachment(GetFirstPersonCameraComponent());
@@ -264,11 +261,11 @@ void AHronoCharacter::ApplyPlayerTimelineOnAuthority(EItemTimeline NewTimeline)
 	}
 
 	UE_LOG(LogTemp, Log,
-		TEXT("[TimelineSwitch] Character=%s %s -> %s CarriedItems=%d Mirrored=%s"),
+		TEXT("[TimelineSwitch] Character=%s %s -> %s HeldItem=%s Mirrored=%s"),
 		*GetNameSafe(this),
 		*StaticEnum<EItemTimeline>()->GetNameStringByValue(static_cast<int64>(PreviousTimeline)),
 		*StaticEnum<EItemTimeline>()->GetNameStringByValue(static_cast<int64>(CharacterTimeline)),
-		InventoryComponent ? InventoryComponent->Items.Num() : 0,
+		*GetNameSafe(CurrentHeldItem),
 		bTimelineMirrorRequested ? TEXT("true") : TEXT("false"));
 
 	ForceNetUpdate();
@@ -276,35 +273,19 @@ void AHronoCharacter::ApplyPlayerTimelineOnAuthority(EItemTimeline NewTimeline)
 
 void AHronoCharacter::MoveCarriedItemsToTimeline(EItemTimeline NewTimeline)
 {
-	if (!HasAuthority() || !InventoryComponent)
+	if (!HasAuthority() || !IsValid(CurrentHeldItem))
 	{
 		return;
 	}
 
-	for (ABase_Item* Item : InventoryComponent->Items)
-	{
-		if (IsValid(Item))
-		{
-			Item->SetItemTimeline(NewTimeline);
-		}
-	}
-
-	InventoryComponent->UpdateItemVisibility();
+	CurrentHeldItem->SetItemTimeline(NewTimeline);
 }
 
 void AHronoCharacter::RefreshHeldItemsInteractionPoint()
 {
-	if (!InventoryComponent)
+	if (IsValid(CurrentHeldItem) && CurrentHeldItem->OwningCharacter == this)
 	{
-		return;
-	}
-
-	for (ABase_Item* Item : InventoryComponent->Items)
-	{
-		if (IsValid(Item) && Item->OwningCharacter == this)
-		{
-			Item->RefreshHeldAttachmentPoint();
-		}
+		CurrentHeldItem->RefreshHeldAttachmentPoint();
 	}
 }
 
@@ -625,9 +606,6 @@ void AHronoCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 		// Moving
 		EnhancedInputComponent->BindAction(MoveAction, ETriggerEvent::Triggered, this, &AHronoCharacter::MoveInput);
 
-		//Inventory
-		EnhancedInputComponent->BindAction(NextItemAction, ETriggerEvent::Triggered, this, &AHronoCharacter::NextItemInput);
-
 		// Looking/Aiming
 		EnhancedInputComponent->BindAction(LookAction, ETriggerEvent::Triggered, this, &AHronoCharacter::LookInput);
 		EnhancedInputComponent->BindAction(MouseLookAction, ETriggerEvent::Triggered, this, &AHronoCharacter::LookInput);
@@ -890,7 +868,7 @@ void AHronoCharacter::DoInteract()
 		TEXT("[InteractionDebug] E PRESSED Player=%s Authority=%d Timeline=%s CurrentItem=%s"),
 		*GetName(), HasAuthority(),
 		*StaticEnum<EItemTimeline>()->GetNameStringByValue(static_cast<int64>(CharacterTimeline)),
-		*GetNameSafe(GetCurrentInventoryItem()));
+		*GetNameSafe(GetHeldItem()));
 
 	FHitResult HitResult = PerformInteractTrace(false);
 
@@ -1098,17 +1076,23 @@ void AHronoCharacter::HandleDrag(const FHitResult& HitResult)
 
 	if (Item->bNeedKeyActor)
 	{
-		const FGameplayTag BasementKeyTag =
-			FGameplayTag::RequestGameplayTag(TEXT("Item.Key"));
-
-		if (!InventoryComponent->FindItemByTag(BasementKeyTag))
+		if (!Item->CanUnlockWithItem(CurrentHeldItem))
 		{
+			UE_LOG(LogTemp, Log,
+				TEXT("[DoorLock] %s requires %s; held item %s does not match"),
+				*GetNameSafe(Item),
+				*Item->GetRequiredKeyTag().ToString(),
+				*GetNameSafe(CurrentHeldItem));
 			return;
 		}
-		else {
-			auto Key = InventoryComponent->FindItemByTag(BasementKeyTag);
-			InventoryComponent->ConsumeItem(Key);
-			Item->bNeedKeyActor = false;
+
+		if (HasAuthority())
+		{
+			ServerUnlockWithHeldKey_Implementation(Item);
+		}
+		else
+		{
+			ServerUnlockWithHeldKey(Item);
 		}
 	}
 
@@ -1195,46 +1179,53 @@ void AHronoCharacter::DropCurrentItem()
 		return;
 	}
 
-	if (!InventoryComponent)
-	{
-		UE_LOG(LogTemp, Error, TEXT("[DropLog] DropCurrentItem failed: InventoryComponent is NULL!"));
-		return;
-	}
-
-	// Read internal inventory variables directly for logging
-	int32 TargetIndex = InventoryComponent->CurrentItemIndex;
-	int32 InventoryCount = InventoryComponent->Items.Num();
-
-	UE_LOG(LogTemp, Log, TEXT("[DropLog] 3. Server evaluating Inventory. CurrentItemIndex: %d, Total Items: %d"), TargetIndex, InventoryCount);
-
-	ABase_Item* ItemToDrop = InventoryComponent->GetCurrentItem();
+	ABase_Item* ItemToDrop = CurrentHeldItem;
 
 	if (!ItemToDrop)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("[DropLog] DropCurrentItem aborted: GetCurrentItem() returned nullptr!"));
+		UE_LOG(LogTemp, Warning, TEXT("[DropLog] DropCurrentItem aborted: no item is held"));
 		return;
 	}
 
 	UE_LOG(LogTemp, Log, TEXT("[DropLog] 4. Valid item found: %s. Initiating Item->Drop()."), *ItemToDrop->GetName());
 	ItemToDrop->Drop();
-
-	UE_LOG(LogTemp, Log, TEXT("[DropLog] 6. Removing item from inventory array..."));
-	InventoryComponent->RemoveItem(ItemToDrop);
+	CurrentHeldItem = nullptr;
+	ForceNetUpdate();
 }
 
-ABase_Item* AHronoCharacter::GetCurrentInventoryItem() const
+void AHronoCharacter::ServerUnlockWithHeldKey_Implementation(ADrag_Item* Item)
 {
-	return InventoryComponent ? InventoryComponent->GetCurrentItem() : nullptr;
+	if (!IsValid(Item)
+		|| !Item->bNeedKeyActor
+		|| !Item->CanUnlockWithItem(CurrentHeldItem)
+		|| FVector::DistSquared(GetActorLocation(), Item->GetActorLocation())
+			> FMath::Square(InteractTraceDistance + 200.0f))
+	{
+		return;
+	}
+
+	ABase_Item* Key = CurrentHeldItem;
+	CurrentHeldItem = nullptr;
+	Item->bNeedKeyActor = false;
+	Key->OnHeldStateChanged(false, this);
+	Key->Destroy();
+	ForceNetUpdate();
+	Item->ForceNetUpdate();
 }
 
-bool AHronoCharacter::ReleaseInventoryItemForPlacement(ABase_Item* Item)
+ABase_Item* AHronoCharacter::GetHeldItem() const
 {
-	if (!HasAuthority() || !InventoryComponent || !IsValid(Item))
+	return CurrentHeldItem;
+}
+
+bool AHronoCharacter::ReleaseHeldItemForPlacement(ABase_Item* Item)
+{
+	if (!HasAuthority() || !IsValid(Item))
 	{
 		return false;
 	}
 
-	if (!InventoryComponent->Items.Contains(Item) || Item->OwningCharacter != this)
+	if (CurrentHeldItem != Item || Item->OwningCharacter != this)
 	{
 		return false;
 	}
@@ -1242,12 +1233,7 @@ bool AHronoCharacter::ReleaseInventoryItemForPlacement(ABase_Item* Item)
 	// Drop first so Base_Item clears attachment, ownership and held-state effects.
 	// The rune will immediately disable physics and move itself into its slot.
 	Item->Drop();
-	InventoryComponent->RemoveItem(Item);
-
-	if (CurrentHeldItem == Item)
-	{
-		CurrentHeldItem = nullptr;
-	}
+	CurrentHeldItem = nullptr;
 
 	ForceNetUpdate();
 	return true;
@@ -1255,17 +1241,42 @@ bool AHronoCharacter::ReleaseInventoryItemForPlacement(ABase_Item* Item)
 
 void AHronoCharacter::Server_SetShelfPosition_Implementation(ADrag_Item* Shelf, const FVector& NewPosition)
 {
-	if (!Shelf) return;
+	if (!Shelf)
+	{
+		return;
+	}
 
-	Shelf->ShelfPosition = NewPosition;
-	Shelf->ItemMesh->SetRelativeLocation(NewPosition);
-	Shelf->RefreshShelfOpenState();
+	Shelf->ApplyShelfPositionFromServer(NAME_None, NewPosition);
 }
 
 bool AHronoCharacter::Server_SetShelfPosition_Validate(ADrag_Item* Shelf, const FVector& NewPosition)
 {
 	return Shelf != nullptr;
 
+}
+
+void AHronoCharacter::Server_SetShelfPanelPosition_Implementation(
+	ADrag_Item* Shelf,
+	FName ShelfComponentName,
+	FVector NewPosition)
+{
+	if (!IsValid(Shelf)
+		|| NewPosition.ContainsNaN()
+		|| (Shelf->ItemTimeline != EItemTimeline::Both
+			&& Shelf->ItemTimeline != CharacterTimeline)
+		|| FVector::DistSquared(GetActorLocation(), Shelf->GetActorLocation())
+			> FMath::Square(InteractTraceDistance + 200.0f)
+		|| !Shelf->FindShelfMovementComponent(ShelfComponentName))
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("[ShelfReplication] Rejected drawer update Player=%s Shelf=%s Component=%s"),
+			*GetNameSafe(this),
+			*GetNameSafe(Shelf),
+			*ShelfComponentName.ToString());
+		return;
+	}
+
+	Shelf->ApplyShelfPositionFromServer(ShelfComponentName, NewPosition);
 }
 
 void AHronoCharacter::OnEnyInteractTrace(FHitResult HitResult)
@@ -1323,10 +1334,22 @@ void AHronoCharacter::PickupItem(ABase_Item* Item)
 		return;
 	}
 
+	// One-hand rule: the server rejects every additional pickup until the held
+	// item is dropped, consumed, or placed into an interaction socket. World
+	// interactions above do not occupy the hand and remain usable while carrying.
+	if (IsValid(CurrentHeldItem))
+	{
+		UE_LOG(LogTemp, Log,
+			TEXT("[Item] Pickup rejected for %s: already holding %s"),
+			*GetNameSafe(this), *GetNameSafe(CurrentHeldItem));
+		return;
+	}
+
 	
 	if (Item->TryPickUp(this))
 	{
-		InventoryComponent->AddItem(Item);
+		CurrentHeldItem = Item;
+		ForceNetUpdate();
 	}
 }
 void AHronoCharacter::OnMakeInteractImpulse(FHitResult HitResult)
@@ -1372,37 +1395,6 @@ void AHronoCharacter::MoveInput(const FInputActionValue& Value)
 	DoMove(MovementVector.X, MovementVector.Y);
 
 }
-void AHronoCharacter::NextItemInput(const FInputActionValue& Value)
-{
-	FVector2D MovementVector = Value.Get<FVector2D>();
-	if (MovementVector.X == 0) return;
-
-	// Forward client input directly over to Server authority
-	if (!HasAuthority())
-	{
-		ServerNextItemInput(MovementVector.X);
-	}
-	else
-	{
-		if (MovementVector.X > 0) {
-			InventoryComponent->DoNextItem();
-		}
-		else {
-			InventoryComponent->DoPreviousItem();
-		}
-	}
-}
-
-void AHronoCharacter::ServerNextItemInput_Implementation(float AxisValue)
-{
-	if (AxisValue > 0) {
-		InventoryComponent->DoNextItem();
-	}
-	else {
-		InventoryComponent->DoPreviousItem();
-	}
-}
-
 void AHronoCharacter::LookInput(const FInputActionValue& Value)
 {
 	// get the Vector2D look axis

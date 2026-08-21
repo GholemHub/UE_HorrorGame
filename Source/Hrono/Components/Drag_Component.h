@@ -123,6 +123,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shelf")
 	float ShelfMaxDistance = 50.f;  // How far shelf can pull out
 
+	/** Local-space direction in which this shelf/drawer opens. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shelf")
+	FVector ShelfSlideAxis = FVector(0.0f, -1.0f, 0.0f);
+
+	/** Initial relative location captured at BeginPlay and used as the closed pose. */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Shelf")
+	FVector ShelfClosedLocation = FVector::ZeroVector;
+
 	/** Local-space direction in which the cupboard panel opens.
 	 *  Use (0, -1, 0) for right-to-left or (0, 1, 0) for left-to-right. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CupBoard")

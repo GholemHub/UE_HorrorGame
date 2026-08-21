@@ -54,7 +54,21 @@ void ADrag_Item::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifeti
     DOREPLIFETIME(ADrag_Item, bIsClosed);
     DOREPLIFETIME(ADrag_Item, ShelfPosition);
     DOREPLIFETIME(ADrag_Item, bIsShelfOpen);
+	DOREPLIFETIME(ADrag_Item, bNeedKeyActor);
+	DOREPLIFETIME(ADrag_Item, RequiredKeyTag);
 
+}
+
+FGameplayTag ADrag_Item::GetRequiredKeyTag() const
+{
+	return RequiredKeyTag.IsValid()
+		? RequiredKeyTag
+		: FGameplayTag::RequestGameplayTag(TEXT("Item.Key"));
+}
+
+bool ADrag_Item::CanUnlockWithItem(const ABase_Item* Item) const
+{
+	return IsValid(Item) && Item->ItemTags.HasTag(GetRequiredKeyTag());
 }
 
 void ADrag_Item::OnRep_DoorRotation()
@@ -256,6 +270,96 @@ void ADrag_Item::ApplyDoorRotationFromServer(FName DoorComponentName, const FRot
 	DoorMovementComponent->SetRelativeRotation(NewRotation);
 	DoorRotation = NewRotation;
 	RefreshDoorClosedState();
+	ForceNetUpdate();
+}
+
+USceneComponent* ADrag_Item::FindShelfMovementComponent(FName ShelfComponentName) const
+{
+	if (ItemMesh
+		&& (ShelfComponentName.IsNone() || ItemMesh->GetFName() == ShelfComponentName))
+	{
+		return ItemMesh;
+	}
+
+	return nullptr;
+}
+
+UDrag_Component* ADrag_Item::FindDragComponentForMovementComponent(
+	const USceneComponent* MovementComponent) const
+{
+	if (!IsValid(MovementComponent))
+	{
+		return nullptr;
+	}
+
+	TInlineComponentArray<UDrag_Component*> DragComponents(this);
+	for (UDrag_Component* Candidate : DragComponents)
+	{
+		if (IsValid(Candidate)
+			&& Candidate->bIsShelf
+			&& Candidate->GetTargetMovementComponent() == MovementComponent)
+		{
+			return Candidate;
+		}
+	}
+
+	return nullptr;
+}
+
+FVector ADrag_Item::ClampShelfPositionForComponent(
+	const USceneComponent* MovementComponent,
+	const FVector& RequestedPosition) const
+{
+	const UDrag_Component* ShelfDragComponent =
+		FindDragComponentForMovementComponent(MovementComponent);
+	if (!ShelfDragComponent)
+	{
+		return MovementComponent
+			? MovementComponent->GetRelativeLocation()
+			: FVector::ZeroVector;
+	}
+
+	const FVector SlideAxis = ShelfDragComponent->ShelfSlideAxis.GetSafeNormal();
+	if (SlideAxis.IsNearlyZero())
+	{
+		return ShelfDragComponent->ShelfClosedLocation;
+	}
+
+	const float RequestedOffset = FVector::DotProduct(
+		RequestedPosition - ShelfDragComponent->ShelfClosedLocation,
+		SlideAxis);
+	const float ClampedOffset = FMath::Clamp(
+		RequestedOffset,
+		0.0f,
+		FMath::Max(0.0f, ShelfDragComponent->ShelfMaxDistance));
+
+	return ShelfDragComponent->ShelfClosedLocation + SlideAxis * ClampedOffset;
+}
+
+void ADrag_Item::ApplyShelfPositionFromServer(
+	FName ShelfComponentName,
+	const FVector& NewPosition)
+{
+	if (!HasAuthority() || NewPosition.ContainsNaN())
+	{
+		return;
+	}
+
+	USceneComponent* ShelfMovementComponent =
+		FindShelfMovementComponent(ShelfComponentName);
+	if (!ShelfMovementComponent)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[%s] Rejected unknown shelf component '%s'"),
+			*GetName(), *ShelfComponentName.ToString());
+		return;
+	}
+
+	const FVector ClampedPosition = ClampShelfPositionForComponent(
+		ShelfMovementComponent,
+		NewPosition);
+	ShelfMovementComponent->SetRelativeLocation(ClampedPosition);
+	ShelfPosition = ClampedPosition;
+	RefreshShelfOpenState();
 	ForceNetUpdate();
 }
 

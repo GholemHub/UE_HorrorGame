@@ -157,7 +157,7 @@ void ARunePentagram::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLi
 void ARunePentagram::Interact_Implementation(AActor* Interactor)
 {
 	AHronoCharacter* Character = Cast<AHronoCharacter>(Interactor);
-	ABase_Item* CurrentItem = Character ? Character->GetCurrentInventoryItem() : nullptr;
+	ABase_Item* CurrentItem = Character ? Character->GetHeldItem() : nullptr;
 	UE_LOG(LogTemp, Warning,
 		TEXT("[PentagramDebug] INTERACT Pentagram=%s Authority=%d Interactor=%s Character=%d CurrentItem=%s ItemClass=%s"),
 		*GetName(), HasAuthority(), *GetNameSafe(Interactor), Character != nullptr,
@@ -188,7 +188,7 @@ void ARunePentagram::Interact_Implementation(AActor* Interactor)
 bool ARunePentagram::TryInsertCurrentRune(AHronoCharacter* Character)
 {
 	ARune_Item* Rune = Character
-		? Cast<ARune_Item>(Character->GetCurrentInventoryItem())
+		? Cast<ARune_Item>(Character->GetHeldItem())
 		: nullptr;
 
 	if (bPentagramCompleted)

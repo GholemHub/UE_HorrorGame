@@ -28,6 +28,7 @@ void UDrag_Component::BeginPlay()
 	if (USceneComponent* MovementComponent = GetTargetMovementComponent())
 	{
 		CupBoardClosedLocation = MovementComponent->GetRelativeLocation();
+		ShelfClosedLocation = MovementComponent->GetRelativeLocation();
 	}
 	
 }
@@ -376,68 +377,63 @@ void UDrag_Component::XDrag()
 
 void UDrag_Component::ShelfDrag()
 {
-	AActor* Owner = GetOwner();
-	if (!Owner || !RotatingController)
+	ADrag_Item* Shelf = Cast<ADrag_Item>(GetOwner());
+	USceneComponent* MovementComponent = GetTargetMovementComponent();
+	UPrimitiveComponent* InteractionPrimitive = GetInteractionPrimitive();
+	if (!Shelf || !MovementComponent || !InteractionPrimitive || !RotatingController)
+	{
 		return;
-
-	ADrag_Item* Shelf = Cast<ADrag_Item>(Owner);
-	if (!Shelf)
-		return;
+	}
 
 	APawn* PlayerPawn = RotatingController->GetPawn();
 	if (!PlayerPawn)
-		return;
-
-	float MouseX, MouseY;
-	RotatingController->GetInputMouseDelta(MouseX, MouseY);
-
-	// Use only vertical mouse movement
-	float DragDelta = MouseY;
-
-	FVector OldRelativeLocation =
-		Shelf->ItemMesh->GetRelativeLocation();
-
-	FVector NewRelativeLocation =
-		OldRelativeLocation;
-
-	float NewY = FMath::Clamp(
-		OldRelativeLocation.Y +
-		DragDelta * ShelfSpeed,
-		-ShelfMaxDistance,
-		0.f
-	);
-
-	NewRelativeLocation.Y = NewY;
-
-	bool bOverlappingPlayer =
-		Shelf->ItemMesh->IsOverlappingActor(PlayerPawn);
-
-	if (bOverlappingPlayer)
 	{
-		NewRelativeLocation =
-			OldRelativeLocation;
+		return;
 	}
 
-	Shelf->ItemMesh->SetRelativeLocation(
-		NewRelativeLocation
-	);
+	float MouseX = 0.0f;
+	float MouseY = 0.0f;
+	RotatingController->GetInputMouseDelta(MouseX, MouseY);
 
-	Shelf->ShelfPosition =
-		NewRelativeLocation;
+	const FVector SlideAxis = ShelfSlideAxis.GetSafeNormal();
+	if (SlideAxis.IsNearlyZero())
+	{
+		return;
+	}
 
-	if (AHronoCharacter* Character =
-		Cast<AHronoCharacter>(PlayerPawn))
+	const FVector OldRelativeLocation = MovementComponent->GetRelativeLocation();
+	const float CurrentOffset = FVector::DotProduct(
+		OldRelativeLocation - ShelfClosedLocation,
+		SlideAxis);
+	const float NewOffset = FMath::Clamp(
+		CurrentOffset - MouseY * ShelfSpeed,
+		0.0f,
+		ShelfMaxDistance);
+
+	FVector NewRelativeLocation = ShelfClosedLocation + SlideAxis * NewOffset;
+	if (InteractionPrimitive->IsOverlappingActor(PlayerPawn))
+	{
+		NewRelativeLocation = OldRelativeLocation;
+	}
+
+	// Immediate local prediction keeps the drawer responsive for the player who
+	// is holding it. The character RPC below updates the authoritative component.
+	MovementComponent->SetRelativeLocation(NewRelativeLocation);
+
+	if (AHronoCharacter* Character = Cast<AHronoCharacter>(PlayerPawn))
 	{
 		if (!Character->HasAuthority())
 		{
-			Character->Server_SetShelfPosition(
+			Character->Server_SetShelfPanelPosition(
 				Shelf,
-				NewRelativeLocation
-			);
+				MovementComponent->GetFName(),
+				NewRelativeLocation);
 		}
 		else
 		{
-			Shelf->RefreshShelfOpenState();
+			Shelf->ApplyShelfPositionFromServer(
+				MovementComponent->GetFName(),
+				NewRelativeLocation);
 		}
 	}
 }
