@@ -207,8 +207,16 @@ bool ABase_Item::RefreshHeldAttachmentPoint()
 	// cannot inherit a different scale from the character or change after drop.
 	if (USceneComponent* Root = GetRootComponent())
 	{
+		FVector HoldLocation = HoldOffset.GetLocation();
+		if (Player->GetTimeline() == EItemTimeline::Past)
+		{
+			// The past view is mirrored, so mirror the held item's longitudinal
+			// location offset as well (for example, Future X=-10 becomes Past X=+10).
+			HoldLocation.Y *= -1.0f;
+		}
+
 		Root->SetRelativeLocationAndRotation(
-			HoldOffset.GetLocation(),
+			HoldLocation,
 			HoldOffset.GetRotation().Rotator());
 	}
 
