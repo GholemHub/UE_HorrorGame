@@ -118,15 +118,22 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ouija|Text", meta = (ClampMin = "0.0", Units = "s"))
 	float ButtonDetectionDelay = 2.0f;
 
-	/** Draws the tested arrow center and pending letter during play. */
+	/** Master switch for every Ouija Board debug message and debug drawing. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ouija|Debug")
+	bool bEnableDebugLogs = false;
+
+	/** Draws the tested arrow center and pending letter during play. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ouija|Debug",
+		meta = (EditCondition = "bEnableDebugLogs"))
 	bool bShowArrowCenterPoint = true;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ouija|Debug", meta = (ClampMin = "0.1"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ouija|Debug",
+		meta = (ClampMin = "0.1", EditCondition = "bEnableDebugLogs && bShowArrowCenterPoint"))
 	float ArrowCenterPointRadius = 2.0f;
 
 	/** Vertical distance from the arrow center to the status text. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ouija|Debug")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ouija|Debug",
+		meta = (EditCondition = "bEnableDebugLogs && bShowArrowCenterPoint"))
 	float ArrowStatusTextHeight = 20.0f;
 
 	/** Letter currently underneath the arrow. It is not accepted until the delay completes. */

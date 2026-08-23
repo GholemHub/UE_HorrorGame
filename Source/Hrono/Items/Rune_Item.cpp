@@ -165,9 +165,9 @@ void ARune_Item::PlaceRuneOnAuthority(
 		return;
 	}
 
-	if (OwningCharacter && !OwningCharacter->ReleaseInventoryItemForPlacement(this))
+	if (OwningCharacter && !OwningCharacter->ReleaseHeldItemForPlacement(this))
 	{
-		UE_LOG(LogTemp, Warning, TEXT("[RuneRitual] REJECTED %s could not leave player inventory"), *GetName());
+		UE_LOG(LogTemp, Warning, TEXT("[RuneRitual] REJECTED %s could not leave the player's hand"), *GetName());
 		MulticastPlacementResult(false, SlotId, RequiredRuneId);
 		return;
 	}

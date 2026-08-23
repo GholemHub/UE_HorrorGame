@@ -189,6 +189,12 @@ public:
 	/** Authority-only entry point used by Character RPCs for primary or subclass door panels. */
 	virtual void ApplyDoorRotationFromServer(FName DoorComponentName, const FRotator& NewRotation);
 
+	/** Resolves a replicated shelf/drawer identifier to its movement component. */
+	virtual USceneComponent* FindShelfMovementComponent(FName ShelfComponentName) const;
+
+	/** Authority-only entry point used by Character RPCs for one shelf/drawer panel. */
+	virtual void ApplyShelfPositionFromServer(FName ShelfComponentName, const FVector& NewPosition);
+
 	// In Drag_Item.h
 public:
 	UPROPERTY(BlueprintAssignable, Category = "Shelf")
@@ -217,11 +223,32 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shelf")
 	ABase_Item* KeyActor;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shelf")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Replicated, Category = "Shelf")
 	bool bNeedKeyActor = false;
+
+	/** Key tag required to unlock this actor. Leave empty to accept any Item.Key. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Replicated, Category = "Door|Lock",
+		meta = (EditCondition = "bNeedKeyActor", GameplayTagFilter = "Item.Key"))
+	FGameplayTag RequiredKeyTag;
+
+	/** Returns the configured key tag, or Item.Key for legacy doors. */
+	UFUNCTION(BlueprintPure, Category = "Door|Lock")
+	FGameplayTag GetRequiredKeyTag() const;
+
+	/** Checks whether an item carries the tag required by this lock. */
+	UFUNCTION(BlueprintPure, Category = "Door|Lock")
+	bool CanUnlockWithItem(const ABase_Item* Item) const;
 
 
 protected:
+	/** Finds the drag settings that own a particular movement component. */
+	UDrag_Component* FindDragComponentForMovementComponent(const USceneComponent* MovementComponent) const;
+
+	/** Constrains an untrusted client position to this component's authored slide path. */
+	FVector ClampShelfPositionForComponent(
+		const USceneComponent* MovementComponent,
+		const FVector& RequestedPosition) const;
+
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastStartDoorAnimation(FRotator TargetRotation, float Duration);
 

@@ -27,7 +27,7 @@ public:
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 	
 	UFUNCTION()
-	void StartDrag(APlayerController* PC);
+	void StartDrag(APlayerController* PC, FVector WorldGrabPoint);
 	
 	UFUNCTION()
 	void StopDrag();
@@ -82,6 +82,21 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CupBoard")
 	bool bIsCupBoard = false;
 
+	/** Updates a hinged door from the camera-driven target of its captured point. */
+	void DoorGrab(float DeltaTime);
+
+	/** Updates the virtual grab target from camera translation and mouse movement. */
+	bool UpdateGrabTarget(FVector& OutTargetPoint);
+
+	/** Constrains a grabbed component to one authored local-space slide axis. */
+	bool CalculateLinearGrabLocation(
+		USceneComponent* MovementComponent,
+		const FVector& ClosedLocation,
+		const FVector& LocalSlideAxis,
+		float MaximumDistance,
+		FVector& OutRelativeLocation);
+
+	/** Legacy entry point retained for existing Blueprint calls. Uses DoorGrab. */
 	UFUNCTION()
 	void XDrag();
 	
@@ -115,6 +130,40 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Inspect")
 	float RotationSpeed = 4.f;
 
+	/** How quickly the grabbed point follows its camera-driven target. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Door|Grab",
+		meta = (ClampMin = "0.0"))
+	float DoorGrabFollowSpeed = 18.0f;
+
+	/** Prevents abrupt rotation when the camera target jumps across the hinge. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Door|Grab",
+		meta = (ClampMin = "1.0", Units = "deg/s"))
+	float MaximumDoorAngularSpeed = 240.0f;
+
+	/** Mouse Y also pushes/pulls the virtual target along the view ray. Negative
+	 *  values invert the direction. This guarantees vertical input affects a
+	 *  one-axis hinge even when the camera begins perfectly level. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drag|Grab")
+	float VerticalGrabPullSpeed = 6.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drag|Grab",
+		meta = (ClampMin = "1.0", Units = "cm"))
+	float MinimumGrabDistance = 20.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Drag|Grab",
+		meta = (ClampMin = "1.0", Units = "cm"))
+	float MaximumGrabDistance = 600.0f;
+
+	/** Captured hit position in the moving component's local space. */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Drag|Grab|Debug")
+	FVector GrabPointLocal = FVector::ZeroVector;
+
+	/** Camera depth retained by the virtual target for this drag gesture. */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Drag|Grab|Debug")
+	float GrabDistance = 0.0f;
+
+	bool bHasGrabPoint = false;
+
 	// In Drag_Component.h
 public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shelf")
@@ -122,6 +171,14 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shelf")
 	float ShelfMaxDistance = 50.f;  // How far shelf can pull out
+
+	/** Local-space direction in which this shelf/drawer opens. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Shelf")
+	FVector ShelfSlideAxis = FVector(0.0f, -1.0f, 0.0f);
+
+	/** Initial relative location captured at BeginPlay and used as the closed pose. */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Shelf")
+	FVector ShelfClosedLocation = FVector::ZeroVector;
 
 	/** Local-space direction in which the cupboard panel opens.
 	 *  Use (0, -1, 0) for right-to-left or (0, 1, 0) for left-to-right. */

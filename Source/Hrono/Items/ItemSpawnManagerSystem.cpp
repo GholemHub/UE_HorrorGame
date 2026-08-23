@@ -6,24 +6,45 @@
 
 namespace
 {
-	USceneComponent* FindChildSceneComponentByName(USceneComponent* Parent, FName ComponentName)
+	const FName ItemSpawnPointTag(TEXT("ItemSpawnPoint"));
+
+	bool IsItemSpawnPointComponent(const USceneComponent* Component)
 	{
-		if (!Parent || ComponentName.IsNone())
+		if (!Component)
 		{
-			return nullptr;
+			return false;
 		}
 
-		TArray<USceneComponent*> ChildComponents;
-		Parent->GetChildrenComponents(true, ChildComponents);
-		for (USceneComponent* ChildComponent : ChildComponents)
+		if (Component->ComponentHasTag(ItemSpawnPointTag))
 		{
-			if (ChildComponent && ChildComponent->GetFName() == ComponentName)
+			return true;
+		}
+
+		const FString ComponentName = Component->GetName();
+		return ComponentName == TEXT("PointSet")
+			|| ComponentName == TEXT("PointSetComponent")
+			|| ComponentName.EndsWith(TEXT("PointSet"));
+	}
+
+	void GatherItemSpawnPointComponents(
+		const AActor* Actor,
+		TArray<USceneComponent*>& OutComponents)
+	{
+		OutComponents.Reset();
+		if (!Actor)
+		{
+			return;
+		}
+
+		TArray<USceneComponent*> SceneComponents;
+		Actor->GetComponents(SceneComponents);
+		for (USceneComponent* SceneComponent : SceneComponents)
+		{
+			if (IsItemSpawnPointComponent(SceneComponent))
 			{
-				return ChildComponent;
+				OutComponents.AddUnique(SceneComponent);
 			}
 		}
-
-		return nullptr;
 	}
 }
 
@@ -273,28 +294,51 @@ int32 AItemSpawnManagerSystem::SpawnItemsAtRandomLocations(
 {
 	OutSpawnedItems.Reset();
 
-	TArray<AActor*> ShuffledLocations;
-	ShuffledLocations.Reserve(PossibleLocations.Num());
+	struct FSpawnLocationSlot
+	{
+		AActor* Owner = nullptr;
+		USceneComponent* AttachComponent = nullptr;
+	};
+
+	TArray<FSpawnLocationSlot> ShuffledSlots;
+	TSet<AActor*> SeenActors;
 
 	for (AActor* Location : PossibleLocations)
 	{
-		if (IsValid(Location) && Cast<ABase_Item>(Location))
+		if (!IsValid(Location)
+			|| !Cast<ABase_Item>(Location)
+			|| SeenActors.Contains(Location))
 		{
-			ShuffledLocations.AddUnique(Location);
+			continue;
+		}
+
+		SeenActors.Add(Location);
+
+		TArray<USceneComponent*> PointSets;
+		GatherItemSpawnPointComponents(Location, PointSets);
+		if (PointSets.IsEmpty())
+		{
+			ShuffledSlots.Add({ Location, nullptr });
+			continue;
+		}
+
+		for (USceneComponent* PointSet : PointSets)
+		{
+			ShuffledSlots.Add({ Location, PointSet });
 		}
 	}
 
-	for (int32 Index = ShuffledLocations.Num() - 1; Index > 0; --Index)
+	for (int32 Index = ShuffledSlots.Num() - 1; Index > 0; --Index)
 	{
 		const int32 SwapIndex = FMath::RandRange(0, Index);
-		ShuffledLocations.Swap(Index, SwapIndex);
+		ShuffledSlots.Swap(Index, SwapIndex);
 	}
 
 	const int32 TargetCount = ItemCount <= 0
-		? ShuffledLocations.Num()
-		: FMath::Min(ItemCount, ShuffledLocations.Num());
+		? ShuffledSlots.Num()
+		: FMath::Min(ItemCount, ShuffledSlots.Num());
 
-	for (AActor* Location : ShuffledLocations)
+	for (const FSpawnLocationSlot& Slot : ShuffledSlots)
 	{
 		if (OutSpawnedItems.Num() >= TargetCount)
 		{
@@ -302,9 +346,11 @@ int32 AItemSpawnManagerSystem::SpawnItemsAtRandomLocations(
 		}
 
 		FSpawnRequest LocationRequest = BaseRequest;
-		LocationRequest.Owner = Location;
-		LocationRequest.SpawnTransform = Location->GetActorTransform();
-		LocationRequest.AttachToComponent = nullptr;
+		LocationRequest.Owner = Slot.Owner;
+		LocationRequest.SpawnTransform = Slot.AttachComponent
+			? Slot.AttachComponent->GetComponentTransform()
+			: Slot.Owner->GetActorTransform();
+		LocationRequest.AttachToComponent = Slot.AttachComponent;
 		LocationRequest.AttachSocketName = NAME_None;
 
 		FSpawnedItemInfo SpawnedInfo;
@@ -364,28 +410,9 @@ USceneComponent* AItemSpawnManagerSystem::ResolveAttachComponent(const FSpawnReq
 
 	auto FindPointSetComponent = [](const AActor* Actor) -> USceneComponent*
 	{
-		if (!Actor)
-		{
-			return nullptr;
-		}
-
-		TArray<USceneComponent*> SceneComponents;
-		Actor->GetComponents(SceneComponents);
-		for (USceneComponent* SceneComponent : SceneComponents)
-		{
-			if (!SceneComponent)
-			{
-				continue;
-			}
-
-			const FName ComponentName = SceneComponent->GetFName();
-			if (ComponentName == TEXT("PointSetComponent") || ComponentName == TEXT("PointSet"))
-			{
-				return SceneComponent;
-			}
-		}
-
-		return nullptr;
+		TArray<USceneComponent*> PointSets;
+		GatherItemSpawnPointComponents(Actor, PointSets);
+		return PointSets.IsEmpty() ? nullptr : PointSets[0];
 	};
 
 	if (USceneComponent* OwnerPointSet = FindPointSetComponent(Request.Owner.Get()))

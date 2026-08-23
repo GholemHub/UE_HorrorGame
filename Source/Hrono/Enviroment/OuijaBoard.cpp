@@ -321,7 +321,7 @@ FString AOuijaBoard::EnterTypedText()
 
 void AOuijaBoard::DrawArrowCenterPoint() const
 {
-	if (!bShowArrowCenterPoint || !GetWorld())
+	if (!bEnableDebugLogs || !bShowArrowCenterPoint || !GetWorld())
 	{
 		return;
 	}
@@ -399,7 +399,7 @@ void AOuijaBoard::AnnounceDetectedLetter()
 		return;
 	}
 
-	if (GEngine)
+	if (bEnableDebugLogs && GEngine)
 	{
 		GEngine->AddOnScreenDebugMessage(
 			-1,

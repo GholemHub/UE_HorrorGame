@@ -111,6 +111,22 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "Pentagram|Events")
 	FPentagramCompletedDelegate OnPentagramCompleted;
 
+	/** Fired immediately when the first correct rune is inserted. */
+	UFUNCTION(BlueprintImplementableEvent, Category = "Pentagram|Events",
+		meta = (DisplayName = "On First Rune Inserted"))
+	void BP_OnFirstRuneInserted(
+		ARune_Item* InsertedRune,
+		AHronoCharacter* PlayerWhoInsertedRune,
+		FName SlotId);
+
+	/** Fired immediately when the second correct rune is inserted. */
+	UFUNCTION(BlueprintImplementableEvent, Category = "Pentagram|Events",
+		meta = (DisplayName = "On Second Rune Inserted"))
+	void BP_OnSecondRuneInserted(
+		ARune_Item* InsertedRune,
+		AHronoCharacter* PlayerWhoInsertedRune,
+		FName SlotId);
+
 	/**
 	 * Automatic Blueprint event invoked once after all three correct runes are inserted.
 	 * It is intentionally not BlueprintCallable: Blueprint receives this event but
@@ -153,6 +169,14 @@ protected:
 		ARune_Item* Rune,
 		FName SlotId,
 		FName ResultReason);
+
+	/** Delivers the insertion-order Blueprint event on the server and every client. */
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastRuneInserted(
+		ARune_Item* InsertedRune,
+		AHronoCharacter* PlayerWhoInsertedRune,
+		FName SlotId,
+		int32 InsertedRuneCount);
 
 	UFUNCTION()
 	void OnRep_RuneSlots();
