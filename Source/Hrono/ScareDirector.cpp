@@ -16,7 +16,7 @@
 #include "Kismet/KismetSystemLibrary.h"
 #include "Net/UnrealNetwork.h"
 #include "TimerManager.h"
-#include "UObject/ConstructorHelpers.h"
+#include "UObject/UObjectGlobals.h"
 
 #if !UE_BUILD_SHIPPING
 #include "HAL/IConsoleManager.h"
@@ -51,19 +51,6 @@ AScareDirector::AScareDirector()
 		EGhostHuntOmen::GhostManifestation
 	};
 
-	static ConstructorHelpers::FClassFinder<AActor> BabajClassFinder(
-		TEXT("/Game/_Alex/AI/BP_Babaj"));
-	if (BabajClassFinder.Succeeded())
-	{
-		BabajClass = BabajClassFinder.Class;
-	}
-
-	static ConstructorHelpers::FClassFinder<ABase_Item> BabajSpawnPointClassFinder(
-		TEXT("/Game/_Alex/Room/BP_ItemPointSpawn"));
-	if (BabajSpawnPointClassFinder.Succeeded())
-	{
-		BabajSpawnPointClass = BabajSpawnPointClassFinder.Class;
-	}
 }
 
 void AScareDirector::BeginPlay()
@@ -77,6 +64,25 @@ void AScareDirector::BeginPlay()
 	if (!HasAuthority())
 	{
 		return;
+	}
+
+	// Do not load Blueprint classes in the native constructor. Loading BP_Babaj
+	// while Unreal creates this class's CDO re-enters the Blueprint dependency
+	// graph, requests the same CDO, and deadlocks Blueprint compilation.
+	// At BeginPlay the CDO and all Blueprint classes are fully linked, making these
+	// fallback loads safe. Blueprint-assigned overrides remain untouched.
+	if (!BabajClass)
+	{
+		BabajClass = LoadClass<AActor>(
+			nullptr,
+			TEXT("/Game/_Alex/AI/BP_Babaj.BP_Babaj_C"));
+	}
+
+	if (!BabajSpawnPointClass)
+	{
+		BabajSpawnPointClass = LoadClass<ABase_Item>(
+			nullptr,
+			TEXT("/Game/_Alex/Room/BP_ItemPointSpawn.BP_ItemPointSpawn_C"));
 	}
 
 	int32 DirectorCount = 0;
@@ -555,7 +561,7 @@ void AScareDirector::DispatchThreatStateChanged(EGhostThreatState OldState, EGho
 	{
 		if (NewState == EGhostThreatState::HuntEligible)
 		{
-			SpawnBabajForFinalAggression();
+			SpawnBabajAtRandomPoint();
 		}
 
 		if (bAnimateDoorsOnThreatStateChanges && NewState == EGhostThreatState::Manifesting)
@@ -569,26 +575,11 @@ void AScareDirector::DispatchThreatStateChanged(EGhostThreatState OldState, EGho
 	}
 }
 
-void AScareDirector::SpawnBabajForFinalAggression()
+bool AScareDirector::SpawnBabajAtRandomPoint()
 {
 	if (!HasAuthority() || !GetWorld())
 	{
-		return;
-	}
-
-	if (ActiveBabaj.IsValid())
-	{
-		UE_LOG(LogGhostHuntDirector, Verbose,
-			TEXT("[%s] Babaj %s is already active; duplicate final-aggression spawn skipped."),
-			*GetName(), *ActiveBabaj->GetName());
-		return;
-	}
-
-	if (!BabajClass)
-	{
-		UE_LOG(LogGhostHuntDirector, Error,
-			TEXT("[%s] BabajClass is not configured."), *GetName());
-		return;
+		return false;
 	}
 
 	TArray<ABase_Item*> ValidSpawnPoints;
@@ -618,7 +609,7 @@ void AScareDirector::SpawnBabajForFinalAggression()
 		UE_LOG(LogGhostHuntDirector, Error,
 			TEXT("[%s] Cannot spawn BP_Babaj: no valid BP_ItemPointSpawn actors were configured or found."),
 			*GetName());
-		return;
+		return false;
 	}
 
 	ABase_Item* SpawnPoint = ValidSpawnPoints[FMath::RandRange(0, ValidSpawnPoints.Num() - 1)];
@@ -627,30 +618,14 @@ void AScareDirector::SpawnBabajForFinalAggression()
 		? SpawnComponent->GetComponentTransform()
 		: SpawnPoint->GetActorTransform();
 
-	FActorSpawnParameters SpawnParameters;
-	SpawnParameters.Owner = this;
-	SpawnParameters.SpawnCollisionHandlingOverride =
-		ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
-
-	AActor* SpawnedBabaj = GetWorld()->SpawnActor<AActor>(
-		BabajClass,
-		SpawnTransform,
-		SpawnParameters);
-
-	if (!IsValid(SpawnedBabaj))
-	{
-		UE_LOG(LogGhostHuntDirector, Error,
-			TEXT("[%s] Failed to spawn BP_Babaj at %s."), *GetName(), *SpawnPoint->GetName());
-		return;
-	}
-
 	const float Lifetime = FMath::Clamp(BabajLifetime, 0.1f, 40.0f);
-	SpawnedBabaj->SetLifeSpan(Lifetime);
-	ActiveBabaj = SpawnedBabaj;
+	ReceiveSpawnBabaj(SpawnPoint, SpawnTransform, BabajClass, Lifetime);
 
 	UE_LOG(LogGhostHuntDirector, Log,
-		TEXT("[%s] Spawned %s at %s for %.1f seconds (final aggression stage)."),
-		*GetName(), *SpawnedBabaj->GetName(), *SpawnPoint->GetName(), Lifetime);
+		TEXT("[%s] Requested Blueprint Babaj spawn at random point %s."),
+		*GetName(), *SpawnPoint->GetName());
+
+	return true;
 }
 
 USceneComponent* AScareDirector::ResolveBabajSpawnComponent(const ABase_Item* SpawnPoint) const

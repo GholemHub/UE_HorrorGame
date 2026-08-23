@@ -289,12 +289,21 @@ bool ARunePentagram::TryPlaceRuneInMatchingSlot(
 
 	*TargetPlacedRune = Rune;
 	ForceNetUpdate();
+	const int32 PlacedRuneCount = GetPlacedRuneCount();
 
 	UE_LOG(LogTemp, Log,
 		TEXT("[RunePentagram] INSERTED Rune=%s RuneId=%s Slot=%s Progress=%d/3"),
 		*GetNameSafe(Rune), *Rune->RuneId.ToString(), *TargetSlotId.ToString(),
-		GetPlacedRuneCount());
+		PlacedRuneCount);
 
+	if (PlacedRuneCount < 3)
+	{
+		MulticastRuneInserted(
+			Rune,
+			PlacingCharacter,
+			TargetSlotId,
+			PlacedRuneCount);
+	}
 	MulticastRuneInteractionResult(
 		true, Rune, TargetSlotId, RunePentagramNames::Accepted);
 	CheckPentagramCompletion(PlacingCharacter);
@@ -370,6 +379,28 @@ void ARunePentagram::MulticastRuneInteractionResult_Implementation(
 	SetLastInteractionDebug(ResultText, bAccepted);
 	UE_LOG(LogTemp, Warning, TEXT("[PentagramDebug] RESULT %s"), *ResultText);
 	OnRuneInteractionResult.Broadcast(bAccepted, Rune, SlotId, ResultReason);
+}
+
+void ARunePentagram::MulticastRuneInserted_Implementation(
+	ARune_Item* InsertedRune,
+	AHronoCharacter* PlayerWhoInsertedRune,
+	FName SlotId,
+	int32 InsertedRuneCount)
+{
+	switch (InsertedRuneCount)
+	{
+	case 1:
+		BP_OnFirstRuneInserted(InsertedRune, PlayerWhoInsertedRune, SlotId);
+		break;
+	case 2:
+		BP_OnSecondRuneInserted(InsertedRune, PlayerWhoInsertedRune, SlotId);
+		break;
+	default:
+		UE_LOG(LogTemp, Warning,
+			TEXT("[RunePentagram] Ignored invalid inserted-rune progress %d for %s"),
+			InsertedRuneCount, *GetName());
+		break;
+	}
 }
 
 void ARunePentagram::OnRep_RuneSlots()

@@ -121,6 +121,14 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Hunt|AI")
 	void SetHuntDemon(AActor* NewHuntDemon);
 
+	/**
+	 * Selects a random configured Babaj spawn point and invokes the Spawn Babaj Blueprint event.
+	 * Returns false when called on a client or when no valid spawn point is available.
+	 */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Hunt|Babaj",
+		meta = (DisplayName = "Spawn Babaj At Random Point"))
+	bool SpawnBabajAtRandomPoint();
+
 	// ---- Authoritative AI perception / hiding bridge ----------------------------------------
 
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Hunt|AI")
@@ -192,6 +200,18 @@ public:
 
 	UFUNCTION(BlueprintImplementableEvent, Category = "Hunt|Events", meta = (DisplayName = "Receive Hunt Omen Triggered"))
 	void ReceiveHuntOmenTriggered(EGhostHuntOmen Omen, EItemTimeline TargetTimeline);
+
+	/**
+	 * Server-only request fired when aggression enters HuntEligible. Implement this event in
+	 * BP_ScareDirector and use Spawn Actor from Class to create Babaj yourself.
+	 */
+	UFUNCTION(BlueprintImplementableEvent, BlueprintAuthorityOnly, Category = "Hunt|Babaj",
+		meta = (DisplayName = "Spawn Babaj"))
+	void ReceiveSpawnBabaj(
+		ABase_Item* SpawnPoint,
+		FTransform SpawnTransform,
+		TSubclassOf<AActor> SuggestedBabajClass,
+		float SuggestedLifetime);
 
 	// ---- Editable tuning ---------------------------------------------------------------------
 
@@ -281,7 +301,7 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hunt|Lights")
 	bool bTurnOffAllLightsOnThreatStateChange = true;
 
-	/** Babaj spawned when aggression first enters the final HuntEligible stage. */
+	/** Optional class passed to the Spawn Babaj Blueprint event as a convenient default. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hunt|Babaj")
 	TSubclassOf<AActor> BabajClass;
 
@@ -296,7 +316,7 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hunt|Babaj")
 	TSubclassOf<ABase_Item> BabajSpawnPointClass;
 
-	/** Babaj is destroyed automatically after this time. Runtime is always capped at 40 seconds. */
+	/** Suggested lifetime passed to the Spawn Babaj Blueprint event. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hunt|Babaj",
 		meta = (ClampMin = "0.1", ClampMax = "40.0", Units = "s"))
 	float BabajLifetime = 40.0f;
@@ -388,7 +408,6 @@ private:
 	void DispatchHuntStateChanged(EGhostHuntState OldState, EGhostHuntState NewState);
 	void AnimateAllDoorsForThreatState(bool bOpen, const FString& Reason);
 	void TurnOffAllLightsForThreatState(EGhostThreatState NewState);
-	void SpawnBabajForFinalAggression();
 	USceneComponent* ResolveBabajSpawnComponent(const ABase_Item* SpawnPoint) const;
 	void StartDebugScreenTimer();
 	void HandleDebugScreenTimer();
@@ -440,7 +459,6 @@ private:
 	FString LastHuntStateChangeReason = TEXT("No hunt transition yet");
 	TWeakObjectPtr<AActor> TargetedPlayer;
 	TWeakObjectPtr<AActor> DebugTestPlayer;
-	TWeakObjectPtr<AActor> ActiveBabaj;
 	TArray<EGhostHuntOmen> SelectedHuntOmens;
 
 	struct FDebugTuningBackup
