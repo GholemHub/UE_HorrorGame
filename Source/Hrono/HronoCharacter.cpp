@@ -1096,6 +1096,16 @@ void AHronoCharacter::HandleDrag(const FHitResult& HitResult)
 		}
 	}
 
+	if (Item->IsDoorBlockedForTimeline(CharacterTimeline))
+	{
+		UE_LOG(LogTemp, Log,
+			TEXT("[DoorBarricade] %s cannot drag %s in timeline %s"),
+			*GetNameSafe(this),
+			*GetNameSafe(Item),
+			*StaticEnum<EItemTimeline>()->GetNameStringByValue(static_cast<int64>(CharacterTimeline)));
+		return;
+	}
+
 	CurrentDraggedComponent = DragComponent;
 
 	APlayerController* PC = Cast<APlayerController>(GetController());
@@ -1144,7 +1154,12 @@ void AHronoCharacter::DoUnDrag()
 
 void AHronoCharacter::Server_SetDoorRotation_Implementation(ADrag_Item* Door, FRotator NewRotation)
 {
-	if (!Door)
+	if (!IsValid(Door)
+		|| NewRotation.ContainsNaN()
+		|| Door->IsDoorBlockedForTimeline(CharacterTimeline)
+		|| (Door->ItemTimeline != EItemTimeline::Both && Door->ItemTimeline != CharacterTimeline)
+		|| FVector::DistSquared(GetActorLocation(), Door->GetActorLocation())
+			> FMath::Square(InteractTraceDistance + 200.0f))
 	{
 		return;
 	}
@@ -1157,7 +1172,12 @@ void AHronoCharacter::Server_SetDoorPanelRotation_Implementation(
 	FName DoorComponentName,
 	FRotator NewRotation)
 {
-	if (!Door)
+	if (!IsValid(Door)
+		|| NewRotation.ContainsNaN()
+		|| Door->IsDoorBlockedForTimeline(CharacterTimeline)
+		|| (Door->ItemTimeline != EItemTimeline::Both && Door->ItemTimeline != CharacterTimeline)
+		|| FVector::DistSquared(GetActorLocation(), Door->GetActorLocation())
+			> FMath::Square(InteractTraceDistance + 200.0f))
 	{
 		return;
 	}
