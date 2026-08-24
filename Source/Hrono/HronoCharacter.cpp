@@ -1259,6 +1259,46 @@ bool AHronoCharacter::ReleaseHeldItemForPlacement(ABase_Item* Item)
 	return true;
 }
 
+bool AHronoCharacter::TransferHeldItemTo(AHronoCharacter* TargetCharacter, ABase_Item* Item)
+{
+	if (!HasAuthority()
+		|| !IsValid(TargetCharacter)
+		|| TargetCharacter == this
+		|| !IsValid(Item)
+		|| CurrentHeldItem != Item
+		|| Item->OwningCharacter != this
+		|| IsValid(TargetCharacter->CurrentHeldItem)
+		|| !IsValid(TargetCharacter->GetActiveInteractionPoint()))
+	{
+		return false;
+	}
+
+	CurrentHeldItem = nullptr;
+	Item->OnHeldStateChanged(false, this);
+
+	Item->OwningCharacter = TargetCharacter;
+	Item->SetOwner(TargetCharacter);
+	TargetCharacter->CurrentHeldItem = Item;
+
+	if (!Item->AttachToCharacter())
+	{
+		TargetCharacter->CurrentHeldItem = nullptr;
+		Item->OwningCharacter = this;
+		Item->SetOwner(this);
+		CurrentHeldItem = Item;
+		Item->AttachToCharacter();
+		ForceNetUpdate();
+		TargetCharacter->ForceNetUpdate();
+		Item->ForceNetUpdate();
+		return false;
+	}
+
+	ForceNetUpdate();
+	TargetCharacter->ForceNetUpdate();
+	Item->ForceNetUpdate();
+	return true;
+}
+
 void AHronoCharacter::Server_SetShelfPosition_Implementation(ADrag_Item* Shelf, const FVector& NewPosition)
 {
 	if (!Shelf)

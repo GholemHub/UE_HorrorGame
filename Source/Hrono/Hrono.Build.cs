@@ -19,6 +19,7 @@ public class Hrono : ModuleRules
 			"GameplayStateTreeModule",
 			"UMG",
 			"Slate",
+			"Niagara",
             "GameplayTags",
             "OnlineSubsystem",
 			"OnlineSubsystemUtils"

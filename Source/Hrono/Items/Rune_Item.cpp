@@ -28,9 +28,9 @@ void ARune_Item::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifeti
 	DOREPLIFETIME(ARune_Item, bRitualCompleted);
 }
 
-void ARune_Item::OnRep_OwningCharacter()
+void ARune_Item::OnRep_OwningCharacter(AHronoCharacter* PreviousOwningCharacter)
 {
-	Super::OnRep_OwningCharacter();
+	Super::OnRep_OwningCharacter(PreviousOwningCharacter);
 
 	// OwningCharacter and placement state are independent replicated fields.
 	// Whichever RepNotify arrives last must leave a placed rune locked in its slot.

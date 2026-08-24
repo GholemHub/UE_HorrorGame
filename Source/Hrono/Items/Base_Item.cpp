@@ -41,6 +41,24 @@ void ABase_Item::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifeti
 
 	DOREPLIFETIME(ABase_Item, OwningCharacter);
 	DOREPLIFETIME(ABase_Item, ItemTimeline);
+	DOREPLIFETIME(ABase_Item, MirrorTransferState);
+}
+
+void ABase_Item::SetMirrorTransferState(EMirrorItemTransferState NewState)
+{
+	if (!HasAuthority() || MirrorTransferState == NewState)
+	{
+		return;
+	}
+
+	MirrorTransferState = NewState;
+	OnMirrorTransferStateChanged(MirrorTransferState);
+	ForceNetUpdate();
+}
+
+void ABase_Item::OnRep_MirrorTransferState()
+{
+	OnMirrorTransferStateChanged(MirrorTransferState);
 }
 
 void ABase_Item::SetItemTimeline(EItemTimeline NewTimeline)
@@ -249,10 +267,15 @@ void ABase_Item::OnPickedUp(AHronoCharacter* Character)
 }
 
 
-void ABase_Item::OnRep_OwningCharacter()
+void ABase_Item::OnRep_OwningCharacter(AHronoCharacter* PreviousOwningCharacter)
 {
 	if (OwningCharacter)
 	{
+		if (IsValid(PreviousOwningCharacter) && PreviousOwningCharacter != OwningCharacter)
+		{
+			OnHeldStateChanged(false, PreviousOwningCharacter);
+		}
+
 		// Clients run attachment logic here
 		AttachToCharacter();
 		UGameplayStatics::PlaySoundAtLocation(this, PickupSound, GetActorLocation());
@@ -260,8 +283,6 @@ void ABase_Item::OnRep_OwningCharacter()
 	}
 	else
 	{
-		AHronoCharacter* PreviousOwningCharacter = Cast<AHronoCharacter>(GetOwner());
-
 		// OwningCharacter was cleared — item was dropped on client side
 		DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
 
