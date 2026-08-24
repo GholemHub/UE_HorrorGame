@@ -8,6 +8,9 @@
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "EngineUtils.h"
+#include "GeometryCollection/GeometryCollectionComponent.h"
+#include "GeometryCollection/GeometryCollectionObject.h"
+#include "UObject/ConstructorHelpers.h"
 #include "Kismet/GameplayStatics.h"
 #include "Net/UnrealNetwork.h"
 #include "Sound/SoundBase.h"
@@ -28,11 +31,33 @@ ADoorBarricadeBoard::ADoorBarricadeBoard()
 	BoardMesh->SetCollisionResponseToAllChannels(ECR_Ignore);
 	BoardMesh->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
 	BoardMesh->SetGenerateOverlapEvents(false);
+
+	DestructibleBoard = CreateDefaultSubobject<UGeometryCollectionComponent>(TEXT("DestructibleBoard"));
+	DestructibleBoard->SetupAttachment(SceneRoot);
+	DestructibleBoard->SetVisibility(false, true);
+	DestructibleBoard->SetHiddenInGame(true, true);
+	DestructibleBoard->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	DestructibleBoard->SetGenerateOverlapEvents(false);
+	DestructibleBoard->SetSimulatePhysics(false);
+
+	static ConstructorHelpers::FObjectFinder<UGeometryCollection> BoardCollection(
+		TEXT("/Game/_Alex/ChaosDestruction/GC_BP_DoorBarricadeBoard.GC_BP_DoorBarricadeBoard"));
+	if (BoardCollection.Succeeded())
+	{
+		DestructibleBoard->SetRestCollection(BoardCollection.Object);
+	}
 }
 
 void ADoorBarricadeBoard::BeginPlay()
 {
 	Super::BeginPlay();
+
+	// Keep the authored fractured mesh aligned with the intact board even when
+	// the Blueprint child adjusts the native BoardMesh transform or scale.
+	if (BoardMesh && DestructibleBoard)
+	{
+		DestructibleBoard->SetRelativeTransform(BoardMesh->GetRelativeTransform());
+	}
 
 	ApplyTimelineCollision();
 	UpdateLocalVisibility();
@@ -99,12 +124,23 @@ void ADoorBarricadeBoard::Interact_Implementation(AActor* Interactor)
 		return;
 	}
 
+	// The axe owns the swing cadence. Refuse the interaction while it is still
+	// returning to its held pose (or during its short recovery), so repeated
+	// interaction RPCs cannot break boards faster than the animation allows.
+	if (!Axe->TryStartSwing())
+	{
+		return;
+	}
+
 	bBroken = true;
 	ADrag_Item* DoorThatWasBlocked = BlockedDoor;
 	UnregisterFromDoor();
 	MulticastBoardBroken(Character, DoorThatWasBlocked);
 	ForceNetUpdate();
-	SetLifeSpan(0.2f);
+	if (DebrisLifetime > 0.0f)
+	{
+		SetLifeSpan(DebrisLifetime);
+	}
 }
 
 void ADoorBarricadeBoard::SetBlockedDoor(ADrag_Item* NewDoor)
@@ -134,10 +170,9 @@ void ADoorBarricadeBoard::OnRep_BlockedDoor()
 
 void ADoorBarricadeBoard::OnRep_Broken()
 {
-	if (bBroken && BoardMesh)
+	if (bBroken)
 	{
-		BoardMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		BoardMesh->SetVisibility(false, true);
+		ActivateChaosDestruction();
 	}
 }
 
@@ -145,7 +180,7 @@ void ADoorBarricadeBoard::MulticastBoardBroken_Implementation(
 	AHronoCharacter* BreakingCharacter,
 	ADrag_Item* DoorThatWasBlocked)
 {
-	OnRep_Broken();
+	ActivateChaosDestruction();
 
 	APlayerController* LocalController = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
 	const AHronoCharacter* LocalCharacter = LocalController
@@ -234,11 +269,20 @@ void ADoorBarricadeBoard::ApplyTimelineCollision()
 	BoardMesh->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
 	BoardMesh->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_PAST, bPast ? ECR_Block : ECR_Ignore);
 	BoardMesh->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_FUTURE, bFuture ? ECR_Block : ECR_Ignore);
+
+	if (DestructibleBoard && bChaosDestructionActivated)
+	{
+		DestructibleBoard->SetCollisionResponseToAllChannels(ECR_Ignore);
+		DestructibleBoard->SetCollisionResponseToChannel(ECC_WorldStatic, ECR_Block);
+		DestructibleBoard->SetCollisionResponseToChannel(ECC_WorldDynamic, ECR_Block);
+		DestructibleBoard->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_PAST, bPast ? ECR_Block : ECR_Ignore);
+		DestructibleBoard->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_FUTURE, bFuture ? ECR_Block : ECR_Ignore);
+	}
 }
 
 void ADoorBarricadeBoard::UpdateLocalVisibility()
 {
-	if (!BoardMesh || bBroken || !GetWorld())
+	if (!GetWorld())
 	{
 		return;
 	}
@@ -249,7 +293,47 @@ void ADoorBarricadeBoard::UpdateLocalVisibility()
 		: nullptr;
 	if (LocalCharacter)
 	{
-		BoardMesh->SetVisibility(DoesTimelineMatch(LocalCharacter->GetTimeline()), true);
+		const bool bVisibleInLocalTimeline = DoesTimelineMatch(LocalCharacter->GetTimeline());
+		if (BoardMesh)
+		{
+			BoardMesh->SetVisibility(!bBroken && bVisibleInLocalTimeline, true);
+		}
+		if (DestructibleBoard)
+		{
+			const bool bShowDebris = bBroken && bChaosDestructionActivated && bVisibleInLocalTimeline;
+			DestructibleBoard->SetVisibility(bShowDebris, true);
+			DestructibleBoard->SetHiddenInGame(!bShowDebris, true);
+		}
+	}
+}
+
+void ADoorBarricadeBoard::ActivateChaosDestruction()
+{
+	if (!bBroken)
+	{
+		return;
+	}
+
+	if (BoardMesh)
+	{
+		BoardMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		BoardMesh->SetVisibility(false, true);
+	}
+
+	if (!DestructibleBoard || !DestructibleBoard->GetRestCollection())
+	{
+		return;
+	}
+
+	if (!bChaosDestructionActivated)
+	{
+		bChaosDestructionActivated = true;
+		DestructibleBoard->SetHiddenInGame(false, true);
+		DestructibleBoard->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+		DestructibleBoard->SetSimulatePhysics(true);
+		ApplyTimelineCollision();
+		DestructibleBoard->CrumbleActiveClusters();
+		UpdateLocalVisibility();
 	}
 }
 

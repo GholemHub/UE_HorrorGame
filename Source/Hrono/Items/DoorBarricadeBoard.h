@@ -8,6 +8,7 @@
 
 class ADrag_Item;
 class AHronoCharacter;
+class UGeometryCollectionComponent;
 class USceneComponent;
 class USoundBase;
 class UStaticMeshComponent;
@@ -39,6 +40,10 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Barricade|Components")
 	TObjectPtr<UStaticMeshComponent> BoardMesh;
 
+	/** Hidden fractured version of BoardMesh. It is activated when the axe breaks the board. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Barricade|Components")
+	TObjectPtr<UGeometryCollectionComponent> DestructibleBoard;
+
 	/** Timeline in which this board is visible, solid, and blocks its door. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, ReplicatedUsing = OnRep_BoardTimeline,
 		Category = "Barricade|Timeline")
@@ -63,6 +68,11 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Barricade|Audio")
 	TObjectPtr<USoundBase> BreakSound;
+
+	/** Time before the broken board actor and its debris are cleaned up. Zero keeps them forever. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Barricade|Destruction",
+		meta = (ClampMin = "0.0", Units = "s"))
+	float DebrisLifetime = 8.0f;
 
 	UPROPERTY(BlueprintAssignable, Category = "Barricade|Events")
 	FDoorBarricadeBrokenSignature OnBarricadeBroken;
@@ -97,9 +107,11 @@ private:
 	void UnregisterFromDoor();
 	void ApplyTimelineCollision();
 	void UpdateLocalVisibility();
+	void ActivateChaosDestruction();
 	bool DoesTimelineMatch(EItemTimeline OtherTimeline) const;
 
 	bool bRegisteredWithDoor = false;
+	bool bChaosDestructionActivated = false;
 
 	UPROPERTY(ReplicatedUsing = OnRep_Broken)
 	bool bBroken = false;
