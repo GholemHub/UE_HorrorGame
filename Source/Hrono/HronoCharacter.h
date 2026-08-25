@@ -266,6 +266,10 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Items")
 	bool ReleaseHeldItemForPlacement(class ABase_Item* Item);
 
+	/** Moves the same held actor directly to another character without a physics drop. Server only. */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Items|Mirror Transfer")
+	bool TransferHeldItemTo(AHronoCharacter* TargetCharacter, class ABase_Item* Item);
+
 	/** True only while the character overlaps a HidingWardrobe safety volume and
 	 *  both wardrobe doors are below that wardrobe's unsafe angle. */
 	UPROPERTY(ReplicatedUsing = OnRep_IsSafeInHidingWardrobe, VisibleInstanceOnly,

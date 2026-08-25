@@ -3,6 +3,7 @@
 
 #include "Items/Drag_Item.h"
 #include "Components/Drag_Component.h"
+#include "HronoCharacter.h"
 #include "HronoCollisionChannels.h"
 #include "Net/UnrealNetwork.h"
 #include "Components/AudioComponent.h"
@@ -56,7 +57,69 @@ void ADrag_Item::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifeti
     DOREPLIFETIME(ADrag_Item, bIsShelfOpen);
 	DOREPLIFETIME(ADrag_Item, bNeedKeyActor);
 	DOREPLIFETIME(ADrag_Item, RequiredKeyTag);
+	DOREPLIFETIME(ADrag_Item, PastBarricadeCount);
+	DOREPLIFETIME(ADrag_Item, FutureBarricadeCount);
 
+}
+
+bool ADrag_Item::IsDoorBlockedForTimeline(EItemTimeline Timeline) const
+{
+	switch (Timeline)
+	{
+	case EItemTimeline::Past:
+		return PastBarricadeCount > 0;
+	case EItemTimeline::Future:
+		return FutureBarricadeCount > 0;
+	case EItemTimeline::Both:
+	default:
+		return PastBarricadeCount > 0 || FutureBarricadeCount > 0;
+	}
+}
+
+void ADrag_Item::RegisterDoorBarricade(EItemTimeline Timeline, bool bRegister)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	const int32 Delta = bRegister ? 1 : -1;
+	if (Timeline == EItemTimeline::Past || Timeline == EItemTimeline::Both)
+	{
+		PastBarricadeCount = FMath::Max(0, PastBarricadeCount + Delta);
+	}
+	if (Timeline == EItemTimeline::Future || Timeline == EItemTimeline::Both)
+	{
+		FutureBarricadeCount = FMath::Max(0, FutureBarricadeCount + Delta);
+	}
+
+	OnRep_BarricadeCounts();
+	ForceNetUpdate();
+}
+
+void ADrag_Item::OnRep_BarricadeCounts()
+{
+	APlayerController* LocalController = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
+	const AHronoCharacter* LocalCharacter = LocalController
+		? Cast<AHronoCharacter>(LocalController->GetPawn())
+		: nullptr;
+	if (!LocalCharacter || !IsDoorBlockedForTimeline(LocalCharacter->GetTimeline()))
+	{
+		return;
+	}
+
+	TInlineComponentArray<UDrag_Component*> DragComponents(this);
+	for (UDrag_Component* Component : DragComponents)
+	{
+		if (IsValid(Component) && Component->bIsRotating)
+		{
+			Component->StopDrag();
+		}
+	}
+
+	// Snap away any client-predicted movement that began before the replicated
+	// barricade count arrived.
+	OnRep_DoorRotation();
 }
 
 FGameplayTag ADrag_Item::GetRequiredKeyTag() const
@@ -103,6 +166,16 @@ void ADrag_Item::AnimateDoor(bool bOpen)
 	{
 		UE_LOG(LogTemp, Log,
 			TEXT("AnimateDoor ignored for %s because Allow Animate Door Open Close is disabled"),
+			*GetName());
+		return;
+	}
+
+	// Automatic opening has no initiating player timeline. Keep a barricaded door
+	// closed if any timeline is protected; closing requests are always allowed.
+	if (bOpen && IsDoorBlockedForTimeline(EItemTimeline::Both))
+	{
+		UE_LOG(LogTemp, Log,
+			TEXT("AnimateDoor ignored for %s because an intact barricade blocks it"),
 			*GetName());
 		return;
 	}

@@ -137,6 +137,24 @@ public:
 	/** Broadcasts OnDragStarted. Called by UDrag_Component when a drag begins. */
 	void NotifyDragStarted(bool bShelf);
 
+	/** True when one or more intact barricade boards block this door for Timeline. */
+	UFUNCTION(BlueprintPure, Category = "Door|Barricade")
+	bool IsDoorBlockedForTimeline(EItemTimeline Timeline) const;
+
+	/** Authority-only registration used by DoorBarricadeBoard. Multiple boards stack safely. */
+	void RegisterDoorBarricade(EItemTimeline Timeline, bool bRegister);
+
+	/** Replicated number of intact boards affecting players in the past timeline. */
+	UPROPERTY(ReplicatedUsing = OnRep_BarricadeCounts, VisibleInstanceOnly, BlueprintReadOnly, Category = "Door|Barricade")
+	int32 PastBarricadeCount = 0;
+
+	/** Replicated number of intact boards affecting players in the future timeline. */
+	UPROPERTY(ReplicatedUsing = OnRep_BarricadeCounts, VisibleInstanceOnly, BlueprintReadOnly, Category = "Door|Barricade")
+	int32 FutureBarricadeCount = 0;
+
+	UFUNCTION()
+	void OnRep_BarricadeCounts();
+
 	/** Yaw (in degrees) at or under which the panel is treated as fully closed. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Door")
 	float DoorClosedYawTolerance = 1.0f;

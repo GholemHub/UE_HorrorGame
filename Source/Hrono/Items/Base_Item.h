@@ -13,6 +13,16 @@
 class AHronoCharacter;
 class USoundBase;
 
+/** Network-visible lifecycle of an item offered through a bound mirror. */
+UENUM(BlueprintType)
+enum class EMirrorItemTransferState : uint8
+{
+	None,
+	Preview,
+	Pending,
+	Completed
+};
+
 UCLASS()
 class HRONO_API ABase_Item : public AActor
 {
@@ -32,6 +42,21 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Item TAG")
 	bool UsableValid = true;
+
+	/** Explicit opt-in: only these items may be offered through a bound mirror. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Item|Mirror Transfer")
+	bool bCanTransferThroughMirror = false;
+
+	/** Authoritative mirror-transfer state. Preview never creates another pickup item. */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, ReplicatedUsing = OnRep_MirrorTransferState,
+		Category = "Item|Mirror Transfer")
+	EMirrorItemTransferState MirrorTransferState = EMirrorItemTransferState::None;
+
+	UFUNCTION(BlueprintPure, Category = "Item|Mirror Transfer")
+	bool CanTransferThroughMirror() const { return bCanTransferThroughMirror; }
+
+	/** Server-only state mutation used by the mirror transfer surface. */
+	void SetMirrorTransferState(EMirrorItemTransferState NewState);
 
 	
 	bool HasTag(FGameplayTag Tag) const
@@ -83,7 +108,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Item")
 	virtual void UpdateMeshForLocalPlayer();
 
-	bool TryPickUp(AHronoCharacter* Character);
+	virtual bool TryPickUp(AHronoCharacter* Character);
 	void OnPickedUp(AHronoCharacter* Character);
 
 	bool AttachToCharacter();
@@ -105,7 +130,7 @@ public:
 	FTransform HoldOffset;
 
 	UFUNCTION()
-	virtual void OnRep_OwningCharacter();
+	virtual void OnRep_OwningCharacter(AHronoCharacter* PreviousOwningCharacter);
 
 	UFUNCTION(BlueprintCallable, Category = "Item")
 
@@ -122,6 +147,13 @@ public:
 
 	UFUNCTION()
 	void OnRep_ItemTimeline();
+
+	UFUNCTION()
+	void OnRep_MirrorTransferState();
+
+	/** Cosmetic hook for item-specific transfer effects. */
+	UFUNCTION(BlueprintImplementableEvent, Category = "Item|Mirror Transfer")
+	void OnMirrorTransferStateChanged(EMirrorItemTransferState NewState);
 	
 protected:
 	virtual void BeginPlay() override;

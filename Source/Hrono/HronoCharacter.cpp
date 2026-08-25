@@ -724,6 +724,20 @@ void AHronoCharacter::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 
+	// UCameraComponent applies bUsePawnControlRotation while producing the local
+	// player's camera view. That path is not evaluated for a remote pawn on the
+	// server (or on another client), even though CharacterMovement sends control
+	// rotation to the server and ACharacter replicates its remote view pitch.
+	// Explicitly consume those rotations for non-local copies so camera-attached
+	// InteractionPoint components, and in turn every held item, follow the owner.
+	if (!IsLocallyControlled() && IsValid(FirstPersonCameraComponent))
+	{
+		const FRotator ReplicatedViewRotation = HasAuthority()
+			? GetControlRotation()
+			: GetBaseAimRotation();
+		FirstPersonCameraComponent->SetWorldRotation(ReplicatedViewRotation);
+	}
+
 	if (HasAuthority())
 	{
 		UpdateStamina(DeltaTime);
@@ -1096,6 +1110,16 @@ void AHronoCharacter::HandleDrag(const FHitResult& HitResult)
 		}
 	}
 
+	if (Item->IsDoorBlockedForTimeline(CharacterTimeline))
+	{
+		UE_LOG(LogTemp, Log,
+			TEXT("[DoorBarricade] %s cannot drag %s in timeline %s"),
+			*GetNameSafe(this),
+			*GetNameSafe(Item),
+			*StaticEnum<EItemTimeline>()->GetNameStringByValue(static_cast<int64>(CharacterTimeline)));
+		return;
+	}
+
 	CurrentDraggedComponent = DragComponent;
 
 	APlayerController* PC = Cast<APlayerController>(GetController());
@@ -1144,7 +1168,12 @@ void AHronoCharacter::DoUnDrag()
 
 void AHronoCharacter::Server_SetDoorRotation_Implementation(ADrag_Item* Door, FRotator NewRotation)
 {
-	if (!Door)
+	if (!IsValid(Door)
+		|| NewRotation.ContainsNaN()
+		|| Door->IsDoorBlockedForTimeline(CharacterTimeline)
+		|| (Door->ItemTimeline != EItemTimeline::Both && Door->ItemTimeline != CharacterTimeline)
+		|| FVector::DistSquared(GetActorLocation(), Door->GetActorLocation())
+			> FMath::Square(InteractTraceDistance + 200.0f))
 	{
 		return;
 	}
@@ -1157,7 +1186,12 @@ void AHronoCharacter::Server_SetDoorPanelRotation_Implementation(
 	FName DoorComponentName,
 	FRotator NewRotation)
 {
-	if (!Door)
+	if (!IsValid(Door)
+		|| NewRotation.ContainsNaN()
+		|| Door->IsDoorBlockedForTimeline(CharacterTimeline)
+		|| (Door->ItemTimeline != EItemTimeline::Both && Door->ItemTimeline != CharacterTimeline)
+		|| FVector::DistSquared(GetActorLocation(), Door->GetActorLocation())
+			> FMath::Square(InteractTraceDistance + 200.0f))
 	{
 		return;
 	}
@@ -1236,6 +1270,46 @@ bool AHronoCharacter::ReleaseHeldItemForPlacement(ABase_Item* Item)
 	CurrentHeldItem = nullptr;
 
 	ForceNetUpdate();
+	return true;
+}
+
+bool AHronoCharacter::TransferHeldItemTo(AHronoCharacter* TargetCharacter, ABase_Item* Item)
+{
+	if (!HasAuthority()
+		|| !IsValid(TargetCharacter)
+		|| TargetCharacter == this
+		|| !IsValid(Item)
+		|| CurrentHeldItem != Item
+		|| Item->OwningCharacter != this
+		|| IsValid(TargetCharacter->CurrentHeldItem)
+		|| !IsValid(TargetCharacter->GetActiveInteractionPoint()))
+	{
+		return false;
+	}
+
+	CurrentHeldItem = nullptr;
+	Item->OnHeldStateChanged(false, this);
+
+	Item->OwningCharacter = TargetCharacter;
+	Item->SetOwner(TargetCharacter);
+	TargetCharacter->CurrentHeldItem = Item;
+
+	if (!Item->AttachToCharacter())
+	{
+		TargetCharacter->CurrentHeldItem = nullptr;
+		Item->OwningCharacter = this;
+		Item->SetOwner(this);
+		CurrentHeldItem = Item;
+		Item->AttachToCharacter();
+		ForceNetUpdate();
+		TargetCharacter->ForceNetUpdate();
+		Item->ForceNetUpdate();
+		return false;
+	}
+
+	ForceNetUpdate();
+	TargetCharacter->ForceNetUpdate();
+	Item->ForceNetUpdate();
 	return true;
 }
 

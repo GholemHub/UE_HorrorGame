@@ -103,7 +103,7 @@ public:
 		int32 RequiredRuneCount);
 
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
-	virtual void OnRep_OwningCharacter() override;
+	virtual void OnRep_OwningCharacter(AHronoCharacter* PreviousOwningCharacter) override;
 
 protected:
 	UFUNCTION(Server, Reliable)
