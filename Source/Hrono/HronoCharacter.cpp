@@ -724,6 +724,20 @@ void AHronoCharacter::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 
+	// UCameraComponent applies bUsePawnControlRotation while producing the local
+	// player's camera view. That path is not evaluated for a remote pawn on the
+	// server (or on another client), even though CharacterMovement sends control
+	// rotation to the server and ACharacter replicates its remote view pitch.
+	// Explicitly consume those rotations for non-local copies so camera-attached
+	// InteractionPoint components, and in turn every held item, follow the owner.
+	if (!IsLocallyControlled() && IsValid(FirstPersonCameraComponent))
+	{
+		const FRotator ReplicatedViewRotation = HasAuthority()
+			? GetControlRotation()
+			: GetBaseAimRotation();
+		FirstPersonCameraComponent->SetWorldRotation(ReplicatedViewRotation);
+	}
+
 	if (HasAuthority())
 	{
 		UpdateStamina(DeltaTime);
