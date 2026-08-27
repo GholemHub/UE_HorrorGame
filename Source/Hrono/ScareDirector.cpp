@@ -6,6 +6,7 @@
 #include "Components/SceneComponent.h"
 #include "Components/Drag_Component.h"
 #include "Enviroment/Light_Env.h"
+#include "Enviroment/Room.h"
 #include "Enviroment/Switcher_Env.h"
 #include "GameFramework/Controller.h"
 #include "GameFramework/Pawn.h"
@@ -104,6 +105,11 @@ void AScareDirector::BeginPlay()
 	RealWarningsSinceLastFalseAlarm = FMath::Max(0, MinimumRealWarningsBetweenFalseAlarms);
 	UpdateThreatState(TEXT("Director initialized"));
 
+	if (bChooseCursedRoomOnBeginPlay)
+	{
+		ChooseCursedRoom();
+	}
+
 	if (PassiveThreatPerInterval > 0.0f && PassiveThreatInterval > 0.0f)
 	{
 		GetWorldTimerManager().SetTimer(
@@ -141,6 +147,10 @@ void AScareDirector::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLi
 	DOREPLIFETIME(AScareDirector, CurrentHuntState);
 	DOREPLIFETIME(AScareDirector, CurrentHuntTimelineTarget);
 	DOREPLIFETIME(AScareDirector, CurrentHuntType);
+	DOREPLIFETIME(AScareDirector, CurrentCursedRoom);
+	DOREPLIFETIME(AScareDirector, ClockAnomalyPatternSeed);
+	DOREPLIFETIME(AScareDirector, HotDotPatternSeed);
+	DOREPLIFETIME(AScareDirector, PaintingPatternSeed);
 }
 
 AScareDirector* AScareDirector::GetHuntDirector(const UObject* WorldContextObject)
@@ -162,6 +172,211 @@ AScareDirector* AScareDirector::GetHuntDirector(const UObject* WorldContextObjec
 	}
 
 	return nullptr;
+}
+
+bool AScareDirector::ChooseCursedRoom()
+{
+	if (!HasAuthority() || !GetWorld())
+	{
+		return false;
+	}
+
+	TArray<ARoom*> ValidRooms;
+	ValidRooms.Reserve(CandidateRooms.Num());
+
+	for (ARoom* Room : CandidateRooms)
+	{
+		if (IsValid(Room))
+		{
+			ValidRooms.AddUnique(Room);
+		}
+	}
+
+	if (ValidRooms.IsEmpty())
+	{
+		for (TActorIterator<ARoom> It(GetWorld()); It; ++It)
+		{
+			if (IsValid(*It))
+			{
+				ValidRooms.Add(*It);
+			}
+		}
+	}
+
+	if (ValidRooms.IsEmpty())
+	{
+		UE_LOG(LogGhostHuntDirector, Warning,
+			TEXT("[%s] Cannot choose a cursed room: no Room actors are configured or placed."),
+			*GetName());
+		return false;
+	}
+
+	for (ARoom* Room : ValidRooms)
+	{
+		Room->SetCursed(false);
+	}
+
+	CurrentCursedRoom = ValidRooms[FMath::RandHelper(ValidRooms.Num())];
+	CurrentCursedRoom->SetCursed(true);
+	if (bConfigureRoomClockAnomalies)
+	{
+		ConfigureRoomClockAnomalies(ValidRooms);
+	}
+	if (bConfigureRoomHotDots)
+	{
+		ConfigureRoomHotDots(ValidRooms);
+	}
+	if (bConfigureRoomPaintingEvidence)
+	{
+		ConfigureRoomPaintingEvidence(ValidRooms);
+	}
+
+	if (bUseCursedRoomAsHuntOrigin)
+	{
+		HuntOriginActor = CurrentCursedRoom;
+	}
+
+	OnCursedRoomSelected.Broadcast(CurrentCursedRoom);
+	ReceiveCursedRoomSelected(CurrentCursedRoom);
+	ForceNetUpdate();
+
+	UE_LOG(LogGhostHuntDirector, Log,
+		TEXT("[%s] Selected cursed room %s from %d candidate(s)."),
+		*GetName(), *GetNameSafe(CurrentCursedRoom.Get()), ValidRooms.Num());
+	return true;
+}
+
+void AScareDirector::ConfigureRoomClockAnomalies(const TArray<ARoom*>& Rooms)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	ClockAnomalyPatternSeed = FMath::RandHelper(MAX_int32 - 1) + 1;
+	FRandomStream Random(ClockAnomalyPatternSeed);
+
+	TArray<int32> OrdinaryPatternDeck;
+	const int32 OrdinaryPatternCount = ARoom::GetOrdinaryClockPatternCount();
+	OrdinaryPatternDeck.Reserve(OrdinaryPatternCount);
+	for (int32 PatternIndex = 0; PatternIndex < OrdinaryPatternCount; ++PatternIndex)
+	{
+		OrdinaryPatternDeck.Add(PatternIndex);
+	}
+	for (int32 Index = OrdinaryPatternDeck.Num() - 1; Index > 0; --Index)
+	{
+		OrdinaryPatternDeck.Swap(Index, Random.RandRange(0, Index));
+	}
+
+	int32 OrdinaryRoomIndex = 0;
+	for (ARoom* Room : Rooms)
+	{
+		if (!IsValid(Room))
+		{
+			continue;
+		}
+
+		int32 PatternIndex = 0;
+		if (Room == CurrentCursedRoom)
+		{
+			PatternIndex = Random.RandRange(0, ARoom::GetCursedClockPatternCount() - 1);
+		}
+		else
+		{
+			const int32 DeckIndex = OrdinaryRoomIndex % OrdinaryPatternDeck.Num();
+			const int32 DeckCycle = OrdinaryRoomIndex / OrdinaryPatternDeck.Num();
+			PatternIndex = OrdinaryPatternDeck[DeckIndex] + DeckCycle * OrdinaryPatternDeck.Num();
+			++OrdinaryRoomIndex;
+		}
+
+		uint32 RoomSeedHash = HashCombine(GetTypeHash(ClockAnomalyPatternSeed), GetTypeHash(Room->GetPathName()));
+		RoomSeedHash = HashCombine(RoomSeedHash, GetTypeHash(PatternIndex));
+		const int32 RoomSeed = RoomSeedHash == 0 ? 1 : static_cast<int32>(RoomSeedHash);
+		Room->ConfigureClockAnomalies(PatternIndex, RoomSeed);
+	}
+
+	ForceNetUpdate();
+	UE_LOG(LogGhostHuntDirector, Log,
+		TEXT("[%s] Distributed clock anomaly patterns to %d room(s) with seed %d."),
+		*GetName(), Rooms.Num(), ClockAnomalyPatternSeed);
+}
+
+void AScareDirector::ConfigureRoomHotDots(const TArray<ARoom*>& Rooms)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	HotDotPatternSeed = FMath::RandHelper(MAX_int32 - 1) + 1;
+	FRandomStream Random(HotDotPatternSeed);
+	const int32 FirstOrdinaryPattern = Random.RandRange(0, 1);
+	int32 OrdinaryRoomIndex = 0;
+
+	for (ARoom* Room : Rooms)
+	{
+		if (!IsValid(Room))
+		{
+			continue;
+		}
+
+		const bool bCursedRoom = Room == CurrentCursedRoom;
+		const int32 PatternIndex = bCursedRoom
+			? 0
+			: FirstOrdinaryPattern + OrdinaryRoomIndex++;
+		uint32 RoomSeedHash = HashCombine(GetTypeHash(HotDotPatternSeed), GetTypeHash(Room->GetPathName()));
+		RoomSeedHash = HashCombine(RoomSeedHash, GetTypeHash(PatternIndex));
+		Room->ConfigureHotDots(
+			PatternIndex,
+			RoomSeedHash == 0 ? 1 : static_cast<int32>(RoomSeedHash));
+	}
+
+	ForceNetUpdate();
+	UE_LOG(LogGhostHuntDirector, Log,
+		TEXT("[%s] Distributed HotDot activation patterns to %d room(s) with seed %d."),
+		*GetName(), Rooms.Num(), HotDotPatternSeed);
+}
+
+void AScareDirector::ConfigureRoomPaintingEvidence(const TArray<ARoom*>& Rooms)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	PaintingPatternSeed = FMath::RandHelper(MAX_int32 - 1) + 1;
+	FRandomStream Random(PaintingPatternSeed);
+	const int32 FirstOrdinaryPattern = Random.RandRange(0, 2);
+	int32 OrdinaryRoomIndex = 0;
+
+	for (ARoom* Room : Rooms)
+	{
+		if (!IsValid(Room))
+		{
+			continue;
+		}
+
+		const bool bCursedRoom = Room == CurrentCursedRoom;
+		const int32 PatternIndex = bCursedRoom
+			? 0
+			: FirstOrdinaryPattern + OrdinaryRoomIndex++;
+		uint32 RoomSeedHash = HashCombine(GetTypeHash(PaintingPatternSeed), GetTypeHash(Room->GetPathName()));
+		RoomSeedHash = HashCombine(RoomSeedHash, GetTypeHash(PatternIndex));
+		Room->ConfigurePaintingEvidence(
+			PatternIndex,
+			RoomSeedHash == 0 ? 1 : static_cast<int32>(RoomSeedHash));
+	}
+
+	ForceNetUpdate();
+	UE_LOG(LogGhostHuntDirector, Log,
+		TEXT("[%s] Distributed painting evidence patterns to %d room(s) with seed %d."),
+		*GetName(), Rooms.Num(), PaintingPatternSeed);
+}
+
+void AScareDirector::OnRep_CurrentCursedRoom()
+{
+	OnCursedRoomSelected.Broadcast(CurrentCursedRoom);
+	ReceiveCursedRoomSelected(CurrentCursedRoom);
 }
 
 void AScareDirector::AddThreat(float Amount)

@@ -7,6 +7,7 @@
 
 class AScareDirector;
 class ABase_Item;
+class ARoom;
 class USceneComponent;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FGhostThreatStateChangedSignature, EGhostThreatState, OldState, EGhostThreatState, NewState);
@@ -14,6 +15,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FGhostHuntStateChangedSignature, EG
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FGhostHuntPhaseSignature, EItemTimeline, TargetTimeline);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FGhostHuntOmenSignature, EGhostHuntOmen, Omen, EItemTimeline, TargetTimeline);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_FiveParams(FGhostHuntStimulusSignature, EGhostHuntStimulus, Stimulus, AActor*, SubjectActor, AActor*, InterestActor, FVector, StimulusLocation, EItemTimeline, StimulusTimeline);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FCursedRoomSelectedSignature, ARoom*, CursedRoom);
 
 /**
  * Server-authoritative, timer-driven Hunt Director.
@@ -117,6 +119,18 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Hunt|AI")
 	FVector GetLastKnownPlayerPosition() const { return LastKnownPlayerPosition; }
 
+	// ---- Cursed room -------------------------------------------------------------------------
+
+	/**
+	 * Chooses one valid configured room on the server and clears the cursed state from all others.
+	 * If CandidateRooms is empty, every placed native Room actor is considered.
+	 */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Hunt|Room")
+	bool ChooseCursedRoom();
+
+	UFUNCTION(BlueprintPure, Category = "Hunt|Room")
+	ARoom* GetCursedRoom() const { return CurrentCursedRoom; }
+
 	/** Set the Demon pawn or its AI Controller. It should implement GhostHuntAIInterface. */
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Hunt|AI")
 	void SetHuntDemon(AActor* NewHuntDemon);
@@ -179,6 +193,9 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "Hunt|Events")
 	FGhostHuntStimulusSignature OnHuntStimulus;
 
+	UPROPERTY(BlueprintAssignable, Category = "Hunt|Room")
+	FCursedRoomSelectedSignature OnCursedRoomSelected;
+
 	// Blueprint override events are convenient inside the existing BP_ScareDirector child.
 	UFUNCTION(BlueprintImplementableEvent, Category = "Hunt|Events", meta = (DisplayName = "Receive Threat State Changed"))
 	void ReceiveThreatStateChanged(EGhostThreatState OldState, EGhostThreatState NewState);
@@ -212,6 +229,10 @@ public:
 		FTransform SpawnTransform,
 		TSubclassOf<AActor> SuggestedBabajClass,
 		float SuggestedLifetime);
+
+	UFUNCTION(BlueprintImplementableEvent, Category = "Hunt|Room",
+		meta = (DisplayName = "Receive Cursed Room Selected"))
+	void ReceiveCursedRoomSelected(ARoom* CursedRoom);
 
 	// ---- Editable tuning ---------------------------------------------------------------------
 
@@ -329,6 +350,32 @@ public:
 	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category = "Hunt|AI")
 	TObjectPtr<AActor> HuntDemon;
 
+	// ---- Cursed room -------------------------------------------------------------------------
+
+	/** Optional explicit room pool. When empty, all placed Room actors are discovered. */
+	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category = "Hunt|Room")
+	TArray<TObjectPtr<ARoom>> CandidateRooms;
+
+	/** Select exactly one cursed room when the authoritative Director starts. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hunt|Room")
+	bool bChooseCursedRoomOnBeginPlay = true;
+
+	/** Makes the selected room the default origin for hunt searches and manifestations. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hunt|Room")
+	bool bUseCursedRoomAsHuntOrigin = true;
+
+	/** Distributes deterministic, non-repeating clock anomaly patterns after selecting the room. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hunt|Room|Clocks")
+	bool bConfigureRoomClockAnomalies = true;
+
+	/** Configures two HotDots per room: both in cursed rooms, one in ordinary rooms. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hunt|Room|HotDots")
+	bool bConfigureRoomHotDots = true;
+
+	/** Selects replicated Blueprint-driven painting evidence for every room. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hunt|Room|Paintings")
+	bool bConfigureRoomPaintingEvidence = true;
+
 	// ---- Development-only controls (all are no-ops in Shipping) -----------------------------
 
 	/** Shows a timer-refreshed Print String panel. Numeric Threat is visible only on authority. */
@@ -386,11 +433,28 @@ protected:
 	UPROPERTY(Replicated, VisibleInstanceOnly, BlueprintReadOnly, Category = "Hunt|State")
 	EGhostHuntType CurrentHuntType = EGhostHuntType::Organic;
 
+	UPROPERTY(ReplicatedUsing = OnRep_CurrentCursedRoom, VisibleInstanceOnly, BlueprintReadOnly,
+		Category = "Hunt|Room")
+	TObjectPtr<ARoom> CurrentCursedRoom;
+
+	/** One random seed per game; replicated so the selected pattern can be inspected in Blueprint. */
+	UPROPERTY(Replicated, VisibleInstanceOnly, BlueprintReadOnly, Category = "Hunt|Room|Clocks")
+	int32 ClockAnomalyPatternSeed = 0;
+
+	UPROPERTY(Replicated, VisibleInstanceOnly, BlueprintReadOnly, Category = "Hunt|Room|HotDots")
+	int32 HotDotPatternSeed = 0;
+
+	UPROPERTY(Replicated, VisibleInstanceOnly, BlueprintReadOnly, Category = "Hunt|Room|Paintings")
+	int32 PaintingPatternSeed = 0;
+
 	UFUNCTION()
 	void OnRep_CurrentThreatState(EGhostThreatState PreviousState);
 
 	UFUNCTION()
 	void OnRep_CurrentHuntState(EGhostHuntState PreviousState);
+
+	UFUNCTION()
+	void OnRep_CurrentCursedRoom();
 
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastTriggerHuntOmen(EGhostHuntOmen Omen, EItemTimeline TargetTimeline);
@@ -399,6 +463,9 @@ protected:
 	void MulticastFalseAlarmResolved(EItemTimeline TargetTimeline);
 
 private:
+	void ConfigureRoomClockAnomalies(const TArray<ARoom*>& Rooms);
+	void ConfigureRoomHotDots(const TArray<ARoom*>& Rooms);
+	void ConfigureRoomPaintingEvidence(const TArray<ARoom*>& Rooms);
 	void HandlePassiveThreatTimer();
 	void SetThreatInternal(float Value, const FString& Reason);
 	void UpdateThreatState(const FString& Reason);
