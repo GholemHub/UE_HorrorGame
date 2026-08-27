@@ -19,6 +19,7 @@
 #include "Components/SpotLightComponent.h"
 #include "Interface/Enviroment_Interface.h"
 #include "Items/Base_Item.h"
+#include "Items/Clock.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "Engine/Engine.h"
@@ -1401,7 +1402,14 @@ void AHronoCharacter::PickupItem(ABase_Item* Item)
 
 	if (Item->ItemType == EItemType::Clock)
 	{
-		Item->Use(this);
+		if (AClock* Clock = Cast<AClock>(Item))
+		{
+			Clock->ResetClock(this);
+		}
+		else
+		{
+			Item->Use(this);
+		}
 
 		UE_LOG(LogTemp, Log, TEXT("RESET"));
 
