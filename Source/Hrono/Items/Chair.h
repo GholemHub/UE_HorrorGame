@@ -23,6 +23,17 @@ public:
 	AChair();
 	virtual void Use_Implementation(AActor* Character) override;
 
+	/**
+	 * Teleports SelectedCharacter to SitPoint and seats them immediately, regardless
+	 * of where they are or whether they were sitting on another chair.
+	 *
+	 * If this chair is occupied, its previous sitter is moved to StandUpPoint first.
+	 * Call this on the authority (for example from the ritual table Blueprint).
+	 */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Chair|Ritual",
+		meta = (DisplayName = "On Back To Ritual Table"))
+	bool OnBacktToRitualTable(AHronoCharacter* SelectedCharacter);
+
 	/** Fired after a character successfully sits on this chair. */
 	UPROPERTY(BlueprintAssignable, Category = "Chair")
 	FOnCharacterSatOnChair OnCharacterSat;

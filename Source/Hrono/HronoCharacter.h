@@ -531,6 +531,40 @@ public:
 
 	void SitOnChair(AChair* Chair);
 
+	/** Server-only forced chair transfer used by ritual chair Blueprint actions. */
+	bool ForceSitOnChair(AChair* Chair);
+
+	/**
+	 * Moves this same pawn from its table chair to RitualPoint without spawning or
+	 * possessing another character. The original chair remains reserved, but the
+	 * character leaves the sitting state and can walk at the ritual location.
+	 */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Chair|Ritual",
+		meta = (DisplayName = "Move From Chair To Ritual Point"))
+	bool MoveFromChairToRitualPoint(AActor* RitualPoint);
+
+	/** Returns this same pawn to the chair reserved before the ritual teleport. */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Chair|Ritual",
+		meta = (DisplayName = "Return To Reserved Ritual Chair"))
+	bool ReturnToReservedRitualChair();
+
+	UFUNCTION(BlueprintPure, Category = "Chair|Ritual")
+	AChair* GetReservedRitualChair() const { return ReservedRitualChair; }
+
+	UPROPERTY(Replicated, VisibleInstanceOnly, BlueprintReadOnly, Category = "Chair|Ritual")
+	TObjectPtr<AChair> ReservedRitualChair;
+
+	UPROPERTY(ReplicatedUsing = OnRep_RitualPositionState, VisibleInstanceOnly,
+		BlueprintReadOnly, Category = "Chair|Ritual")
+	bool bIsAtRitualPoint = false;
+
+	UPROPERTY(ReplicatedUsing = OnRep_RitualPositionState, VisibleInstanceOnly,
+		BlueprintReadOnly, Category = "Chair|Ritual")
+	TObjectPtr<AActor> RitualDestinationActor;
+
+	UFUNCTION()
+	void OnRep_RitualPositionState();
+
 	UFUNCTION(Server, Reliable, WithValidation)
 	void Server_SetShelfPosition(ADrag_Item* Shelf, const FVector& NewPosition);
 
@@ -569,6 +603,9 @@ public:
 	virtual void OnStartCrouch(float HalfHeightAdjust, float ScaledHalfHeightAdjust) override;
 
 	private:
+		/** Prevents duplicate cosmetic sit/stand events from two RepNotify properties. */
+		bool bLocalRitualPositionApplied = false;
+
 		void OnEnyInteractTrace(FHitResult HitResult);
 		void OnMakeInteractImpulse(FHitResult HitResult);
 };

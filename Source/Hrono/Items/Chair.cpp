@@ -37,6 +37,41 @@ void AChair::Use_Implementation(AActor* Character)
     Hrono->SitOnChair(this);
 }
 
+bool AChair::OnBacktToRitualTable(AHronoCharacter* SelectedCharacter)
+{
+	if (!HasAuthority())
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("[Chair] OnBacktToRitualTable ignored for %s because it was not called on the server"),
+			*GetName());
+		return false;
+	}
+
+	if (!IsValid(SelectedCharacter))
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("[Chair] OnBacktToRitualTable failed for %s: Selected Character is invalid"),
+			*GetName());
+		return false;
+	}
+
+	// Prefer the exact chair reserved before the victim was moved to the ritual
+	// point. Falling back to this chair preserves manual/non-ritual use.
+	const bool bWasSeated = IsValid(SelectedCharacter->GetReservedRitualChair())
+		? SelectedCharacter->ReturnToReservedRitualChair()
+		: SelectedCharacter->ForceSitOnChair(this);
+	if (!bWasSeated)
+	{
+		return false;
+	}
+
+	UGameplayStatics::PlaySoundAtLocation(
+		this,
+		SitSound,
+		GetActorLocation());
+	return true;
+}
+
 void AChair::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
     Super::GetLifetimeReplicatedProps(OutLifetimeProps);
