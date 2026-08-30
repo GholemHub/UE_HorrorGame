@@ -101,7 +101,7 @@ void AOuijaBoard::Tick(float DeltaSeconds)
 
 void AOuijaBoard::Interact_Implementation(AActor* Interactor)
 {
-	if (!HasAuthority())
+	if (!HasAuthority() || bIsAutomaticallyTyping)
 	{
 		return;
 	}
@@ -111,7 +111,7 @@ void AOuijaBoard::Interact_Implementation(AActor* Interactor)
 
 bool AOuijaBoard::TraceBoardFromInteractor(AActor* Interactor)
 {
-	if (!HasAuthority() || !IsValid(Interactor) || !GetWorld())
+	if (!HasAuthority() || bIsAutomaticallyTyping || !IsValid(Interactor) || !GetWorld())
 	{
 		return false;
 	}
@@ -157,7 +157,7 @@ bool AOuijaBoard::TraceBoardFromInteractor(AActor* Interactor)
 
 void AOuijaBoard::MoveArrowToWorldPoint(const FVector& WorldPoint)
 {
-	if (!HasAuthority())
+	if (!HasAuthority() || bIsAutomaticallyTyping)
 	{
 		return;
 	}
@@ -191,11 +191,7 @@ bool AOuijaBoard::CheckArrowLetterCollision(FString& OutLetter)
 
 	if (OverlappingIndex == INDEX_NONE)
 	{
-		CurrentLetterBoxIndex = INDEX_NONE;
-		HoveredLetter.Reset();
-		LetterReadTimeRemaining = 0.0f;
-		bHoveringTextButton = false;
-		bCurrentLetterAccepted = false;
+		ResetHoveredInputState();
 		return false;
 	}
 
@@ -284,6 +280,7 @@ void AOuijaBoard::AcceptHoveredInput(int32 InputBoxIndex, const FString& InputLa
 		AnnounceDetectedLetter();
 		BP_OnTypedTextChanged(TypedText);
 		OnNewLetterTyped.Broadcast(LastDetectedLetter, TypedText);
+		HandleAutomaticLetterAccepted(InputLabel);
 	}
 	else if (InputBoxIndex == LetterCollisionBoxes.Num())
 	{
@@ -291,7 +288,20 @@ void AOuijaBoard::AcceptHoveredInput(int32 InputBoxIndex, const FString& InputLa
 	}
 	else
 	{
+		const bool bCompletingAutomaticTyping = bIsAutomaticallyTyping
+			&& bAutomaticTypingIsSubmitting;
+		const FString CompletedAutomaticWord = AutomaticTypingWord;
+		if (bCompletingAutomaticTyping)
+		{
+			ClearAutomaticTypingState();
+		}
+
 		EnterTypedText();
+
+		if (bCompletingAutomaticTyping)
+		{
+			BroadcastAutomaticTypingFinished(CompletedAutomaticWord);
+		}
 	}
 }
 
@@ -301,6 +311,8 @@ void AOuijaBoard::CancelTypedText()
 	{
 		return;
 	}
+
+	ClearAutomaticTypingState();
 	TypedText.Reset();
 	DetectedLetters.Reset();
 	LastDetectedLetter.Reset();
@@ -315,8 +327,269 @@ FString AOuijaBoard::EnterTypedText()
 	{
 		return TypedText;
 	}
-	BP_OnTextEntered(TypedText);
-	return TypedText;
+
+	const FString EnteredText = TypedText;
+	BP_OnTextEntered(EnteredText);
+
+	if (!IsTypedWordCorrect())
+	{
+		OnRequiredWordRejected.Broadcast(EnteredText);
+		BP_OnIncorrectWordEntered(EnteredText);
+		CancelTypedText();
+		return EnteredText;
+	}
+
+	if (!bRequiredWordAccepted || !bAcceptRequiredWordOnlyOnce)
+	{
+		bRequiredWordAccepted = true;
+		OnRequiredWordAccepted.Broadcast(EnteredText);
+		BP_OnCorrectWordEntered(EnteredText);
+		ForceNetUpdate();
+	}
+
+	return EnteredText;
+}
+
+bool AOuijaBoard::IsTypedWordCorrect() const
+{
+	const FString NormalizedRequiredWord = NormalizePuzzleWord(RequiredWord);
+	if (NormalizedRequiredWord.IsEmpty())
+	{
+		return false;
+	}
+
+	const FString NormalizedTypedText = NormalizePuzzleWord(TypedText);
+	const ESearchCase::Type SearchCase = bIgnoreRequiredWordCase
+		? ESearchCase::IgnoreCase
+		: ESearchCase::CaseSensitive;
+	return NormalizedTypedText.Equals(NormalizedRequiredWord, SearchCase);
+}
+
+void AOuijaBoard::ResetWordPuzzle(bool bClearTypedText)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	bRequiredWordAccepted = false;
+	if (bClearTypedText)
+	{
+		CancelTypedText();
+	}
+	else
+	{
+		ForceNetUpdate();
+	}
+}
+
+bool AOuijaBoard::TypeWordAutomatically(
+	const FString& Word,
+	bool bClearExistingText,
+	bool bPressEnterWhenFinished)
+{
+	if (!HasAuthority())
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("[OuijaBoard] Type Word Automatically ignored for %s because it was not called on the server"),
+			*GetName());
+		return false;
+	}
+
+	FString SanitizedWord;
+	if (!SanitizeAutomaticWord(Word, SanitizedWord))
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("[OuijaBoard] %s cannot type '%s'. Only letters A-Z and spaces are supported"),
+			*GetName(),
+			*Word);
+		return false;
+	}
+
+	ClearAutomaticTypingState();
+	if (bClearExistingText)
+	{
+		CancelTypedText();
+	}
+
+	AutomaticTypingWord = SanitizedWord;
+	AutomaticTypingLetterIndex = 0;
+	bAutomaticTypingShouldPressEnter = bPressEnterWhenFinished;
+	bAutomaticTypingIsSubmitting = false;
+	bIsAutomaticallyTyping = true;
+	ResetHoveredInputState();
+	MoveArrowToCurrentAutomaticLetter();
+
+	OnAutomaticTypingStarted.Broadcast(AutomaticTypingWord);
+	BP_OnAutomaticTypingStarted(AutomaticTypingWord);
+
+	UE_LOG(LogTemp, Log,
+		TEXT("[OuijaBoard] %s started automatically typing '%s'"),
+		*GetName(),
+		*AutomaticTypingWord);
+	return true;
+}
+
+void AOuijaBoard::CancelAutomaticTyping(bool bClearTypedText)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	ClearAutomaticTypingState();
+	if (bClearTypedText)
+	{
+		CancelTypedText();
+	}
+	else
+	{
+		ForceNetUpdate();
+	}
+}
+
+FString AOuijaBoard::NormalizePuzzleWord(const FString& Word) const
+{
+	FString NormalizedWord = Word;
+	if (bTrimRequiredWordWhitespace)
+	{
+		NormalizedWord.TrimStartAndEndInline();
+	}
+	return NormalizedWord;
+}
+
+bool AOuijaBoard::SanitizeAutomaticWord(const FString& Word, FString& OutSanitizedWord) const
+{
+	OutSanitizedWord.Reset();
+	const FString UpperWord = Word.ToUpper();
+	for (const TCHAR Character : UpperWord)
+	{
+		if (Character >= TEXT('A') && Character <= TEXT('Z'))
+		{
+			OutSanitizedWord.AppendChar(Character);
+		}
+		else if (!FChar::IsWhitespace(Character))
+		{
+			OutSanitizedWord.Reset();
+			return false;
+		}
+	}
+
+	return !OutSanitizedWord.IsEmpty();
+}
+
+void AOuijaBoard::MoveArrowToInputBox(const UBoxComponent* InputBox)
+{
+	if (!HasAuthority() || !IsValid(InputBox) || !IsValid(ArrowMesh) || !IsValid(BoardMesh))
+	{
+		return;
+	}
+
+	// CheckArrowLetterCollision tests ArrowMesh bounds rather than its pivot. The
+	// offset correction keeps meshes with an off-centre pivot over the box too.
+	const FVector ArrowBoundsOffset = ArrowMesh->Bounds.Origin - ArrowMesh->GetComponentLocation();
+	const FVector DesiredArrowComponentLocation = InputBox->GetComponentLocation() - ArrowBoundsOffset;
+	FVector DesiredLocalLocation = BoardMesh->GetComponentTransform().InverseTransformPosition(
+		DesiredArrowComponentLocation);
+	DesiredLocalLocation.X = FMath::Clamp(
+		DesiredLocalLocation.X,
+		-BoardHalfExtents.X,
+		BoardHalfExtents.X);
+	DesiredLocalLocation.Y = FMath::Clamp(
+		DesiredLocalLocation.Y,
+		-BoardHalfExtents.Y,
+		BoardHalfExtents.Y);
+	DesiredLocalLocation.Z = ArrowHeight;
+
+	ArrowLocalLocation = DesiredLocalLocation;
+	ApplyArrowTarget(false);
+	ForceNetUpdate();
+}
+
+void AOuijaBoard::MoveArrowToCurrentAutomaticLetter()
+{
+	if (!bIsAutomaticallyTyping
+		|| bAutomaticTypingIsSubmitting
+		|| !AutomaticTypingWord.IsValidIndex(AutomaticTypingLetterIndex))
+	{
+		return;
+	}
+
+	const TCHAR Letter = AutomaticTypingWord[AutomaticTypingLetterIndex];
+	const int32 LetterIndex = static_cast<int32>(Letter - TEXT('A'));
+	if (!LetterCollisionBoxes.IsValidIndex(LetterIndex))
+	{
+		CancelAutomaticTyping(false);
+		return;
+	}
+
+	MoveArrowToInputBox(LetterCollisionBoxes[LetterIndex]);
+}
+
+void AOuijaBoard::HandleAutomaticLetterAccepted(const FString& Letter)
+{
+	if (!bIsAutomaticallyTyping
+		|| bAutomaticTypingIsSubmitting
+		|| !AutomaticTypingWord.IsValidIndex(AutomaticTypingLetterIndex))
+	{
+		return;
+	}
+
+	const FString ExpectedLetter = AutomaticTypingWord.Mid(AutomaticTypingLetterIndex, 1);
+	if (!Letter.Equals(ExpectedLetter, ESearchCase::CaseSensitive))
+	{
+		return;
+	}
+
+	++AutomaticTypingLetterIndex;
+	ResetHoveredInputState();
+
+	if (AutomaticTypingWord.IsValidIndex(AutomaticTypingLetterIndex))
+	{
+		MoveArrowToCurrentAutomaticLetter();
+		return;
+	}
+
+	if (bAutomaticTypingShouldPressEnter)
+	{
+		bAutomaticTypingIsSubmitting = true;
+		MoveArrowToInputBox(EnterCollisionBox);
+		return;
+	}
+
+	const FString CompletedWord = AutomaticTypingWord;
+	ClearAutomaticTypingState();
+	ForceNetUpdate();
+	BroadcastAutomaticTypingFinished(CompletedWord);
+}
+
+void AOuijaBoard::ClearAutomaticTypingState()
+{
+	bIsAutomaticallyTyping = false;
+	AutomaticTypingWord.Reset();
+	AutomaticTypingLetterIndex = INDEX_NONE;
+	bAutomaticTypingShouldPressEnter = true;
+	bAutomaticTypingIsSubmitting = false;
+}
+
+void AOuijaBoard::BroadcastAutomaticTypingFinished(const FString& CompletedWord)
+{
+	OnAutomaticTypingFinished.Broadcast(CompletedWord);
+	BP_OnAutomaticTypingFinished(CompletedWord);
+
+	UE_LOG(LogTemp, Log,
+		TEXT("[OuijaBoard] %s finished automatically typing '%s'"),
+		*GetName(),
+		*CompletedWord);
+}
+
+void AOuijaBoard::ResetHoveredInputState()
+{
+	CurrentLetterBoxIndex = INDEX_NONE;
+	HoveredLetter.Reset();
+	LetterReadTimeRemaining = 0.0f;
+	bHoveringTextButton = false;
+	bCurrentLetterAccepted = false;
 }
 
 void AOuijaBoard::DrawArrowCenterPoint() const
@@ -428,4 +701,8 @@ void AOuijaBoard::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifet
 	DOREPLIFETIME(AOuijaBoard, LastDetectedLetter);
 	DOREPLIFETIME(AOuijaBoard, DetectedLetters);
 	DOREPLIFETIME(AOuijaBoard, TypedText);
+	DOREPLIFETIME(AOuijaBoard, bRequiredWordAccepted);
+	DOREPLIFETIME(AOuijaBoard, bIsAutomaticallyTyping);
+	DOREPLIFETIME(AOuijaBoard, AutomaticTypingWord);
+	DOREPLIFETIME(AOuijaBoard, AutomaticTypingLetterIndex);
 }

@@ -38,6 +38,9 @@ void AHronoCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutL
 	DOREPLIFETIME(AHronoCharacter, MaxStamina);
 	DOREPLIFETIME(AHronoCharacter, CurrentChair);
 	DOREPLIFETIME(AHronoCharacter, bIsSitting);
+	DOREPLIFETIME(AHronoCharacter, ReservedRitualChair);
+	DOREPLIFETIME(AHronoCharacter, bIsAtRitualPoint);
+	DOREPLIFETIME(AHronoCharacter, RitualDestinationActor);
 	DOREPLIFETIME(AHronoCharacter, bIsSafeInHidingWardrobe);
 	DOREPLIFETIME(AHronoCharacter, bTimelineMirrorRequested);
 	DOREPLIFETIME(AHronoCharacter, CurrentHeldItem);
@@ -1013,6 +1016,10 @@ void AHronoCharacter::StandUp()
 
 	CurrentChair = nullptr;
 	bIsSitting = false;
+	ReservedRitualChair = nullptr;
+	bIsAtRitualPoint = false;
+	RitualDestinationActor = nullptr;
+	bLocalRitualPositionApplied = false;
 
 	// RepNotify is not called on the authority, so invoke it manually to keep the
 	// server (listen-server host) in sync with clients.
@@ -1034,6 +1041,10 @@ void AHronoCharacter::SitOnChair(AChair* Chair)
 
 	CurrentChair = Chair;
 	bIsSitting = true;
+	ReservedRitualChair = Chair;
+	bIsAtRitualPoint = false;
+	RitualDestinationActor = nullptr;
+	bLocalRitualPositionApplied = false;
 
 	Chair->bIsSit = true;
 	Chair->SetSitter(this);
@@ -1041,6 +1052,173 @@ void AHronoCharacter::SitOnChair(AChair* Chair)
 	// RepNotify is not called on the authority, so invoke it manually to keep the
 	// server (listen-server host) in sync with clients.
 	OnRep_CurrentChair(PreviousChair);
+}
+
+bool AHronoCharacter::ForceSitOnChair(AChair* Chair)
+{
+	if (!HasAuthority() || !IsValid(Chair))
+	{
+		return false;
+	}
+
+	// This operation is intentionally forceful: the selected ritual character must
+	// own the target chair even if stale state or another sitter currently occupies it.
+	if (AHronoCharacter* PreviousSitter = Chair->GetSitter();
+		IsValid(PreviousSitter) && PreviousSitter != this)
+	{
+		AChair* PreviousSitterChair = PreviousSitter->CurrentChair;
+		if (IsValid(PreviousSitterChair))
+		{
+			PreviousSitterChair->bIsSit = false;
+			PreviousSitterChair->SetSitter(nullptr);
+			PreviousSitterChair->ForceNetUpdate();
+		}
+
+		PreviousSitter->CurrentChair = nullptr;
+		PreviousSitter->bIsSitting = false;
+		PreviousSitter->OnRep_CurrentChair(PreviousSitterChair);
+		PreviousSitter->ForceNetUpdate();
+	}
+
+	AChair* PreviousChair = CurrentChair;
+	if (IsValid(PreviousChair) && PreviousChair != Chair)
+	{
+		PreviousChair->bIsSit = false;
+		if (PreviousChair->GetSitter() == this)
+		{
+			PreviousChair->SetSitter(nullptr);
+		}
+		PreviousChair->ForceNetUpdate();
+	}
+
+	CurrentChair = Chair;
+	bIsSitting = true;
+	ReservedRitualChair = Chair;
+	bIsAtRitualPoint = false;
+	RitualDestinationActor = nullptr;
+	bLocalRitualPositionApplied = false;
+	Chair->bIsSit = true;
+	Chair->SetSitter(this);
+
+	// RepNotify does not execute automatically on the authority. This performs the
+	// teleport and invokes the existing Blueprint OnSitStarted hook immediately.
+	OnRep_CurrentChair(PreviousChair);
+	Chair->ForceNetUpdate();
+	ForceNetUpdate();
+	return true;
+}
+
+bool AHronoCharacter::MoveFromChairToRitualPoint(AActor* RitualPoint)
+{
+	if (!HasAuthority() || !IsValid(RitualPoint))
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("[ChairRitual] Move failed for %s: authority=%d RitualPoint=%s"),
+			*GetName(),
+			HasAuthority(),
+			*GetNameSafe(RitualPoint));
+		return false;
+	}
+
+	AChair* ChairToReserve = IsValid(CurrentChair)
+		? CurrentChair
+		: ReservedRitualChair.Get();
+	if (!IsValid(ChairToReserve) || ChairToReserve->GetSitter() != this)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("[ChairRitual] Move failed for %s: character is not registered on a chair"),
+			*GetName());
+		return false;
+	}
+
+	ReservedRitualChair = ChairToReserve;
+	bIsSitting = false;
+	bIsAtRitualPoint = true;
+	RitualDestinationActor = RitualPoint;
+	bLocalRitualPositionApplied = true;
+
+	if (UCharacterMovementComponent* Movement = GetCharacterMovement())
+	{
+		Movement->StopMovementImmediately();
+		Movement->SetMovementMode(MOVE_Walking);
+	}
+
+	// Leave the sitting animation/state without using HandleSitEnded, because that
+	// helper would first teleport the pawn to the chair's StandUpPoint.
+	OnSitEnded();
+
+	SetActorLocationAndRotation(
+		RitualPoint->GetActorLocation(),
+		RitualPoint->GetActorRotation(),
+		false,
+		nullptr,
+		ETeleportType::TeleportPhysics);
+
+	UE_LOG(LogTemp, Log,
+		TEXT("[ChairRitual] Moved %s from reserved chair %s to %s without possession"),
+		*GetName(),
+		*GetNameSafe(ReservedRitualChair),
+		*GetNameSafe(RitualPoint));
+
+	ForceNetUpdate();
+	return true;
+}
+
+bool AHronoCharacter::ReturnToReservedRitualChair()
+{
+	if (!HasAuthority() || !IsValid(ReservedRitualChair))
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("[ChairRitual] Return failed for %s: authority=%d ReservedChair=%s"),
+			*GetName(),
+			HasAuthority(),
+			*GetNameSafe(ReservedRitualChair));
+		return false;
+	}
+
+	return ForceSitOnChair(ReservedRitualChair);
+}
+
+void AHronoCharacter::OnRep_RitualPositionState()
+{
+	if (!HasAuthority() && !IsLocallyControlled())
+	{
+		return;
+	}
+
+	if (bIsAtRitualPoint)
+	{
+		if (IsValid(RitualDestinationActor))
+		{
+			if (UCharacterMovementComponent* Movement = GetCharacterMovement())
+			{
+				Movement->StopMovementImmediately();
+				Movement->SetMovementMode(MOVE_Walking);
+			}
+
+			if (!bLocalRitualPositionApplied)
+			{
+				OnSitEnded();
+			}
+			bLocalRitualPositionApplied = true;
+
+			SetActorLocationAndRotation(
+				RitualDestinationActor->GetActorLocation(),
+				RitualDestinationActor->GetActorRotation(),
+				false,
+				nullptr,
+				ETeleportType::TeleportPhysics);
+		}
+		return;
+	}
+
+	if (bLocalRitualPositionApplied
+		&& IsValid(ReservedRitualChair)
+		&& CurrentChair == ReservedRitualChair)
+	{
+		bLocalRitualPositionApplied = false;
+		HandleSitStarted(ReservedRitualChair);
+	}
 }
 
 void AHronoCharacter::DoDrop()
@@ -1086,6 +1264,15 @@ void AHronoCharacter::HandleDrag(const FHitResult& HitResult)
 	if (!DragComponent)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("HandleDrag FAILED: No DragComponent found!"));
+		return;
+	}
+
+	if (Item->IsLockedByTrigger())
+	{
+		UE_LOG(LogTemp, Log,
+			TEXT("[DoorTriggerLock] %s cannot drag %s while its trigger lock is active"),
+			*GetNameSafe(this),
+			*GetNameSafe(Item));
 		return;
 	}
 
@@ -1171,6 +1358,7 @@ void AHronoCharacter::Server_SetDoorRotation_Implementation(ADrag_Item* Door, FR
 {
 	if (!IsValid(Door)
 		|| NewRotation.ContainsNaN()
+		|| Door->IsLockedByTrigger()
 		|| Door->IsDoorBlockedForTimeline(CharacterTimeline)
 		|| (Door->ItemTimeline != EItemTimeline::Both && Door->ItemTimeline != CharacterTimeline)
 		|| FVector::DistSquared(GetActorLocation(), Door->GetActorLocation())
@@ -1189,6 +1377,7 @@ void AHronoCharacter::Server_SetDoorPanelRotation_Implementation(
 {
 	if (!IsValid(Door)
 		|| NewRotation.ContainsNaN()
+		|| Door->IsLockedByTrigger()
 		|| Door->IsDoorBlockedForTimeline(CharacterTimeline)
 		|| (Door->ItemTimeline != EItemTimeline::Both && Door->ItemTimeline != CharacterTimeline)
 		|| FVector::DistSquared(GetActorLocation(), Door->GetActorLocation())

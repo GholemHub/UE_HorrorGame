@@ -257,6 +257,24 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Door|Lock")
 	bool CanUnlockWithItem(const ABase_Item* Item) const;
 
+	/** True while at least one DoorLockTrigger owns a gameplay lock on this door. */
+	UFUNCTION(BlueprintPure, Category = "Door|Lock")
+	bool IsLockedByTrigger() const { return TriggerLockCount > 0; }
+
+	/**
+	 * Adds or removes one trigger-owned lock. Server only. A counter is used so
+	 * overlapping triggers cannot accidentally unlock each other's door.
+	 */
+	void RegisterDoorTriggerLock(bool bRegister);
+
+	/** Number of active trigger actors currently preventing player interaction. */
+	UPROPERTY(ReplicatedUsing = OnRep_TriggerLockCount, VisibleInstanceOnly, BlueprintReadOnly,
+		Category = "Door|Lock")
+	int32 TriggerLockCount = 0;
+
+	UFUNCTION()
+	void OnRep_TriggerLockCount();
+
 
 protected:
 	/** Finds the drag settings that own a particular movement component. */

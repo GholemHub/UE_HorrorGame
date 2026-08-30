@@ -59,6 +59,7 @@ void ADrag_Item::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifeti
 	DOREPLIFETIME(ADrag_Item, RequiredKeyTag);
 	DOREPLIFETIME(ADrag_Item, PastBarricadeCount);
 	DOREPLIFETIME(ADrag_Item, FutureBarricadeCount);
+	DOREPLIFETIME(ADrag_Item, TriggerLockCount);
 
 }
 
@@ -132,6 +133,45 @@ FGameplayTag ADrag_Item::GetRequiredKeyTag() const
 bool ADrag_Item::CanUnlockWithItem(const ABase_Item* Item) const
 {
 	return IsValid(Item) && Item->ItemTags.HasTag(GetRequiredKeyTag());
+}
+
+void ADrag_Item::RegisterDoorTriggerLock(bool bRegister)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	const int32 PreviousCount = TriggerLockCount;
+	TriggerLockCount = FMath::Max(0, TriggerLockCount + (bRegister ? 1 : -1));
+	if (TriggerLockCount == PreviousCount)
+	{
+		return;
+	}
+
+	OnRep_TriggerLockCount();
+	ForceNetUpdate();
+}
+
+void ADrag_Item::OnRep_TriggerLockCount()
+{
+	if (!IsLockedByTrigger())
+	{
+		return;
+	}
+
+	// A player may have started dragging just before the replicated lock arrived.
+	// Stop every panel on multi-door actors immediately.
+	TInlineComponentArray<UDrag_Component*> DragComponents(this);
+	for (UDrag_Component* Component : DragComponents)
+	{
+		if (IsValid(Component) && Component->bIsRotating)
+		{
+			Component->StopDrag();
+		}
+	}
+
+	OnRep_DoorRotation();
 }
 
 void ADrag_Item::OnRep_DoorRotation()
