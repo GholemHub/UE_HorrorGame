@@ -47,6 +47,13 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Door Lock Trigger")
 	bool bTriggerOnlyOnce = true;
 
+	/**
+	 * Locks the configured doors when the gameplay map begins and releases them
+	 * permanently once HronoGameMode sees all required players on this map.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Door Lock Trigger|Session Start")
+	bool bLockUntilAllPlayersPresent = false;
+
 	/** True after a player has activated this trigger at least once. */
 	UPROPERTY(Replicated, VisibleInstanceOnly, BlueprintReadOnly, Category = "Door Lock Trigger|State")
 	bool bHasTriggered = false;
@@ -112,5 +119,6 @@ private:
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastNotifyTriggered(AActor* TriggeringActor);
 
+	bool LockConfiguredDoors();
 	void ReleaseOwnedLocks();
 };

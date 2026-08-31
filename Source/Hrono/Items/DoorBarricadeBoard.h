@@ -8,6 +8,7 @@
 
 class ADrag_Item;
 class AHronoCharacter;
+class UGeometryCollection;
 class UGeometryCollectionComponent;
 class USceneComponent;
 class USoundBase;
@@ -85,6 +86,7 @@ public:
 	void SetBlockedDoor(ADrag_Item* NewDoor);
 
 protected:
+	virtual void OnConstruction(const FTransform& Transform) override;
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void Tick(float DeltaSeconds) override;
@@ -102,6 +104,9 @@ protected:
 	void MulticastBoardBroken(AHronoCharacter* BreakingCharacter, ADrag_Item* DoorThatWasBlocked);
 
 private:
+	UPROPERTY()
+	TObjectPtr<UGeometryCollection> DefaultBoardCollection;
+
 	ADrag_Item* FindNearestDoor() const;
 	void RegisterWithDoor();
 	void UnregisterFromDoor();

@@ -2,6 +2,7 @@
 
 #include "Components/BoxComponent.h"
 #include "HronoCharacter.h"
+#include "HronoGameMode.h"
 #include "Items/Drag_Item.h"
 #include "Net/UnrealNetwork.h"
 
@@ -27,6 +28,19 @@ void ADoorLockTrigger::BeginPlay()
 	TriggerBox->OnComponentBeginOverlap.AddUniqueDynamic(
 		this,
 		&ADoorLockTrigger::HandleTriggerBeginOverlap);
+
+	if (HasAuthority() && bLockUntilAllPlayersPresent)
+	{
+		LockConfiguredDoors();
+
+		// World Partition may load this trigger after both players have already
+		// entered the gameplay map, so the trigger also performs its own check.
+		if (AHronoGameMode* GameMode = GetWorld()->GetAuthGameMode<AHronoGameMode>();
+			GameMode && GameMode->AreAllRequiredPlayersPresent())
+		{
+			UnlockTriggeredDoors();
+		}
+	}
 }
 
 void ADoorLockTrigger::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -85,7 +99,11 @@ bool ADoorLockTrigger::ActivateDoorLockWithActor(AActor* TriggeringActor)
 	LastTriggeringActor = TriggeringActor;
 	MulticastNotifyTriggered(TriggeringActor);
 	ForceNetUpdate();
+	return LockConfiguredDoors();
+}
 
+bool ADoorLockTrigger::LockConfiguredDoors()
+{
 	if (bDoorsUnlocked || (bTriggerOnlyOnce && bHasTriggered))
 	{
 		return false;
