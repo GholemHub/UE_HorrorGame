@@ -52,7 +52,7 @@ AClock::AClock()
 	}
 
 	static ConstructorHelpers::FObjectFinder<USoundBase> SecondHandTickSoundAsset(
-		TEXT("/Game/_Alex/Sound/Clock/ClockTick.ClockTick"));
+		TEXT("/Game/MannDev/Sounds/Clock/SW_clocktick_22_Cue.SW_clocktick_22_Cue"));
 	SecondHandSoundComponent = CreateDefaultSubobject<UClockSecondHandSoundComponent>(
 		TEXT("SecondHandSound"));
 	SecondHandSoundComponent->SetupAttachment(DefaultSceneRoot);

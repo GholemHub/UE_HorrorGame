@@ -44,7 +44,17 @@ ADoorBarricadeBoard::ADoorBarricadeBoard()
 		TEXT("/Game/_Alex/ChaosDestruction/GC_BP_DoorBarricadeBoard.GC_BP_DoorBarricadeBoard"));
 	if (BoardCollection.Succeeded())
 	{
-		DestructibleBoard->SetRestCollection(BoardCollection.Object);
+		DefaultBoardCollection = BoardCollection.Object;
+	}
+}
+
+void ADoorBarricadeBoard::OnConstruction(const FTransform& Transform)
+{
+	Super::OnConstruction(Transform);
+
+	if (DestructibleBoard && DefaultBoardCollection && !DestructibleBoard->GetRestCollection())
+	{
+		DestructibleBoard->SetRestCollection(DefaultBoardCollection);
 	}
 }
 
