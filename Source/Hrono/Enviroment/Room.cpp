@@ -125,7 +125,6 @@ void ARoom::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimePro
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 
-	DOREPLIFETIME(ARoom, bIsCursed);
 	DOREPLIFETIME(ARoom, bPuzzleCompleted);
 	DOREPLIFETIME(ARoom, SpawnedKey);
 	DOREPLIFETIME(ARoom, ClockAnomalyPatternIndex);
@@ -432,11 +431,6 @@ void ARoom::HandleDoorStateChanged(bool bDoorIsClosed)
 	{
 		TryCompleteRoomPuzzle();
 	}
-}
-
-void ARoom::OnRep_IsCursed()
-{
-	DispatchCursedStateChanged();
 }
 
 void ARoom::OnRep_PuzzleCompleted()

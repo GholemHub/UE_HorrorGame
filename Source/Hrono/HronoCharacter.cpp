@@ -23,9 +23,39 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "Engine/Engine.h"
+#include "Ritual/CursedRoomRitual.h"
 
 #include "Kismet/GameplayStatics.h"
 #include "Sound/SoundBase.h"
+
+void AHronoCharacter::ClientReceiveCursedRoomRitualSymbol_Implementation(
+	ACursedRoomRitual* Ritual,
+	int32 SequenceId,
+	int32 SlotIndex,
+	const FString& Symbol,
+	EItemTimeline ClueTimeline,
+	const FTransform& SymbolTransform)
+{
+	if (IsValid(Ritual) && CharacterTimeline == ClueTimeline)
+	{
+		Ritual->ReceiveSymbolForLocalPlayer(
+			SequenceId,
+			SlotIndex,
+			Symbol,
+			ClueTimeline,
+			SymbolTransform);
+	}
+}
+
+void AHronoCharacter::ServerRequestCursedRoomRitualClue_Implementation(
+	ACursedRoomRitual* Ritual,
+	int32 SequenceId)
+{
+	if (IsValid(Ritual) && ACursedRoomRitual::FindRitual(this) == Ritual)
+	{
+		Ritual->DeliverCompleteClueToCharacter(this, SequenceId);
+	}
+}
 
 void AHronoCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {

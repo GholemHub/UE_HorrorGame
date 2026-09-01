@@ -199,7 +199,8 @@ public:
 		meta = (DisplayName = "Receive Wrong Room Chosen"))
 	void ReceiveWrongRoomChosen(ABase_Item* CursedItem);
 
-	UPROPERTY(ReplicatedUsing = OnRep_IsCursed, VisibleInstanceOnly, BlueprintReadOnly,
+	/** Server-only answer. Evidence outcomes replicate, but the selected room identity does not. */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly,
 		Category = "Room|State")
 	bool bIsCursed = false;
 
@@ -249,9 +250,6 @@ protected:
 
 	UFUNCTION()
 	void HandleDoorStateChanged(bool bDoorIsClosed);
-
-	UFUNCTION()
-	void OnRep_IsCursed();
 
 	UFUNCTION()
 	void OnRep_PuzzleCompleted();

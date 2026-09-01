@@ -7,6 +7,7 @@
 #include "HronoCharacter.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
+#include "Components/HeldItemInertiaComponent.h"
 #include "Kismet/GameplayStatics.h"
 #include "Sound/SoundBase.h"
 
@@ -26,6 +27,8 @@ ABase_Item::ABase_Item()
 	ItemMesh->SetupAttachment(DefaultSceneRoot);
 	ItemMesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 	ItemMesh->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
+
+	HeldItemInertia = CreateDefaultSubobject<UHeldItemInertiaComponent>(TEXT("HeldItemInertia"));
 
 }
 
@@ -167,6 +170,10 @@ bool ABase_Item::AttachToCharacter()
 		return false;
 	}
 
+	// While held, transforms are cosmetic and are derived independently on each
+	// machine. Dropped movement replication is restored in DetachFromCharacter.
+	SetReplicateMovement(false);
+
 	if (USceneComponent* Root = GetRootComponent())
 	{
 		Root->SetMobility(EComponentMobility::Movable);
@@ -191,6 +198,7 @@ bool ABase_Item::AttachToCharacter()
 
 	if (!RefreshHeldAttachmentPoint())
 	{
+		SetReplicateMovement(true);
 		return false;
 	}
 
@@ -236,6 +244,11 @@ bool ABase_Item::RefreshHeldAttachmentPoint()
 		Root->SetRelativeLocationAndRotation(
 			HoldLocation,
 			HoldOffset.GetRotation().Rotator());
+
+		if (IsValid(HeldItemInertia))
+		{
+			HeldItemInertia->BeginHeld(Player, Root->GetRelativeTransform());
+		}
 	}
 
 	UE_LOG(LogTemp, Log,
@@ -283,6 +296,12 @@ void ABase_Item::OnRep_OwningCharacter(AHronoCharacter* PreviousOwningCharacter)
 	}
 	else
 	{
+		if (IsValid(HeldItemInertia))
+		{
+			HeldItemInertia->EndHeld(false);
+		}
+		SetReplicateMovement(true);
+
 		// OwningCharacter was cleared — item was dropped on client side
 		DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
 
@@ -349,6 +368,11 @@ void ABase_Item::DetachFromCharacter()
 	UE_LOG(LogTemp, Warning, TEXT("[Item] %s Detaching from character"), *GetName());
 
 	AHronoCharacter* PreviousOwningCharacter = OwningCharacter;
+	if (IsValid(HeldItemInertia))
+	{
+		HeldItemInertia->EndHeld(false);
+	}
+	SetReplicateMovement(true);
 
 	// Detach from parent
 	DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
