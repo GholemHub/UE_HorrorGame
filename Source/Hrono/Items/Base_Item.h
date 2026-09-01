@@ -12,6 +12,7 @@
 
 class AHronoCharacter;
 class USoundBase;
+class UHeldItemInertiaComponent;
 
 /** Network-visible lifecycle of an item offered through a bound mirror. */
 UENUM(BlueprintType)
@@ -75,6 +76,10 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Components")
 	UStaticMeshComponent* ItemMesh;
+
+	/** Local-only procedural lag around HoldOffset. Tune inline or assign a Data Asset profile. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	TObjectPtr<UHeldItemInertiaComponent> HeldItemInertia;
 	/** Display name of the item */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Item")
 	FText ItemName;
@@ -172,5 +177,6 @@ protected:
 public:	
 	virtual void Tick(float DeltaTime) override;
 	UStaticMeshComponent* GetItemMesh() const { return ItemMesh; }
+	UHeldItemInertiaComponent* GetHeldItemInertia() const { return HeldItemInertia; }
 
 };
