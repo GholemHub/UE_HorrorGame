@@ -433,7 +433,8 @@ protected:
 	UPROPERTY(Replicated, VisibleInstanceOnly, BlueprintReadOnly, Category = "Hunt|State")
 	EGhostHuntType CurrentHuntType = EGhostHuntType::Organic;
 
-	UPROPERTY(ReplicatedUsing = OnRep_CurrentCursedRoom, VisibleInstanceOnly, BlueprintReadOnly,
+	/** Server-only selected-room identity. Replicated evidence states communicate only observable clues. */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly,
 		Category = "Hunt|Room")
 	TObjectPtr<ARoom> CurrentCursedRoom;
 
@@ -452,9 +453,6 @@ protected:
 
 	UFUNCTION()
 	void OnRep_CurrentHuntState(EGhostHuntState PreviousState);
-
-	UFUNCTION()
-	void OnRep_CurrentCursedRoom();
 
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastTriggerHuntOmen(EGhostHuntOmen Omen, EItemTimeline TargetTimeline);

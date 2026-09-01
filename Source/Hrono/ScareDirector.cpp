@@ -147,7 +147,6 @@ void AScareDirector::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLi
 	DOREPLIFETIME(AScareDirector, CurrentHuntState);
 	DOREPLIFETIME(AScareDirector, CurrentHuntTimelineTarget);
 	DOREPLIFETIME(AScareDirector, CurrentHuntType);
-	DOREPLIFETIME(AScareDirector, CurrentCursedRoom);
 	DOREPLIFETIME(AScareDirector, ClockAnomalyPatternSeed);
 	DOREPLIFETIME(AScareDirector, HotDotPatternSeed);
 	DOREPLIFETIME(AScareDirector, PaintingPatternSeed);
@@ -371,12 +370,6 @@ void AScareDirector::ConfigureRoomPaintingEvidence(const TArray<ARoom*>& Rooms)
 	UE_LOG(LogGhostHuntDirector, Log,
 		TEXT("[%s] Distributed painting evidence patterns to %d room(s) with seed %d."),
 		*GetName(), Rooms.Num(), PaintingPatternSeed);
-}
-
-void AScareDirector::OnRep_CurrentCursedRoom()
-{
-	OnCursedRoomSelected.Broadcast(CurrentCursedRoom);
-	ReceiveCursedRoomSelected(CurrentCursedRoom);
 }
 
 void AScareDirector::AddThreat(float Amount)
