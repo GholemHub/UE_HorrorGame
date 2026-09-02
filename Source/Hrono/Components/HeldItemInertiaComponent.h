@@ -72,5 +72,5 @@ private:
 	FRotator PreviousViewRotation = FRotator::ZeroRotator;
 	bool bHeld = false;
 	bool bHaveSamples = false;
+	bool bLoggedFirstAppliedFrame = false;
 };
-

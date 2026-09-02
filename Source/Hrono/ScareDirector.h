@@ -95,6 +95,14 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Hunt")
 	void EndHunt();
 
+	/** Reuses the Director's existing whole-house door animation for scripted events. */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Hunt|Doors")
+	void ForceCloseAllDoorsForEvent(const FString& Reason);
+
+	/** Immediately applies the existing whole-house blackout on server and clients. */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Hunt|Lights")
+	void ForceAllLightsOffForEvent(const FString& Reason);
+
 	UFUNCTION(BlueprintPure, Category = "Hunt")
 	EGhostHuntState GetHuntState() const { return CurrentHuntState; }
 
@@ -219,12 +227,18 @@ public:
 	void ReceiveHuntOmenTriggered(EGhostHuntOmen Omen, EItemTimeline TargetTimeline);
 
 	/**
-	 * Server-only request fired when aggression enters HuntEligible. Implement this event in
-	 * BP_ScareDirector and use Spawn Actor from Class to create Babaj yourself.
+	 * Server-only Babaj spawn hook. The native implementation spawns SuggestedBabajClass,
+	 * registers it as HuntDemon and applies SuggestedLifetime. A Blueprint may override this
+	 * when a custom spawn presentation is required; call Parent to retain the native spawn.
 	 */
-	UFUNCTION(BlueprintImplementableEvent, BlueprintAuthorityOnly, Category = "Hunt|Babaj",
+	UFUNCTION(BlueprintNativeEvent, BlueprintAuthorityOnly, Category = "Hunt|Babaj",
 		meta = (DisplayName = "Spawn Babaj"))
 	void ReceiveSpawnBabaj(
+		ABase_Item* SpawnPoint,
+		FTransform SpawnTransform,
+		TSubclassOf<AActor> SuggestedBabajClass,
+		float SuggestedLifetime);
+	virtual void ReceiveSpawnBabaj_Implementation(
 		ABase_Item* SpawnPoint,
 		FTransform SpawnTransform,
 		TSubclassOf<AActor> SuggestedBabajClass,
@@ -459,6 +473,9 @@ protected:
 
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastFalseAlarmResolved(EItemTimeline TargetTimeline);
+
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastForceAllLightsOffForEvent(const FString& Reason);
 
 private:
 	void ConfigureRoomClockAnomalies(const TArray<ARoom*>& Rooms);

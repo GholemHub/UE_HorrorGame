@@ -68,6 +68,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Flicker")
 	void SetFlickering(bool bEnabled);
 
+	UFUNCTION(BlueprintPure, Category="Light")
+	bool IsLightEnabled() const { return bLightEnabled; }
+
+	UFUNCTION(BlueprintPure, Category="Flicker")
+	bool IsFlickering() const { return bFlickering; }
+
 private:
 	void StartFlicker();
 	void StopFlicker();

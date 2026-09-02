@@ -5,6 +5,7 @@
 #include "Net/UnrealNetwork.h"
 #include "GameplayTagsManager.h"
 #include "HronoCharacter.h"
+#include "Camera/CameraComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/HeldItemInertiaComponent.h"
@@ -45,6 +46,7 @@ void ABase_Item::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifeti
 	DOREPLIFETIME(ABase_Item, OwningCharacter);
 	DOREPLIFETIME(ABase_Item, ItemTimeline);
 	DOREPLIFETIME(ABase_Item, MirrorTransferState);
+	DOREPLIFETIME(ABase_Item, bDroppedPhysicsEnabled);
 }
 
 void ABase_Item::SetMirrorTransferState(EMirrorItemTransferState NewState)
@@ -91,6 +93,35 @@ void ABase_Item::OnRep_ItemTimeline()
 {
 	CurrentCachedTimeline = EItemTimeline::Both;
 	ApplyItemTimelineState();
+}
+
+void ABase_Item::EnableDroppedPhysics()
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	bDroppedPhysicsEnabled = true;
+	ApplyDroppedPhysicsState();
+	ForceNetUpdate();
+}
+
+void ABase_Item::OnRep_DroppedPhysicsEnabled()
+{
+	// OwningCharacter and this flag can arrive in either RepNotify order. A ritual
+	// key starts with dropped physics enabled, so never let an older/parallel
+	// physics notification detach its mesh again after the held attachment won.
+	if (IsValid(OwningCharacter) || bIsPickedUp)
+	{
+		return;
+	}
+
+	if (bDroppedPhysicsEnabled)
+	{
+		ApplyDroppedPhysicsState();
+		UpdateMeshForLocalPlayer();
+	}
 }
 
 void ABase_Item::UpdateMeshForLocalPlayer()
@@ -150,6 +181,11 @@ bool ABase_Item::TryPickUp(AHronoCharacter* Character)
 
 bool ABase_Item::AttachToCharacter()
 {
+	if (HasAuthority())
+	{
+		bDroppedPhysicsEnabled = false;
+	}
+
 	TInlineComponentArray<UPrimitiveComponent*> PrimitiveComponents(this);
 	for (UPrimitiveComponent* PrimitiveComponent : PrimitiveComponents)
 	{
@@ -203,6 +239,13 @@ bool ABase_Item::AttachToCharacter()
 	}
 
 	bIsPickedUp = true;
+	UpdateMeshForLocalPlayer();
+	if (HasAuthority())
+	{
+		// Replicate the held owner and disabled dropped-physics state together as
+		// soon as possible. This is important for runtime-spawned physics items.
+		ForceNetUpdate();
+	}
 	OnHeldStateChanged(true, Player);
 	return true;
 }
@@ -219,6 +262,8 @@ bool ABase_Item::RefreshHeldAttachmentPoint()
 		return false;
 	}
 
+	LogHeldTransformState(TEXT("BeforeAttach"));
+
 	const bool bAttached = AttachToComponent(
 		TargetPoint,
 		FAttachmentTransformRules::SnapToTargetNotIncludingScale);
@@ -228,6 +273,7 @@ bool ABase_Item::RefreshHeldAttachmentPoint()
 			TEXT("[Item] Failed to attach %s to %s"), *GetName(), *GetNameSafe(TargetPoint));
 		return false;
 	}
+	LogHeldTransformState(TEXT("AfterSnap"));
 
 	// HoldOffset controls only the held pose. Preserve the item's scale so it
 	// cannot inherit a different scale from the character or change after drop.
@@ -250,10 +296,72 @@ bool ABase_Item::RefreshHeldAttachmentPoint()
 			HeldItemInertia->BeginHeld(Player, Root->GetRelativeTransform());
 		}
 	}
+	LogHeldTransformState(TEXT("AfterHoldPose"));
 
 	UE_LOG(LogTemp, Log,
 		TEXT("[Item] Attached %s to timeline point %s"), *GetName(), *GetNameSafe(TargetPoint));
 	return true;
+}
+
+void ABase_Item::LogHeldTransformState(const TCHAR* Context) const
+{
+#if !UE_BUILD_SHIPPING
+	const AHronoCharacter* Player = Cast<AHronoCharacter>(OwningCharacter);
+	const USceneComponent* Root = GetRootComponent();
+	const USceneComponent* Anchor = Player ? Player->GetActiveInteractionPoint() : nullptr;
+	const USceneComponent* FuturePoint = Player ? Player->InteractionPoint.Get() : nullptr;
+	const USceneComponent* PastPoint = Player ? Player->PastInteractionPoint.Get() : nullptr;
+	const UCameraComponent* Camera = Player ? Player->GetFirstPersonCameraComponent() : nullptr;
+
+	const FVector RootWorld = Root ? Root->GetComponentLocation() : FVector::ZeroVector;
+	const FVector AnchorWorld = Anchor ? Anchor->GetComponentLocation() : FVector::ZeroVector;
+	const FVector MeshWorld = ItemMesh ? ItemMesh->GetComponentLocation() : FVector::ZeroVector;
+	const FVector BoundsWorld = ItemMesh ? ItemMesh->Bounds.Origin : FVector::ZeroVector;
+	const FVector CameraWorld = Camera ? Camera->GetComponentLocation() : FVector::ZeroVector;
+	const FVector FutureWorld = FuturePoint ? FuturePoint->GetComponentLocation() : FVector::ZeroVector;
+	const FVector PastWorld = PastPoint ? PastPoint->GetComponentLocation() : FVector::ZeroVector;
+
+	UE_LOG(LogTemp, Warning,
+		TEXT("[HeldTransform] %s Item=%s Authority=%d LocalOwner=%d ItemTimeline=%s Player=%s PlayerTimeline=%s "
+			"RootParent=%s MeshParent=%s MeshPhysics=%d"),
+		Context,
+		*GetName(),
+		HasAuthority() ? 1 : 0,
+		Player && Player->IsLocallyControlled() ? 1 : 0,
+		*StaticEnum<EItemTimeline>()->GetNameStringByValue(static_cast<int64>(ItemTimeline)),
+		*GetNameSafe(Player),
+		Player
+			? *StaticEnum<EItemTimeline>()->GetNameStringByValue(static_cast<int64>(Player->GetTimeline()))
+			: TEXT("None"),
+		*GetNameSafe(Root ? Root->GetAttachParent() : nullptr),
+		*GetNameSafe(ItemMesh ? ItemMesh->GetAttachParent() : nullptr),
+		ItemMesh && ItemMesh->IsSimulatingPhysics() ? 1 : 0);
+
+	UE_LOG(LogTemp, Warning,
+		TEXT("[HeldTransform] %s World Root=%s Anchor=%s DeltaRootAnchor=%s Mesh=%s DeltaMeshAnchor=%s "
+			"Bounds=%s DeltaBoundsAnchor=%s"),
+		Context,
+		*RootWorld.ToCompactString(),
+		*AnchorWorld.ToCompactString(),
+		*(RootWorld - AnchorWorld).ToCompactString(),
+		*MeshWorld.ToCompactString(),
+		*(MeshWorld - AnchorWorld).ToCompactString(),
+		*BoundsWorld.ToCompactString(),
+		*(BoundsWorld - AnchorWorld).ToCompactString());
+
+	UE_LOG(LogTemp, Warning,
+		TEXT("[HeldTransform] %s Relative Root=%s Mesh=%s HoldOffset=%s | Camera=%s FuturePoint=%s "
+			"PastPoint=%s PastMinusFuture=%s AnchorMinusCamera=%s"),
+		Context,
+		Root ? *Root->GetRelativeLocation().ToCompactString() : TEXT("None"),
+		ItemMesh ? *ItemMesh->GetRelativeLocation().ToCompactString() : TEXT("None"),
+		*HoldOffset.GetLocation().ToCompactString(),
+		*CameraWorld.ToCompactString(),
+		*FutureWorld.ToCompactString(),
+		*PastWorld.ToCompactString(),
+		*(PastWorld - FutureWorld).ToCompactString(),
+		*(AnchorWorld - CameraWorld).ToCompactString());
+#endif
 }
 #include "Items/Dozimetr.h"
 
@@ -327,6 +435,7 @@ void ABase_Item::OnRep_OwningCharacter(AHronoCharacter* PreviousOwningCharacter)
 		}
 
 		bIsPickedUp = false;
+		UpdateMeshForLocalPlayer();
 		OnHeldStateChanged(false, PreviousOwningCharacter);
 	}
 }
@@ -361,6 +470,9 @@ void ABase_Item::Drop()
 	// Clear both native ownership and your replication variable
 	SetOwner(nullptr);
 	OwningCharacter = nullptr;
+	bDroppedPhysicsEnabled = true;
+	UpdateMeshForLocalPlayer();
+	ForceNetUpdate();
 }
 
 void ABase_Item::DetachFromCharacter()
@@ -418,17 +530,49 @@ void ABase_Item::ConfigureDroppedCollision(UPrimitiveComponent* PrimitiveCompone
 		bVisibleToFuture ? ECR_Block : ECR_Ignore);
 }
 
+void ABase_Item::ApplyDroppedPhysicsState()
+{
+	// Physics simulation detaches a non-root mesh. A held item must always remain
+	// controlled by AttachToCharacter even if replication callbacks are reordered.
+	if (!bDroppedPhysicsEnabled || IsValid(OwningCharacter) || bIsPickedUp)
+	{
+		return;
+	}
+
+	SetReplicateMovement(true);
+	SetActorEnableCollision(true);
+	if (UStaticMeshComponent* Mesh = GetItemMesh())
+	{
+		Mesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+		ConfigureDroppedCollision(Mesh);
+		Mesh->SetEnableGravity(true);
+		Mesh->SetSimulatePhysics(true);
+		Mesh->WakeAllRigidBodies();
+	}
+	UpdateMeshForLocalPlayer();
+}
 
 
+
+
+void ABase_Item::PostInitializeComponents()
+{
+	Super::PostInitializeComponents();
+
+	// Cache the Blueprint-authored mesh pose before initial replicated properties
+	// can enable Chaos physics. BeginPlay is too late for runtime-spawned items on
+	// clients: physics may already have converted this relative transform into a
+	// world-space value while detaching/re-attaching the non-root mesh.
+	if (IsValid(ItemMesh))
+	{
+		ItemMeshRelativeTransform = ItemMesh->GetRelativeTransform();
+	}
+}
 
 // Called when the game starts or when spawned
 void ABase_Item::BeginPlay()
 {
 	Super::BeginPlay();
-	if (IsValid(ItemMesh))
-	{
-		ItemMeshRelativeTransform = ItemMesh->GetRelativeTransform();
-	}
 	ApplyItemTimelineState();
 }
 

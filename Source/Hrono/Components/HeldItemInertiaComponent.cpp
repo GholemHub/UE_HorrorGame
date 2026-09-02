@@ -30,6 +30,7 @@ void UHeldItemInertiaComponent::BeginHeld(
 	HeldCharacter = Character;
 	BaseRelativeTransform = InBaseRelativeTransform;
 	bHeld = IsValid(Character);
+	bLoggedFirstAppliedFrame = false;
 	SetComponentTickEnabled(bHeld);
 	ResetInertia();
 }
@@ -48,6 +49,7 @@ void UHeldItemInertiaComponent::EndHeld(bool bRestoreBaseTransform)
 	}
 
 	bHeld = false;
+	bLoggedFirstAppliedFrame = false;
 	SetComponentTickEnabled(false);
 	HeldCharacter.Reset();
 	ResetSamples();
@@ -313,6 +315,29 @@ void UHeldItemInertiaComponent::ApplyCurrentOffset()
 	FQuat FinalRotation = OffsetRotation * BaseRelativeTransform.GetRotation();
 	FinalRotation.Normalize();
 	Root->SetRelativeLocationAndRotation(FinalLocation, FinalRotation);
+
+#if !UE_BUILD_SHIPPING
+	if (!bLoggedFirstAppliedFrame)
+	{
+		const AHronoCharacter* Character = HeldCharacter.Get();
+		const USceneComponent* Anchor = Character ? Character->GetActiveInteractionPoint() : nullptr;
+		const FVector RootWorld = Root->GetComponentLocation();
+		const FVector AnchorWorld = Anchor ? Anchor->GetComponentLocation() : FVector::ZeroVector;
+		UE_LOG(LogTemp, Warning,
+			TEXT("[HeldInertia] FirstApply Item=%s Authority=%d LocalOwner=%d BaseRelative=%s "
+				"PositionOffset=%s FinalRelative=%s RootWorld=%s AnchorWorld=%s DeltaRootAnchor=%s"),
+			*GetNameSafe(Item),
+			Item->HasAuthority() ? 1 : 0,
+			Character && Character->IsLocallyControlled() ? 1 : 0,
+			*BaseRelativeTransform.GetLocation().ToCompactString(),
+			*PositionOffset.ToCompactString(),
+			*FinalLocation.ToCompactString(),
+			*RootWorld.ToCompactString(),
+			*AnchorWorld.ToCompactString(),
+			*(RootWorld - AnchorWorld).ToCompactString());
+		bLoggedFirstAppliedFrame = true;
+	}
+#endif
 }
 
 FVector UHeldItemInertiaComponent::ClampVectorAxes(
