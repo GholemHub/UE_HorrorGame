@@ -361,6 +361,30 @@ void ACursedRoomRitual::ApplyReplicatedState()
 	StopStageUpdates();
 	LastAppliedImpulseIndex = INDEX_NONE;
 
+	const bool bRitualSoundActive =
+		ReplicatedState.State == ECursedRoomRitualState::Rising
+		|| ReplicatedState.State == ECursedRoomRitualState::Hovering
+		|| ReplicatedState.State == ECursedRoomRitualState::Scratching
+		|| ReplicatedState.State == ECursedRoomRitualState::FallingSilent;
+	if (HasAuthority())
+	{
+		const ERitualSkullAudioState SkullAudioState = bRitualSoundActive
+			? ERitualSkullAudioState::Playing
+			: ((ReplicatedState.State == ECursedRoomRitualState::Completed
+				|| ReplicatedState.State == ECursedRoomRitualState::Failed)
+				? ERitualSkullAudioState::Finished
+				: ERitualSkullAudioState::Silent);
+		for (ARitualGoatSkull* Skull : {
+			ReplicatedState.PastSkull.Get(),
+			ReplicatedState.FutureSkull.Get() })
+		{
+			if (IsValid(Skull))
+			{
+				Skull->SetRitualAudioState(SkullAudioState);
+			}
+		}
+	}
+
 	switch (ReplicatedState.State)
 	{
 	case ECursedRoomRitualState::Preparing:

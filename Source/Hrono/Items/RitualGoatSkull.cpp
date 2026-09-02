@@ -1,10 +1,13 @@
 #include "Items/RitualGoatSkull.h"
 
+#include "Components/AudioComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "GeometryCollection/GeometryCollectionComponent.h"
 #include "GameplayTagContainer.h"
+#include "Kismet/GameplayStatics.h"
 #include "Net/UnrealNetwork.h"
 #include "Ritual/CursedRoomRitual.h"
+#include "Sound/SoundBase.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogRitualSkull, Log, All);
 
@@ -27,17 +30,29 @@ ARitualGoatSkull::ARitualGoatSkull()
 	DestructibleSkull->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	DestructibleSkull->SetGenerateOverlapEvents(false);
 	DestructibleSkull->SetSimulatePhysics(false);
+
+	RitualAudioComponent = CreateDefaultSubobject<UAudioComponent>(TEXT("RitualAudio"));
+	RitualAudioComponent->SetupAttachment(ItemMesh);
+	RitualAudioComponent->bAutoActivate = false;
+	RitualAudioComponent->bStopWhenOwnerDestroyed = true;
 }
 
 void ARitualGoatSkull::BeginPlay()
 {
 	Super::BeginPlay();
+	if (RitualAudioComponent)
+	{
+		RitualAudioComponent->OnAudioFinished.AddUniqueDynamic(
+			this,
+			&ARitualGoatSkull::HandleRitualAudioFinished);
+	}
 }
 
 void ARitualGoatSkull::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(ARitualGoatSkull, bDestroyedByRitual);
+	DOREPLIFETIME(ARitualGoatSkull, RitualAudioState);
 }
 
 bool ARitualGoatSkull::TryPickUp(AHronoCharacter* Character)
@@ -62,13 +77,24 @@ void ARitualGoatSkull::Drop()
 void ARitualGoatSkull::UpdateVisibilityForLocalPlayer(EItemTimeline ViewerTimeline)
 {
 	Super::UpdateVisibilityForLocalPlayer(ViewerTimeline);
+	const bool bVisibleInTimeline =
+		ItemTimeline == EItemTimeline::Both || ItemTimeline == ViewerTimeline;
+	if (bVisibleInTimeline && RitualAudioState == ERitualSkullAudioState::Playing)
+	{
+		// ItemTimeline can become locally visible after the audio RepNotify.
+		// Retry here so the correct client cannot permanently miss the sound.
+		StartRitualSound(false);
+	}
+	else if (!bVisibleInTimeline)
+	{
+		StopLocalRitualLoopForTimelineVisibility();
+	}
+
 	if (!bDestroyedByRitual)
 	{
 		return;
 	}
 
-	const bool bVisibleInTimeline =
-		ItemTimeline == EItemTimeline::Both || ItemTimeline == ViewerTimeline;
 	if (ItemMesh)
 	{
 		ItemMesh->SetVisibility(false, true);
@@ -143,6 +169,164 @@ void ARitualGoatSkull::ExplodeFromRitual()
 	}
 }
 
+bool ARitualGoatSkull::CanPlayLocalSkullAudio() const
+{
+	return GetNetMode() != NM_DedicatedServer
+		&& IsValid(ItemMesh)
+		&& ItemMesh->IsVisible();
+}
+
+void ARitualGoatSkull::StartRitualSound(bool bPlayStartSound)
+{
+	bRitualSoundShouldBeActive = true;
+	bPendingRitualStartSound |= bPlayStartSound;
+	if (bRitualSoundRequested || !CanPlayLocalSkullAudio())
+	{
+		return;
+	}
+	bRitualSoundRequested = true;
+
+	if (bPendingRitualStartSound && IsValid(RitualStartSound))
+	{
+		UGameplayStatics::PlaySoundAtLocation(
+			this,
+			RitualStartSound,
+			GetActorLocation(),
+			FRotator::ZeroRotator,
+			FMath::Max(0.0f, RitualSoundVolume));
+	}
+	bPendingRitualStartSound = false;
+
+	if (IsValid(RitualAudioComponent) && IsValid(RitualLoopSound))
+	{
+		RitualAudioComponent->SetSound(RitualLoopSound);
+		const float Volume = FMath::Max(0.0f, RitualSoundVolume);
+		if (RitualSoundFadeInDuration > 0.0f)
+		{
+			RitualAudioComponent->FadeIn(RitualSoundFadeInDuration, Volume);
+		}
+		else
+		{
+			RitualAudioComponent->SetVolumeMultiplier(Volume);
+			RitualAudioComponent->Play();
+		}
+	}
+
+	UE_LOG(LogRitualSkull, Log,
+		TEXT("[RitualAudio] Started on %s (Authority=%d NetMode=%d Start=%s Loop=%s)"),
+		*GetName(), HasAuthority() ? 1 : 0, static_cast<int32>(GetNetMode()),
+		*GetNameSafe(RitualStartSound), *GetNameSafe(RitualLoopSound));
+}
+
+void ARitualGoatSkull::StopRitualSound(bool bPlayEndSound)
+{
+	const bool bWasRequested = bRitualSoundRequested;
+	bRitualSoundShouldBeActive = false;
+	bPendingRitualStartSound = false;
+	bRitualSoundRequested = false;
+
+	if (IsValid(RitualAudioComponent) && RitualAudioComponent->IsPlaying())
+	{
+		if (RitualSoundFadeOutDuration > 0.0f)
+		{
+			RitualAudioComponent->FadeOut(RitualSoundFadeOutDuration, 0.0f);
+		}
+		else
+		{
+			RitualAudioComponent->Stop();
+		}
+	}
+
+	if (bWasRequested && bPlayEndSound && IsValid(RitualEndSound))
+	{
+		UGameplayStatics::PlaySoundAtLocation(
+			this,
+			RitualEndSound,
+			GetActorLocation(),
+			FRotator::ZeroRotator,
+			FMath::Max(0.0f, RitualSoundVolume));
+	}
+
+	if (bWasRequested)
+	{
+		UE_LOG(LogRitualSkull, Log,
+			TEXT("[RitualAudio] Stopped on %s (End=%s, FadeOut=%.2fs)"),
+			*GetName(), *GetNameSafe(RitualEndSound), RitualSoundFadeOutDuration);
+	}
+}
+
+void ARitualGoatSkull::StopLocalRitualLoopForTimelineVisibility()
+{
+	bRitualSoundRequested = false;
+	if (IsValid(RitualAudioComponent) && RitualAudioComponent->IsPlaying())
+	{
+		RitualAudioComponent->Stop();
+	}
+}
+
+void ARitualGoatSkull::SetRitualAudioState(ERitualSkullAudioState NewState)
+{
+	if (!HasAuthority())
+	{
+		UE_LOG(LogRitualSkull, Warning,
+			TEXT("[RitualAudio] Non-authority tried to set audio state on %s"),
+			*GetName());
+		return;
+	}
+
+	if (RitualAudioState == NewState)
+	{
+		return;
+	}
+
+	RitualAudioState = NewState;
+	ApplyRitualAudioState();
+	ForceNetUpdate();
+	UE_LOG(LogRitualSkull, Log,
+		TEXT("[RitualAudio] Server state for %s -> %s"),
+		*GetName(),
+		*StaticEnum<ERitualSkullAudioState>()->GetNameStringByValue(
+			static_cast<int64>(RitualAudioState)));
+}
+
+void ARitualGoatSkull::OnRep_RitualAudioState()
+{
+	ApplyRitualAudioState();
+	UE_LOG(LogRitualSkull, Log,
+		TEXT("[RitualAudio] Client received state for %s -> %s"),
+		*GetName(),
+		*StaticEnum<ERitualSkullAudioState>()->GetNameStringByValue(
+			static_cast<int64>(RitualAudioState)));
+}
+
+void ARitualGoatSkull::ApplyRitualAudioState()
+{
+	switch (RitualAudioState)
+	{
+	case ERitualSkullAudioState::Playing:
+		StartRitualSound(true);
+		break;
+	case ERitualSkullAudioState::Finished:
+		StopRitualSound(true);
+		break;
+	case ERitualSkullAudioState::Silent:
+	default:
+		StopRitualSound(false);
+		break;
+	}
+}
+
+void ARitualGoatSkull::HandleRitualAudioFinished()
+{
+	// This makes an ordinary SoundWave usable as the ritual loop too. StopRitualSound
+	// clears the request before Stop/FadeOut, so it cannot accidentally restart here.
+	if (bRitualSoundShouldBeActive && bRitualSoundRequested && CanPlayLocalSkullAudio()
+		&& IsValid(RitualAudioComponent) && IsValid(RitualLoopSound))
+	{
+		RitualAudioComponent->Play();
+	}
+}
+
 void ARitualGoatSkull::OnRep_DestroyedByRitual()
 {
 	if (bDestroyedByRitual)
@@ -158,6 +342,7 @@ void ARitualGoatSkull::ActivateChaosDestruction()
 		return;
 	}
 
+	const bool bWasLocallyAudible = CanPlayLocalSkullAudio();
 	bChaosDestructionActivated = true;
 	SetRitualLocked(true);
 
@@ -182,6 +367,16 @@ void ARitualGoatSkull::ActivateChaosDestruction()
 		UE_LOG(LogRitualSkull, Warning,
 			TEXT("[RitualSkull] %s has no Geometry Collection assigned; using hidden-mesh fallback"),
 			*GetName());
+	}
+
+	if (bWasLocallyAudible && IsValid(SkullBreakSound))
+	{
+		UGameplayStatics::PlaySoundAtLocation(
+			this,
+			SkullBreakSound,
+			GetActorLocation(),
+			FRotator::ZeroRotator,
+			FMath::Max(0.0f, RitualSoundVolume));
 	}
 
 	BP_OnRitualExplosion();
