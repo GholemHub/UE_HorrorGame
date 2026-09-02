@@ -5,30 +5,38 @@
 #include "HronoSharedTools.h"
 #include "CursedRoomRitual.generated.h"
 
-class AHronoCharacter;
 class ABase_Item;
-class ARitualCandle;
+class ADrag_Item;
+class ALight_Env;
 class ARitualGoatSkull;
-class ARitualSymbolVisual;
 class ARoom;
-class UCurveFloat;
-class UNiagaraSystem;
+class ASwitcher_Env;
+class ULightComponentBase;
+class UPrimitiveComponent;
 class USceneComponent;
-class USoundBase;
 
 UENUM(BlueprintType)
 enum class ECursedRoomRitualState : uint8
 {
 	Idle,
-	Reacting,
-	Floating,
-	Rotating,
+	Preparing,
+	Rising,
+	Hovering,
 	Scratching,
+	FallingSilent,
 	Completed,
 	Failed
 };
 
-/** Everything clients need to reconstruct the current physical sequence. No code or cursed-room reference is included. */
+UENUM(BlueprintType)
+enum class ERitualHouseLightMode : uint8
+{
+	Normal,
+	Flickering,
+	Blackout
+};
+
+/** Replicated presentation state. The cursed-room answer remains server-only. */
 USTRUCT(BlueprintType)
 struct HRONO_API FCursedRoomRitualReplicatedState
 {
@@ -47,20 +55,19 @@ struct HRONO_API FCursedRoomRitualReplicatedState
 	float Duration = 0.0f;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Cursed Room Ritual")
-	FTransform SkullStartTransform = FTransform::Identity;
+	int32 RandomSeed = 0;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Cursed Room Ritual")
-	FTransform SkullTargetTransform = FTransform::Identity;
-
-	/** Server-selected ceiling axis used for deterministic client-side side-to-side motion. */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Cursed Room Ritual")
-	FVector ScratchDirection = FVector::RightVector;
+	TObjectPtr<ARitualGoatSkull> PastSkull = nullptr;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Cursed Room Ritual")
-	TObjectPtr<ARitualGoatSkull> GoatSkull = nullptr;
+	TObjectPtr<ARitualGoatSkull> FutureSkull = nullptr;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Cursed Room Ritual")
-	TObjectPtr<ARitualCandle> RitualCandle = nullptr;
+	FTransform PastStartTransform = FTransform::Identity;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Cursed Room Ritual")
+	FTransform FutureStartTransform = FTransform::Identity;
 };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
@@ -71,14 +78,17 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(
 	FWrongRoomRitualSignature,
 	ARoom*, TestedRoom,
-	ARitualGoatSkull*, GoatSkull,
-	ARitualCandle*, RitualCandle);
+	ARitualGoatSkull*, PastSkull,
+	ARitualGoatSkull*, FutureSkull);
 
-DECLARE_DYNAMIC_MULTICAST_DELEGATE(FCursedRoomRitualCompletedSignature);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
+	FCursedRoomRitualCompletedSignature,
+	ABase_Item*, PastKey,
+	ABase_Item*, FutureKey);
 
 /**
- * Invisible, server-authoritative coordinator for the cooperative cursed-room test.
- * Place exactly one in the level. It has no collision, mesh, altar, or marker.
+ * Invisible server-authoritative coordinator. One Past and one Future skull
+ * automatically start the test when both have been dropped into the same ARoom.
  */
 UCLASS(BlueprintType, Blueprintable)
 class HRONO_API ACursedRoomRitual : public AActor
@@ -92,25 +102,11 @@ public:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
-	/** Finds the placed coordinator without a hard-coded map reference. */
 	UFUNCTION(BlueprintPure, Category = "Cursed Room Ritual", meta = (WorldContext = "WorldContextObject"))
 	static ACursedRoomRitual* FindRitual(const UObject* WorldContextObject);
 
-	/** Called by the dropped Future candle through the project's existing E interaction RPC. */
-	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Cursed Room Ritual")
-	bool TryActivateRitual(AHronoCharacter* ActivatingCharacter, ARitualCandle* Candle);
-
-	/** Authority-only: the complete code is deliberately never replicated to clients. */
-	UFUNCTION(BlueprintPure, BlueprintAuthorityOnly, Category = "Cursed Room Ritual|Code")
-	TArray<FString> GetRitualCode() const;
-
-	/** Authority-only API intended for an independent safe/keypad actor. */
-	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Cursed Room Ritual|Code")
-	bool ValidateRitualCode(const TArray<FString>& InputSymbols) const;
-
-	/** The masked clue received by this local player, for example ["7", "?", "2", "?"]. */
-	UFUNCTION(BlueprintPure, Category = "Cursed Room Ritual|Code")
-	TArray<FString> GetLocalVisibleClue() const { return LocalVisibleClue; }
+	/** Called by ARitualGoatSkull::Drop on the server. */
+	void NotifySkullDropped(ARitualGoatSkull* DroppedSkull);
 
 	UFUNCTION(BlueprintPure, Category = "Cursed Room Ritual")
 	ECursedRoomRitualState GetRitualState() const { return ReplicatedState.State; }
@@ -118,160 +114,101 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Cursed Room Ritual|Debug", meta = (DevelopmentOnly))
 	FString GetRitualDebugStatus() const;
 
-	/** Called only by AHronoCharacter's validated owner RPC. */
-	void DeliverCompleteClueToCharacter(AHronoCharacter* Character, int32 RequestedSequenceId);
-
-	/** Called by AHronoCharacter's targeted Client RPC. Never contains the other timeline's symbols. */
-	void ReceiveSymbolForLocalPlayer(
-		int32 SequenceId,
-		int32 SlotIndex,
-		const FString& Symbol,
-		EItemTimeline ClueTimeline,
-		const FTransform& SymbolTransform);
-
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Cursed Room Ritual|Components")
 	TObjectPtr<USceneComponent> SceneRoot;
 
-	// ---- Sequence tuning ---------------------------------------------------------------------
-
-	/** Minimum server-selected duration of the initial correct-room skull shake. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Sequence",
-		meta = (ClampMin = "0.0", Units = "s", DisplayName = "Reaction Duration Min"))
-	float RitualStartReactionDuration = 1.0f;
-
-	/** Maximum server-selected duration of the initial correct-room skull shake. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Sequence",
-		meta = (ClampMin = "0.0", Units = "s", DisplayName = "Reaction Duration Max"))
-	float RitualStartReactionDurationMax = 3.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Sequence",
-		meta = (ClampMin = "0.0", Units = "cm"))
-	float CorrectRoomShakeDistance = 10.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Sequence",
-		meta = (ClampMin = "1.0"))
-	float CorrectRoomShakeCycles = 8.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Sequence",
-		meta = (ClampMin = "1.0", Units = "cm"))
-	float FloatHeight = 220.0f;
+		meta = (ClampMin = "0.0", Units = "s"))
+	float PreparationDuration = 4.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Sequence",
 		meta = (ClampMin = "0.1", Units = "s"))
-	float FloatDuration = 1.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Sequence",
-		meta = (ClampMin = "0.1", Units = "s"))
-	float SkullRotationDuration = 2.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Sequence",
-		meta = (ClampMin = "0.1", Units = "s"))
-	float ScratchDuration = 5.0f;
-
-	/** Distance travelled to each side of the ceiling-path center. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Sequence",
-		meta = (ClampMin = "0.0", Units = "cm"))
-	float ScratchSideToSideDistance = 200.0f;
-
-	/** Number of complete left/right oscillations during ScratchDuration. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Sequence",
-		meta = (ClampMin = "0.5"))
-	float ScratchSideToSideCycles = 2.5f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Sequence",
-		meta = (ClampMin = "0.1", Units = "s"))
-	float WrongRoomReactionDuration = 1.5f;
-
-	/** Optional normalized 0..1 curve used for skull position and rotation. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Sequence")
-	TObjectPtr<UCurveFloat> SkullMoveCurve;
-
-	/** Mesh-specific rotation added while the horns turn toward the ceiling. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Sequence")
-	FRotator SkullCeilingRotationOffset = FRotator(-90.0f, 0.0f, 0.0f);
+	float RiseDuration = 1.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Sequence",
 		meta = (ClampMin = "0.0", Units = "cm"))
-	float CeilingClearance = 18.0f;
+	float HoverHeight = 100.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Sequence",
-		meta = (ClampMin = "1.0", Units = "cm"))
-	float CeilingTraceDistance = 600.0f;
+		meta = (ClampMin = "0.0", Units = "s"))
+	float HoverDuration = 5.0f;
 
-	/** Rejects nearby props as a ceiling and falls back to FloatHeight. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Sequence",
-		meta = (ClampMin = "0.0", Units = "cm"))
-	float MinimumCeilingRise = 100.0f;
+		meta = (ClampMin = "0.1", Units = "s"))
+	float ScratchDuration = 7.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Failure",
+		meta = (ClampMin = "0.0", Units = "s"))
+	float WrongRoomFallingSilenceDuration = 5.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Physics",
+		meta = (ClampMin = "0.0", Units = "cm/s^2"))
+	float CeilingHoldAcceleration = 980.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Physics",
+		meta = (ClampMin = "0.05", Units = "s"))
+	float RandomImpulseInterval = 0.25f;
+
+	/** Velocity change, so differently scaled skulls react similarly. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Physics",
+		meta = (ClampMin = "0.0", Units = "cm/s"))
+	float RandomImpulseStrength = 450.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Sequence",
 		meta = (ClampMin = "0.01", Units = "s"))
-	float VisualUpdateInterval = 0.033f;
+	float PhysicsUpdateInterval = 0.033f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Failure",
-		meta = (ClampMin = "0.0", Units = "cm"))
-	float WrongRoomShakeDistance = 7.0f;
+	/** Optional separate classes; both may point to the same existing key Blueprint. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Keys")
+	TSubclassOf<ABase_Item> PastKeyClass;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Failure",
-		meta = (ClampMin = "1.0"))
-	float WrongRoomShakeCycles = 4.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Keys")
+	TSubclassOf<ABase_Item> FutureKeyClass;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Interaction",
-		meta = (ClampMin = "1.0", Units = "cm"))
-	float ActivationDistance = 350.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Keys")
+	FVector KeySpawnOffset = FVector(0.0f, 0.0f, -10.0f);
 
-	// ---- Code and symbol tuning ---------------------------------------------------------------
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Keys",
+		meta = (ClampMin = "0.1", Units = "s"))
+	float KeyLandingTimeout = 5.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Code",
-		meta = (ClampMin = "1", ClampMax = "16"))
-	int32 NumberOfSymbols = 4;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Consequences",
+		meta = (ClampMin = "0.0"))
+	float CorrectRoomThreatIncrease = 10.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Code")
-	TArray<int32> PastVisibleSlots = { 0, 2 };
+	/** 0.55 means 55 percent of the Hunt Director's MaxThreat. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Consequences",
+		meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float WrongRoomThreatFraction = 0.55f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Code")
-	TArray<int32> FutureVisibleSlots = { 1, 3 };
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Lights",
+		meta = (ClampMin = "0.04", Units = "s"))
+	float HouseFlickerIntervalMin = 0.08f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Code")
-	TArray<FString> AvailableSymbols = { TEXT("0"), TEXT("1"), TEXT("2"), TEXT("3"), TEXT("4"),
-		TEXT("5"), TEXT("6"), TEXT("7"), TEXT("8"), TEXT("9") };
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Symbols",
-		meta = (ClampMin = "1.0", Units = "cm"))
-	float ScratchSymbolSpacing = 45.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Symbols")
-	FVector ScratchDirectionLocal = FVector(0.0f, 1.0f, 0.0f);
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Symbols")
-	FVector FutureSymbolOffset = FVector(70.0f, 0.0f, 35.0f);
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Symbols",
-		meta = (ClampMin = "1.0", Units = "cm"))
-	float FutureSymbolSpacing = 35.0f;
-
-	/** Blueprint child of ARitualSymbolVisual; add a decal, mesh, material, or Niagara presentation there. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Symbols")
-	TSubclassOf<ARitualSymbolVisual> SymbolDecalClass;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Presentation")
-	TArray<TObjectPtr<USoundBase>> RitualSounds;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Presentation")
-	TArray<TObjectPtr<UNiagaraSystem>> RitualVFX;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Lights",
+		meta = (ClampMin = "0.04", Units = "s"))
+	float HouseFlickerIntervalMax = 0.20f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Debug")
 	bool bDebugRitual = false;
-
-	// ---- Replicated outcome ------------------------------------------------------------------
 
 	UPROPERTY(ReplicatedUsing = OnRep_RitualState, VisibleInstanceOnly, BlueprintReadOnly,
 		Category = "Cursed Room Ritual|Runtime")
 	FCursedRoomRitualReplicatedState ReplicatedState;
 
+	UPROPERTY(Replicated, VisibleInstanceOnly, BlueprintReadOnly, Category = "Cursed Room Ritual|Runtime")
+	TObjectPtr<ABase_Item> SpawnedPastKey;
+
+	UPROPERTY(Replicated, VisibleInstanceOnly, BlueprintReadOnly, Category = "Cursed Room Ritual|Runtime")
+	TObjectPtr<ABase_Item> SpawnedFutureKey;
+
+	UPROPERTY(ReplicatedUsing = OnRep_HouseLightMode, VisibleInstanceOnly, BlueprintReadOnly,
+		Category = "Cursed Room Ritual|Runtime")
+	ERitualHouseLightMode HouseLightMode = ERitualHouseLightMode::Normal;
+
 	UPROPERTY(BlueprintAssignable, Category = "Cursed Room Ritual|Events")
 	FCursedRoomRitualStateChangedSignature OnRitualStateChanged;
 
-	/** Server-side hook for later demon aggression, sound, flicker, or horror events. */
 	UPROPERTY(BlueprintAssignable, Category = "Cursed Room Ritual|Events")
 	FWrongRoomRitualSignature OnWrongRoomRitual;
 
@@ -279,85 +216,84 @@ public:
 	FCursedRoomRitualCompletedSignature OnRitualCompleted;
 
 	UFUNCTION(BlueprintImplementableEvent, Category = "Cursed Room Ritual|Events")
-	void BP_OnRitualStarted(ARitualGoatSkull* GoatSkull, ARitualCandle* RitualCandle);
+	void BP_OnRitualStarted(ARitualGoatSkull* PastSkull, ARitualGoatSkull* FutureSkull);
 
 	UFUNCTION(BlueprintImplementableEvent, Category = "Cursed Room Ritual|Events")
-	void BP_OnWrongRoom(ARoom* TestedRoom, ARitualGoatSkull* GoatSkull, ARitualCandle* RitualCandle);
+	void BP_OnWrongRoom(ARoom* TestedRoom, ARitualGoatSkull* PastSkull, ARitualGoatSkull* FutureSkull);
 
 	UFUNCTION(BlueprintImplementableEvent, Category = "Cursed Room Ritual|Events")
-	void BP_OnSkullStartFloating(ARitualGoatSkull* GoatSkull);
+	void BP_OnSkullsStartFloating(ARitualGoatSkull* PastSkull, ARitualGoatSkull* FutureSkull);
 
 	UFUNCTION(BlueprintImplementableEvent, Category = "Cursed Room Ritual|Events")
-	void BP_OnSkullStartScratching(ARitualGoatSkull* GoatSkull);
-
-	/** Invoked only on the owning client allowed to see this exact symbol. */
-	UFUNCTION(BlueprintImplementableEvent, Category = "Cursed Room Ritual|Events")
-	void BP_OnSymbolRevealed(
-		int32 SlotIndex,
-		const FString& Symbol,
-		EItemTimeline ClueTimeline,
-		const FTransform& SymbolTransform);
+	void BP_OnSkullsStartHovering(ARitualGoatSkull* PastSkull, ARitualGoatSkull* FutureSkull);
 
 	UFUNCTION(BlueprintImplementableEvent, Category = "Cursed Room Ritual|Events")
-	void BP_OnRitualCompleted();
+	void BP_OnSkullsStartScratching(ARitualGoatSkull* PastSkull, ARitualGoatSkull* FutureSkull);
+
+	UFUNCTION(BlueprintImplementableEvent, Category = "Cursed Room Ritual|Events")
+	void BP_OnRitualCompleted(ABase_Item* PastKey, ABase_Item* FutureKey);
 
 protected:
 	UFUNCTION()
 	void OnRep_RitualState();
 
+	UFUNCTION()
+	void OnRep_HouseLightMode();
+
+	UFUNCTION()
+	void HandleSpawnedKeyHit(
+		UPrimitiveComponent* HitComponent,
+		AActor* OtherActor,
+		UPrimitiveComponent* OtherComponent,
+		FVector NormalImpulse,
+		const FHitResult& Hit);
+
 private:
 	ARoom* FindContainingRoom(const AActor* Actor) const;
-	ARitualGoatSkull* FindAvailableSkullInRoom(const ARoom* Room) const;
-	bool IsDroppedRitualItemValid(const ABase_Item* Item, EItemTimeline RequiredTimeline) const;
-	void StartCorrectRitual(ARoom* TestedRoom, ARitualGoatSkull* Skull, ARitualCandle* Candle);
-	void StartWrongRoomRitual(ARoom* TestedRoom, ARitualGoatSkull* Skull, ARitualCandle* Candle);
-	void GenerateCodeOnServer();
-	void NormalizeVisibleSlots();
-	void SetState(ECursedRoomRitualState NewState, float Duration, const FTransform& Start, const FTransform& Target);
+	bool FindSkullPairInRoom(ARoom*& OutRoom, ARitualGoatSkull*& OutPast, ARitualGoatSkull*& OutFuture) const;
+	bool IsDroppedSkullValid(const ARitualGoatSkull* Skull, EItemTimeline RequiredTimeline) const;
+	void StartRitual(ARoom* TestedRoom, ARitualGoatSkull* PastSkull, ARitualGoatSkull* FutureSkull);
+	void SetState(ECursedRoomRitualState NewState, float Duration);
 	void HandleStateFinished();
 	void ApplyReplicatedState();
+	void UpdateActiveStage();
+	void StartStageUpdates();
+	void StopStageUpdates();
+	void ApplyRiseTransform(ARitualGoatSkull* Skull, const FTransform& StartTransform, float Alpha) const;
+	void ApplyUpwardAcceleration(ARitualGoatSkull* Skull, float Acceleration) const;
+	void ApplyRandomImpulse(ARitualGoatSkull* Skull, int32 ImpulseIndex, int32 TimelineSalt) const;
+	ABase_Item* SpawnTimelineKey(TSubclassOf<ABase_Item> KeyClass, EItemTimeline Timeline, ARitualGoatSkull* SourceSkull);
+	void CompleteSuccessfulRitual();
+	void FinishSuccessfulRitualAfterKeysLand();
+	void TriggerWrongRoomConsequences();
+	void UnlockActiveSkulls();
+	void CloseAndLockTestedRoomDoors();
+	void UnlockTestedRoomDoors();
+	void SetHouseLightMode(ERitualHouseLightMode NewMode);
+	void ApplyLocalHouseLightMode();
+	void BeginLocalHouseFlicker();
+	void EndLocalHouseFlicker(bool bRestorePreviousState);
+	void UpdateLocalHouseFlicker();
+	void ApplyLocalHouseBlackout();
+	double GetSynchronizedServerTime() const;
 	void DispatchStateEvents(ECursedRoomRitualState PreviousState);
 	void LogStageEntered(ECursedRoomRitualState PreviousState) const;
 	void LogStageFinished(ECursedRoomRitualState FinishedState) const;
-	void StartVisualUpdates();
-	void UpdateRitualVisuals();
-	void StopVisualUpdates();
-	void RevealSymbolsUpTo(int32 DesiredCount);
-	void RevealSymbol(int32 SlotIndex);
-	void SendSymbolToTimeline(int32 SlotIndex, EItemTimeline Timeline);
-	FTransform MakeSymbolTransform(int32 SlotIndex, EItemTimeline Timeline) const;
-	FTransform GetRitualItemWorldTransform(const ABase_Item* Item) const;
-	void SetRitualItemWorldTransform(ABase_Item* Item, const FTransform& WorldTransform) const;
-	void RequestCompleteClueForLocalPlayer();
-	double GetSynchronizedServerTime() const;
-	float EvaluateMoveAlpha(float LinearAlpha) const;
-	FString BuildMaskedCode(EItemTimeline Timeline) const;
-	void ClearLocalSymbolVisuals();
 
 	UPROPERTY(Transient)
 	TObjectPtr<ARoom> ActiveTestedRoom;
 
-	/** Server-only complete answer. It is intentionally absent from GetLifetimeReplicatedProps. */
-	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Cursed Room Ritual|Code",
-		meta = (AllowPrivateAccess = "true"))
-	TArray<FString> FullCode;
-
-	FTransform InitialSkullTransform = FTransform::Identity;
-	FTransform ScratchStartTransform = FTransform::Identity;
-	FTransform ScratchEndTransform = FTransform::Identity;
-	FVector CeilingSurfaceStart = FVector::ZeroVector;
-	FVector CeilingSurfaceNormal = FVector::DownVector;
-	FVector ScratchWorldDirection = FVector::RightVector;
-	int32 RevealedSymbolCount = 0;
-
 	FTimerHandle StateTimerHandle;
-	FTimerHandle VisualTimerHandle;
-	FTimerHandle LocalClueRetryTimerHandle;
-
+	FTimerHandle StageUpdateTimerHandle;
+	FTimerHandle HouseFlickerTimerHandle;
+	FTimerHandle KeyLandingTimeoutHandle;
 	ECursedRoomRitualState LastDispatchedState = ECursedRoomRitualState::Idle;
 	int32 LastDispatchedSequenceId = INDEX_NONE;
-	int32 LocalVisibleSequenceId = INDEX_NONE;
-	TArray<FString> LocalVisibleClue;
-	TSet<int32> LocalReceivedSlots;
-	TArray<TWeakObjectPtr<ARitualSymbolVisual>> LocalSymbolVisuals;
+	int32 LastAppliedImpulseIndex = INDEX_NONE;
+	bool bSuccessfulConsequencesApplied = false;
+	TSet<TWeakObjectPtr<ABase_Item>> LandedKeys;
+	TArray<TWeakObjectPtr<ADrag_Item>> LockedRoomDoors;
+	TMap<TWeakObjectPtr<ALight_Env>, bool> PreviousEnvironmentLightFlicker;
+	TMap<TWeakObjectPtr<ULightComponentBase>, bool> PreviousGenericLightVisibility;
+	TSet<TWeakObjectPtr<ASwitcher_Env>> FlickeringEmissiveSwitchers;
 };

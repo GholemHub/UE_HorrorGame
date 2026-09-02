@@ -104,6 +104,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Item|Timeline")
 	void SetItemTimeline(EItemTimeline NewTimeline);
 
+	/** Enables replicated loose-world physics for server-spawned pickups such as ritual keys. */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Item|Physics")
+	void EnableDroppedPhysics();
+
 	UPROPERTY(EditAnywhere)
 	UStaticMesh* PastMesh;
 
@@ -138,8 +142,7 @@ public:
 	virtual void OnRep_OwningCharacter(AHronoCharacter* PreviousOwningCharacter);
 
 	UFUNCTION(BlueprintCallable, Category = "Item")
-
-	void Drop();
+	virtual void Drop();
 
 	UPROPERTY(BlueprintReadOnly, Category = "Item")
 	bool bIsPickedUp = false;
@@ -148,7 +151,7 @@ public:
 	void DetachFromCharacter();
 	
 	UFUNCTION()
-	void UpdateVisibilityForLocalPlayer(EItemTimeline ViewerTimeline);
+	virtual void UpdateVisibilityForLocalPlayer(EItemTimeline ViewerTimeline);
 
 	UFUNCTION()
 	void OnRep_ItemTimeline();
@@ -156,11 +159,15 @@ public:
 	UFUNCTION()
 	void OnRep_MirrorTransferState();
 
+	UFUNCTION()
+	void OnRep_DroppedPhysicsEnabled();
+
 	/** Cosmetic hook for item-specific transfer effects. */
 	UFUNCTION(BlueprintImplementableEvent, Category = "Item|Mirror Transfer")
 	void OnMirrorTransferStateChanged(EMirrorItemTransferState NewState);
 	
 protected:
+	virtual void PostInitializeComponents() override;
 	virtual void BeginPlay() override;
 
 	/** The mesh's authored transform under DefaultSceneRoot, restored after physics detaches it. */
@@ -168,12 +175,17 @@ protected:
 
 	/** Applies mesh, gameplay tag, collision, and local visibility for ItemTimeline. */
 	void ApplyItemTimelineState();
+	void ApplyDroppedPhysicsState();
+	void LogHeldTransformState(const TCHAR* Context) const;
 
 	/** Restores world physics and timeline interaction responses for a dropped item. */
 	void ConfigureDroppedCollision(UPrimitiveComponent* PrimitiveComponent);
 
 	// Tracks what mesh state is currently visible to avoid spamming updates
 	EItemTimeline CurrentCachedTimeline = EItemTimeline::Both;
+
+	UPROPERTY(ReplicatedUsing = OnRep_DroppedPhysicsEnabled)
+	bool bDroppedPhysicsEnabled = false;
 public:	
 	virtual void Tick(float DeltaTime) override;
 	UStaticMeshComponent* GetItemMesh() const { return ItemMesh; }

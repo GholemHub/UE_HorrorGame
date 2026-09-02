@@ -21,7 +21,6 @@ class UMaterialInterface;
 class UMaterialInstanceDynamic;
 class UPrimitiveComponent;
 class AHronoCharacter;
-class ACursedRoomRitual;
 struct FInputActionValue;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
@@ -600,23 +599,6 @@ public:
 
 	/** Returns this character's timeline */
 	EItemTimeline GetTimeline() const { return CharacterTimeline; }
-
-	/**
-	 * Owner-only delivery path for one permitted cursed-room clue symbol.
-	 * The complete answer is never replicated through the character.
-	 */
-	UFUNCTION(Client, Reliable)
-	void ClientReceiveCursedRoomRitualSymbol(
-		ACursedRoomRitual* Ritual,
-		int32 SequenceId,
-		int32 SlotIndex,
-		const FString& Symbol,
-		EItemTimeline ClueTimeline,
-		const FTransform& SymbolTransform);
-
-	/** Used after a completed-state RepNotify so a late-joining owner receives only its timeline clue. */
-	UFUNCTION(Server, Reliable)
-	void ServerRequestCursedRoomRitualClue(ACursedRoomRitual* Ritual, int32 SequenceId);
 
 	virtual void OnStartCrouch(float HalfHeightAdjust, float ScaledHalfHeightAdjust) override;
 

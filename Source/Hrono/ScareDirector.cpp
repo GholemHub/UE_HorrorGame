@@ -542,6 +542,34 @@ void AScareDirector::EndHunt()
 	}
 }
 
+void AScareDirector::ForceCloseAllDoorsForEvent(const FString& Reason)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	AnimateAllDoorsForThreatState(false,
+		Reason.IsEmpty() ? TEXT("External scripted event") : Reason);
+}
+
+void AScareDirector::ForceAllLightsOffForEvent(const FString& Reason)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	UE_LOG(LogGhostHuntDirector, Log, TEXT("[%s] Forced whole-house blackout. Reason: %s"),
+		*GetName(), Reason.IsEmpty() ? TEXT("External scripted event") : *Reason);
+	MulticastForceAllLightsOffForEvent(Reason);
+}
+
+void AScareDirector::MulticastForceAllLightsOffForEvent_Implementation(const FString& Reason)
+{
+	TurnOffAllLightsForThreatState(CurrentThreatState);
+}
+
 bool AScareDirector::IsHuntActive() const
 {
 	switch (CurrentHuntState)
@@ -767,11 +795,6 @@ void AScareDirector::DispatchThreatStateChanged(EGhostThreatState OldState, EGho
 
 	if (HasAuthority())
 	{
-		if (NewState == EGhostThreatState::HuntEligible)
-		{
-			SpawnBabajAtRandomPoint();
-		}
-
 		if (bAnimateDoorsOnThreatStateChanges && NewState == EGhostThreatState::Manifesting)
 		{
 			AnimateAllDoorsForThreatState(false, TEXT("Aggression entered Manifesting"));
@@ -787,6 +810,14 @@ bool AScareDirector::SpawnBabajAtRandomPoint()
 {
 	if (!HasAuthority() || !GetWorld())
 	{
+		return false;
+	}
+
+	if (!BabajClass)
+	{
+		UE_LOG(LogGhostHuntDirector, Error,
+			TEXT("[%s] [BabajSpawn] Cannot spawn: BabajClass is not configured or failed to load."),
+			*GetName());
 		return false;
 	}
 
@@ -830,10 +861,67 @@ bool AScareDirector::SpawnBabajAtRandomPoint()
 	ReceiveSpawnBabaj(SpawnPoint, SpawnTransform, BabajClass, Lifetime);
 
 	UE_LOG(LogGhostHuntDirector, Log,
-		TEXT("[%s] Requested Blueprint Babaj spawn at random point %s."),
-		*GetName(), *SpawnPoint->GetName());
+		TEXT("[%s] [BabajSpawn] Dispatched authoritative spawn at random point %s using class %s."),
+		*GetName(), *SpawnPoint->GetName(), *GetNameSafe(BabajClass.Get()));
 
 	return true;
+}
+
+void AScareDirector::ReceiveSpawnBabaj_Implementation(
+	ABase_Item* SpawnPoint,
+	FTransform SpawnTransform,
+	TSubclassOf<AActor> SuggestedBabajClass,
+	float SuggestedLifetime)
+{
+	if (!HasAuthority() || !GetWorld())
+	{
+		return;
+	}
+
+	if (!SuggestedBabajClass)
+	{
+		UE_LOG(LogGhostHuntDirector, Error,
+			TEXT("[%s] [BabajSpawn] Native spawn failed: BabajClass is not configured."),
+			*GetName());
+		return;
+	}
+
+	FActorSpawnParameters SpawnParameters;
+	SpawnParameters.Owner = this;
+	SpawnParameters.SpawnCollisionHandlingOverride =
+		ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
+
+	AActor* SpawnedBabaj = GetWorld()->SpawnActor<AActor>(
+		SuggestedBabajClass,
+		SpawnTransform,
+		SpawnParameters);
+
+	if (!IsValid(SpawnedBabaj))
+	{
+		UE_LOG(LogGhostHuntDirector, Error,
+			TEXT("[%s] [BabajSpawn] Native SpawnActor failed for class %s at point %s."),
+			*GetName(),
+			*GetNameSafe(SuggestedBabajClass.Get()),
+			*GetNameSafe(SpawnPoint));
+		return;
+	}
+
+	if (APawn* SpawnedPawn = Cast<APawn>(SpawnedBabaj); SpawnedPawn && !SpawnedPawn->GetController())
+	{
+		SpawnedPawn->SpawnDefaultController();
+	}
+
+	const float Lifetime = FMath::Clamp(SuggestedLifetime, 0.1f, 40.0f);
+	SpawnedBabaj->SetLifeSpan(Lifetime);
+	SetHuntDemon(SpawnedBabaj);
+
+	UE_LOG(LogGhostHuntDirector, Log,
+		TEXT("[%s] [BabajSpawn] Spawned %s (%s) at %s. Lifetime=%.1fs."),
+		*GetName(),
+		*SpawnedBabaj->GetName(),
+		*GetNameSafe(SuggestedBabajClass.Get()),
+		*GetNameSafe(SpawnPoint),
+		Lifetime);
 }
 
 USceneComponent* AScareDirector::ResolveBabajSpawnComponent(const ABase_Item* SpawnPoint) const
@@ -1200,6 +1288,18 @@ void AScareDirector::StartActualHunt()
 		bCompletedWarningPhase
 			? TEXT("Omen sequence completed and the warning resolved as a real Hunt")
 			: TEXT("Triggered Hunt was configured to skip the warning phase"));
+
+	// Babaj belongs to an actual Hunt, not merely to the HuntEligible aggression band.
+	// This also guarantees that scripted attacks (for example a wrong-room ritual)
+	// use the same authoritative spawn path as organic Hunts.
+	const bool bBabajSpawnRequested = SpawnBabajAtRandomPoint();
+	if (!bBabajSpawnRequested)
+	{
+		UE_LOG(LogGhostHuntDirector, Error,
+			TEXT("[%s] [BabajSpawn] Hunt entered Manifestation, but no spawn could be requested. "
+				"Check BabajClass and placed BP_ItemPointSpawn actors."),
+			*GetName());
+	}
 
 	const float MinDuration = FMath::Max(1.0f, FMath::Min(HuntDurationMin, HuntDurationMax));
 	const float MaxDuration = FMath::Max(MinDuration, FMath::Max(HuntDurationMin, HuntDurationMax));

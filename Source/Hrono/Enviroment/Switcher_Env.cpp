@@ -3,9 +3,13 @@
 
 #include "Enviroment/Switcher_Env.h"
 #include "Components/LightComponentBase.h"
+#include "Components/MeshComponent.h"
 #include "Net/UnrealNetwork.h"
 #include "Enviroment/Light_Env.h"
 #include "Kismet/GameplayStatics.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "Materials/MaterialInterface.h"
+#include "ScareDirector.h"
 #include "Sound/SoundBase.h"
 
 
@@ -107,14 +111,169 @@ int32 ASwitcher_Env::ApplyLightStateToLinkedActors(bool bNewIsLightOn)
 		}
 	}
 
-	return AppliedLightCount;
+	return AppliedLightCount + ApplyEmissiveStateToLinkedActors(bNewIsLightOn);
+}
+
+void ASwitcher_Env::InitializeEmissiveMaterials()
+{
+	if (bEmissiveMaterialsInitialized)
+	{
+		return;
+	}
+
+	bEmissiveMaterialsInitialized = true;
+	TSet<AActor*> CandidateActors;
+	for (AActor* LightActor : LightActors)
+	{
+		if (IsValid(LightActor))
+		{
+			CandidateActors.Add(LightActor);
+		}
+	}
+	for (AActor* EmissiveActor : EmissiveActors)
+	{
+		if (IsValid(EmissiveActor))
+		{
+			CandidateActors.Add(EmissiveActor);
+		}
+	}
+
+	int32 ControlledParameterCount = 0;
+	for (AActor* CandidateActor : CandidateActors)
+	{
+		TInlineComponentArray<UMeshComponent*> MeshComponents;
+		CandidateActor->GetComponents(MeshComponents, true);
+		for (UMeshComponent* MeshComponent : MeshComponents)
+		{
+			if (!IsValid(MeshComponent))
+			{
+				continue;
+			}
+
+			const int32 MaterialCount = MeshComponent->GetNumMaterials();
+			for (int32 MaterialIndex = 0; MaterialIndex < MaterialCount; ++MaterialIndex)
+			{
+				UMaterialInterface* SourceMaterial = MeshComponent->GetMaterial(MaterialIndex);
+				if (!IsValid(SourceMaterial))
+				{
+					continue;
+				}
+
+				TArray<FMaterialParameterInfo> ScalarInfos;
+				TArray<FMaterialParameterInfo> VectorInfos;
+				TArray<FGuid> ParameterIds;
+				SourceMaterial->GetAllScalarParameterInfo(ScalarInfos, ParameterIds);
+				ParameterIds.Reset();
+				SourceMaterial->GetAllVectorParameterInfo(VectorInfos, ParameterIds);
+
+				TArray<FName> MatchingScalarNames;
+				TArray<FName> MatchingVectorNames;
+				for (const FMaterialParameterInfo& ParameterInfo : ScalarInfos)
+				{
+					if (EmissiveScalarParameterNames.Contains(ParameterInfo.Name))
+					{
+						MatchingScalarNames.AddUnique(ParameterInfo.Name);
+					}
+				}
+				for (const FMaterialParameterInfo& ParameterInfo : VectorInfos)
+				{
+					if (EmissiveVectorParameterNames.Contains(ParameterInfo.Name))
+					{
+						MatchingVectorNames.AddUnique(ParameterInfo.Name);
+					}
+				}
+
+				if (MatchingScalarNames.IsEmpty() && MatchingVectorNames.IsEmpty())
+				{
+					continue;
+				}
+
+				UMaterialInstanceDynamic* DynamicMaterial =
+					MeshComponent->CreateDynamicMaterialInstance(MaterialIndex, SourceMaterial);
+				if (!IsValid(DynamicMaterial))
+				{
+					continue;
+				}
+
+				FSwitcherEmissiveMaterialState& State = EmissiveMaterialStates.AddDefaulted_GetRef();
+				State.Material = DynamicMaterial;
+				for (const FName ParameterName : MatchingScalarNames)
+				{
+					State.OriginalScalarValues.Add(
+						ParameterName,
+						DynamicMaterial->K2_GetScalarParameterValue(ParameterName));
+					++ControlledParameterCount;
+				}
+				for (const FName ParameterName : MatchingVectorNames)
+				{
+					State.OriginalVectorValues.Add(
+						ParameterName,
+						DynamicMaterial->K2_GetVectorParameterValue(ParameterName));
+					++ControlledParameterCount;
+				}
+			}
+		}
+	}
+
+	UE_LOG(LogTemp, Log,
+		TEXT("[%s] Emissive control initialized: %d material(s), %d parameter(s), %d explicit actor(s)"),
+		*GetName(), EmissiveMaterialStates.Num(), ControlledParameterCount, EmissiveActors.Num());
+}
+
+int32 ASwitcher_Env::ApplyEmissiveStateToLinkedActors(bool bNewIsLightOn)
+{
+	InitializeEmissiveMaterials();
+
+	int32 AppliedParameterCount = 0;
+	for (FSwitcherEmissiveMaterialState& State : EmissiveMaterialStates)
+	{
+		UMaterialInstanceDynamic* DynamicMaterial = State.Material.Get();
+		if (!IsValid(DynamicMaterial))
+		{
+			continue;
+		}
+
+		for (const TPair<FName, float>& Pair : State.OriginalScalarValues)
+		{
+			DynamicMaterial->SetScalarParameterValue(Pair.Key, bNewIsLightOn ? Pair.Value : 0.0f);
+			++AppliedParameterCount;
+		}
+		for (const TPair<FName, FLinearColor>& Pair : State.OriginalVectorValues)
+		{
+			DynamicMaterial->SetVectorParameterValue(
+				Pair.Key,
+				bNewIsLightOn ? Pair.Value : FLinearColor::Black);
+			++AppliedParameterCount;
+		}
+	}
+
+	return AppliedParameterCount;
 }
 
 void ASwitcher_Env::ServerInteract_Implementation(AActor* Interactor)
 {
 	UE_LOG(LogTemp, Log, TEXT("ServerInteract_Implementation"));
 
-	SetLightState(!bIsLightOn);
+	const bool bTurningOn = !bIsLightOn;
+	const bool bStateChanged = SetLightState(bTurningOn);
+	if (bStateChanged && bTurningOn && ThreatIncreaseWhenTurnedOn > 0.0f)
+	{
+		if (AScareDirector* Director = AScareDirector::GetHuntDirector(this))
+		{
+			Director->AddThreatWithReason(
+				ThreatIncreaseWhenTurnedOn,
+				FString::Printf(
+					TEXT("Player %s turned on switch %s"),
+					*GetNameSafe(Interactor),
+					*GetName()));
+		}
+		else
+		{
+			UE_LOG(LogTemp, Warning,
+				TEXT("[%s] Light turned ON, but no ScareDirector was found; Threat was not changed."),
+				*GetName());
+		}
+	}
 }
 
 bool ASwitcher_Env::SetLightState(bool bNewIsLightOn)
