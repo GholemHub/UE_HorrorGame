@@ -54,6 +54,13 @@ void ATimelineTransferItem::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>
 void ATimelineTransferItem::BeginPlay()
 {
 	Super::BeginPlay();
+	if (IsValid(TransferVFX))
+	{
+		// Keep even finite Niagara systems alive for the entire transfer. This also
+		// makes Blueprint-authored effects work without requiring an infinite loop.
+		TransferVFX->OnSystemFinished.AddUniqueDynamic(
+			this, &ATimelineTransferItem::OnTransferVFXSystemFinished);
+	}
 	if (!HasAuthority())
 	{
 		ApplyTransferVFXState();
@@ -82,6 +89,14 @@ void ATimelineTransferItem::EndPlay(const EEndPlayReason::Type EndPlayReason)
 void ATimelineTransferItem::OnRep_TransferVFXActive()
 {
 	ApplyTransferVFXState();
+}
+
+void ATimelineTransferItem::OnTransferVFXSystemFinished(UNiagaraComponent* FinishedComponent)
+{
+	if (bTransferVFXActive && FinishedComponent == TransferVFX)
+	{
+		TransferVFX->Activate(true);
+	}
 }
 
 void ATimelineTransferItem::SetLocalTransferVFXActive(bool bActive)
@@ -135,11 +150,18 @@ void ATimelineTransferItem::ApplyTransferVFXState()
 
 	if (bTransferVFXActive)
 	{
-		TransferVFX->Activate(true);
+		TransferVFX->SetHiddenInGame(false, true);
+		TransferVFX->SetVisibility(true, true);
+		if (!TransferVFX->IsActive())
+		{
+			TransferVFX->Activate(true);
+		}
 	}
 	else
 	{
-		TransferVFX->Deactivate();
+		// A transfer ending is a hard VFX boundary: do not leave existing particles
+		// fading after the item was completed or the preview was cancelled.
+		TransferVFX->DeactivateImmediate();
 	}
 }
 
