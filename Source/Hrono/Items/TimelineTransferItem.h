@@ -32,7 +32,7 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Mirror Transfer|Components")
 	TObjectPtr<USceneComponent> TransferPoint;
 
-	/** Assign a looping Niagara System here. Active only while an item has a live preview. */
+	/** Niagara effect shown for the complete transfer, from preview creation until completion/cancellation. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Mirror Transfer|Components")
 	TObjectPtr<UNiagaraComponent> TransferVFX;
 
@@ -99,6 +99,9 @@ protected:
 
 	UFUNCTION()
 	void OnRep_TransferVFXActive();
+
+	UFUNCTION()
+	void OnTransferVFXSystemFinished(UNiagaraComponent* FinishedComponent);
 
 private:
 	UPROPERTY()
