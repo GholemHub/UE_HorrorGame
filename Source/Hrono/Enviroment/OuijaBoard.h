@@ -294,6 +294,14 @@ protected:
 		meta = (DisplayName = "On Automatic Typing Finished"))
 	void BP_OnAutomaticTypingFinished(const FString& Word);
 
+	/**
+	 * Delivers the completed automatic word to every network instance of the
+	 * board. Blueprint visual/audio reactions connected to the finished event
+	 * therefore run on the listen server and on every client.
+	 */
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastAutomaticTypingFinished(const FString& CompletedWord);
+
 private:
 	void ApplyArrowTarget(bool bSnap);
 	void AnnounceDetectedLetter();

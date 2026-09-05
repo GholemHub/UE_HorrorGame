@@ -12,8 +12,9 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE(FDoorLockTriggerEvent);
 
 /**
  * Closes and locks a configured group of doors when a Hrono player overlaps the
- * box. UnlockTriggeredDoors permanently releases only the locks owned by this
- * trigger, leaving key locks and locks from other triggers untouched.
+ * box. UnlockTriggeredDoors releases only the locks owned by this trigger and
+ * rearms it for the next gameplay cycle, leaving key locks and locks from other
+ * triggers untouched.
  */
 UCLASS(BlueprintType, Blueprintable)
 class HRONO_API ADoorLockTrigger : public AActor
@@ -41,8 +42,9 @@ public:
 	bool bCloseDoorsWhenTriggered = true;
 
 	/**
-	 * Prevents later overlaps from locking the doors again. On Triggered is still
-	 * sent for every valid character overlap so it can drive Blueprint gameplay.
+	 * Prevents later overlaps from stacking locks during the current cycle.
+	 * Unlock Triggered Doors resets the cycle so a newly selected victim can
+	 * activate the trigger again. On Triggered is still sent for every overlap.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Door Lock Trigger")
 	bool bTriggerOnlyOnce = true;
@@ -86,11 +88,21 @@ public:
 	bool ActivateDoorLockWithActor(AActor* TriggeringActor);
 
 	/**
-	 * Releases all locks created by this trigger and permanently sets the unlock
-	 * flag. Call this Blueprint method when the player is allowed to return.
+	 * Releases all locks created by this trigger and rearms it. Call this Blueprint
+	 * method whenever a new victim is selected so the doors can be opened again;
+	 * the next valid overlap can then close and lock them for the new cycle.
 	 */
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Door Lock Trigger")
 	bool UnlockTriggeredDoors();
+
+	/**
+	 * Permanently releases this trigger's locks and prevents every future overlap
+	 * from locking them again. Used by the session-start gate after all required
+	 * players have entered the gameplay map.
+	 */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly,
+		Category = "Door Lock Trigger|Session Start")
+	bool PermanentlyUnlockTriggeredDoors();
 
 	UPROPERTY(BlueprintAssignable, Category = "Door Lock Trigger|Events")
 	FDoorLockTriggerEvent OnDoorsTriggered;

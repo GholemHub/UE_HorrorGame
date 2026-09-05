@@ -3,6 +3,6 @@
 #include "Hrono.h"
 #include "Modules/ModuleManager.h"
 
-IMPLEMENT_PRIMARY_GAME_MODULE( FDefaultGameModuleImpl, Hrono, "Hrono" );
+IMPLEMENT_PRIMARY_GAME_MODULE(FDefaultGameModuleImpl, Hrono, "Hrono");
 
 DEFINE_LOG_CATEGORY(LogHrono)

@@ -38,7 +38,7 @@ void ADoorLockTrigger::BeginPlay()
 		if (AHronoGameMode* GameMode = GetWorld()->GetAuthGameMode<AHronoGameMode>();
 			GameMode && GameMode->AreAllRequiredPlayersPresent())
 		{
-			UnlockTriggeredDoors();
+			PermanentlyUnlockTriggeredDoors();
 		}
 	}
 }
@@ -154,6 +154,44 @@ bool ADoorLockTrigger::UnlockTriggeredDoors()
 		return false;
 	}
 
+	// A session-start gate that has been permanently opened must never be rearmed
+	// by an unrelated Blueprint call.
+	if (bDoorsUnlocked)
+	{
+		return false;
+	}
+
+	const bool bHadActiveCycle = bHasTriggered || !TriggeredDoors.IsEmpty();
+	ReleaseOwnedLocks();
+
+	// Trigger Only Once now applies to one lock cycle. Selecting the next victim
+	// calls this method, clears the completed cycle, and allows the next overlap.
+	bHasTriggered = false;
+
+	if (!bHadActiveCycle)
+	{
+		return false;
+	}
+
+	UE_LOG(LogDoorLockTrigger, Log,
+		TEXT("%s released its door locks and rearmed for the next cycle"),
+		*GetName());
+
+	OnDoorsUnlocked.Broadcast();
+	ForceNetUpdate();
+	return true;
+}
+
+bool ADoorLockTrigger::PermanentlyUnlockTriggeredDoors()
+{
+	if (!HasAuthority())
+	{
+		UE_LOG(LogDoorLockTrigger, Warning,
+			TEXT("PermanentlyUnlockTriggeredDoors ignored for %s because it was not called on the server"),
+			*GetName());
+		return false;
+	}
+
 	if (bDoorsUnlocked)
 	{
 		return false;
@@ -163,7 +201,7 @@ bool ADoorLockTrigger::UnlockTriggeredDoors()
 	ReleaseOwnedLocks();
 
 	UE_LOG(LogDoorLockTrigger, Log,
-		TEXT("%s released all of its door locks"),
+		TEXT("%s permanently released all of its door locks"),
 		*GetName());
 
 	OnDoorsUnlocked.Broadcast();

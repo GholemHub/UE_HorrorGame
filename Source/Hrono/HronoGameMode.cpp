@@ -38,7 +38,7 @@ void AHronoGameMode::TryUnlockSessionStartGates()
 		ADoorLockTrigger* DoorLockTrigger = *It;
 		if (IsValid(DoorLockTrigger) && DoorLockTrigger->bLockUntilAllPlayersPresent)
 		{
-			DoorLockTrigger->UnlockTriggeredDoors();
+			DoorLockTrigger->PermanentlyUnlockTriggeredDoors();
 		}
 	}
 }
