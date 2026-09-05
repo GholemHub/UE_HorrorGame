@@ -19,6 +19,7 @@ public class Hrono : ModuleRules
 			"GameplayStateTreeModule",
 			"UMG",
 			"Slate",
+			"SlateCore",
 			"Niagara",
 			"GeometryCollectionEngine",
             "GameplayTags",
@@ -26,7 +27,9 @@ public class Hrono : ModuleRules
 			"OnlineSubsystemUtils"
         });
 
-		PrivateDependencyModuleNames.AddRange(new string[] { });
+		PrivateDependencyModuleNames.AddRange(new string[] {
+			"MoviePlayer"
+		});
 
 		PublicIncludePaths.AddRange(new string[] {
 			"Hrono",
