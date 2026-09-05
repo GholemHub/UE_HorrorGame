@@ -14,6 +14,7 @@ AOuijaBoard::AOuijaBoard()
 {
 	PrimaryActorTick.bCanEverTick = true;
 	bReplicates = true;
+	bAlwaysRelevant = true;
 
 	SceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("SceneRoot"));
 	SetRootComponent(SceneRoot);
@@ -574,13 +575,26 @@ void AOuijaBoard::ClearAutomaticTypingState()
 
 void AOuijaBoard::BroadcastAutomaticTypingFinished(const FString& CompletedWord)
 {
-	OnAutomaticTypingFinished.Broadcast(CompletedWord);
-	BP_OnAutomaticTypingFinished(CompletedWord);
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	// A multicast executes locally on the authority as well, so do not also call
+	// the Blueprint event directly here or the listen server would receive it twice.
+	MulticastAutomaticTypingFinished(CompletedWord);
 
 	UE_LOG(LogTemp, Log,
 		TEXT("[OuijaBoard] %s finished automatically typing '%s'"),
 		*GetName(),
 		*CompletedWord);
+}
+
+void AOuijaBoard::MulticastAutomaticTypingFinished_Implementation(
+	const FString& CompletedWord)
+{
+	OnAutomaticTypingFinished.Broadcast(CompletedWord);
+	BP_OnAutomaticTypingFinished(CompletedWord);
 }
 
 void AOuijaBoard::ResetHoveredInputState()

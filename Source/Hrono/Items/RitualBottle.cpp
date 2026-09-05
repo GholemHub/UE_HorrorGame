@@ -6,6 +6,7 @@
 #include "GameFramework/GameStateBase.h"
 #include "HronoCharacter.h"
 #include "Net/UnrealNetwork.h"
+#include "Ritual/RitualChairAudioReplication.h"
 
 ARitualBottle::ARitualBottle()
 {
@@ -15,7 +16,7 @@ ARitualBottle::ARitualBottle()
 	bReplicates = true;
 	bAlwaysRelevant = true;
 	SetReplicateMovement(false);
-	NetUpdateFrequency = 30.0f;
+	SetNetUpdateFrequency(30.0f);
 
 	SceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("SceneRoot"));
 	SetRootComponent(SceneRoot);
@@ -283,6 +284,7 @@ void ARitualBottle::HandleSpinStarted()
 	}
 
 	LastStartedSequence = SpinState.SequenceId;
+	PlayRitualChairStartAudioForRemoteClient(this, GetActorLocation());
 	OnSpinStarted.Broadcast(this);
 	BP_OnBottleSpinStarted();
 }
