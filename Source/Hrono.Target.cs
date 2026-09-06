@@ -10,6 +10,14 @@ public class HronoTarget : TargetRules
 		Type = TargetType.Game;
 		DefaultBuildSettings = BuildSettingsVersion.V7;
 		IncludeOrderVersion = EngineIncludeOrderVersion.Unreal5_8;
+
+		if (Target.Configuration == UnrealTargetConfiguration.Shipping)
+		{
+			// Required by OnlineSubsystemSteam when a packaged build is launched outside Steam.
+			bOverrideBuildEnvironment = true;
+			GlobalDefinitions.Add("UE_PROJECT_STEAMSHIPPINGID=480");
+		}
+
 		ExtraModuleNames.Add("Hrono");
 	}
 }
