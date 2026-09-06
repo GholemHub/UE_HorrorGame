@@ -59,6 +59,4 @@ private:
 	bool bSwingAnimationActive = false;
 	float SwingAnimationElapsed = 0.0f;
 	float NextAllowedSwingTime = 0.0f;
-	FRotator SwingInitialRotation = FRotator::ZeroRotator;
-	FRotator SwingTargetRotation = FRotator::ZeroRotator;
 };

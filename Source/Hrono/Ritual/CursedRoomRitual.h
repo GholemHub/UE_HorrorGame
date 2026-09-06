@@ -14,6 +14,7 @@ class ASwitcher_Env;
 class ULightComponentBase;
 class UPrimitiveComponent;
 class USceneComponent;
+class USoundBase;
 
 UENUM(BlueprintType)
 enum class ECursedRoomRitualState : uint8
@@ -189,6 +190,14 @@ public:
 		meta = (ClampMin = "0.04", Units = "s"))
 	float HouseFlickerIntervalMax = 0.20f;
 
+	/**
+	 * Played once whenever the whole-house flicker changes from an ON pulse to an
+	 * OFF pulse. This is intentionally one 2D sound per pulse, rather than one
+	 * overlapping sound for every lamp in the house.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Lights|Audio")
+	TObjectPtr<USoundBase> FlickerOffSound;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Debug")
 	bool bDebugRitual = false;
 
@@ -291,6 +300,7 @@ private:
 	int32 LastDispatchedSequenceId = INDEX_NONE;
 	int32 LastAppliedImpulseIndex = INDEX_NONE;
 	bool bSuccessfulConsequencesApplied = false;
+	bool bLastHouseFlickerPulseOn = true;
 	TSet<TWeakObjectPtr<ABase_Item>> LandedKeys;
 	TArray<TWeakObjectPtr<ADrag_Item>> LockedRoomDoors;
 	TMap<TWeakObjectPtr<ALight_Env>, bool> PreviousEnvironmentLightFlicker;

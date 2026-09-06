@@ -256,6 +256,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hunt|Threat", meta = (ClampMin = "60.0"))
 	float HuntThreshold = 80.0f;
 
+	/** At maximum Threat, skip the random eligibility roll and spawn Babaj immediately. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hunt|Threat")
+	bool bForceImmediateHuntAtMaxThreat = true;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hunt|Threat", meta = (ClampMin = "0.0"))
 	float PassiveThreatPerInterval = 1.0f;
 

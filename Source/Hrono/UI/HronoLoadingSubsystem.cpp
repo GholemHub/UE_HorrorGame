@@ -85,6 +85,35 @@ void UHronoLoadingSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		{
 			return WeakThis.IsValid() ? WeakThis->TickLoading(DeltaSeconds) : false;
 		});
+	if (GEngine)
+	{
+		TravelFailureHandle = GEngine->OnTravelFailure().AddWeakLambda(
+			this,
+			[this](UWorld*, ETravelFailure::Type FailureType, const FString& Error)
+			{
+				if (!bArmNextMapWarmup && !bWorldWarmupActive && !IsPreloading())
+				{
+					return;
+				}
+				UE_LOG(LogHrono, Error,
+					TEXT("Loading flow cancelled by travel failure %d: %s"),
+					static_cast<int32>(FailureType), *Error);
+				CancelLoadingFlow();
+			});
+		NetworkFailureHandle = GEngine->OnNetworkFailure().AddWeakLambda(
+			this,
+			[this](UWorld*, UNetDriver*, ENetworkFailure::Type FailureType, const FString& Error)
+			{
+				if (!bArmNextMapWarmup && !bWorldWarmupActive && !IsPreloading())
+				{
+					return;
+				}
+				UE_LOG(LogHrono, Error,
+					TEXT("Loading flow cancelled by network failure %d: %s"),
+					static_cast<int32>(FailureType), *Error);
+				CancelLoadingFlow();
+			});
+	}
 	PrepareMovieLoadingScreen();
 }
 
@@ -94,6 +123,16 @@ void UHronoLoadingSubsystem::Deinitialize()
 	{
 		FCoreUObjectDelegates::PostLoadMapWithWorld.Remove(PostLoadMapHandle);
 		PostLoadMapHandle.Reset();
+	}
+	if (GEngine && TravelFailureHandle.IsValid())
+	{
+		GEngine->OnTravelFailure().Remove(TravelFailureHandle);
+		TravelFailureHandle.Reset();
+	}
+	if (GEngine && NetworkFailureHandle.IsValid())
+	{
+		GEngine->OnNetworkFailure().Remove(NetworkFailureHandle);
+		NetworkFailureHandle.Reset();
 	}
 	bTickerEnabled = false;
 	CancelLoadingFlow();
@@ -118,7 +157,9 @@ void UHronoLoadingSubsystem::PreloadGameplayContent(
 	TArray<FSoftObjectPath> Paths;
 	if (!GameplayMap.IsNull())
 	{
-		Paths.AddUnique(GameplayMap.ToSoftObjectPath());
+		// Never stream a UWorld as a regular asset immediately before OpenLevel or
+		// ServerTravel. In packaged builds that can leave the destination package
+		// in an intermediate async-load state when network travel begins.
 		TargetGameplayMapName = UWorld::RemovePIEPrefix(
 			FPackageName::GetShortName(GameplayMap.ToSoftObjectPath().GetLongPackageName()));
 	}
@@ -133,6 +174,9 @@ void UHronoLoadingSubsystem::PreloadGameplayContent(
 			Paths.AddUnique(Asset.ToSoftObjectPath());
 		}
 	}
+	UE_LOG(LogHrono, Log,
+		TEXT("Loading flow armed for '%s' with %d explicit asset(s); map loading is deferred to travel."),
+		*TargetGameplayMapName, Paths.Num());
 
 	if (Paths.IsEmpty())
 	{
@@ -143,8 +187,8 @@ void UHronoLoadingSubsystem::PreloadGameplayContent(
 			ViewportProgressBar->SetPercent(PreloadProgress);
 		}
 		OnPreloadProgress.Broadcast(PreloadProgress);
-		HideViewportLoadingOverlay();
-		PrepareMovieLoadingScreen();
+		// Keep this same overlay alive through session creation, travel, and world
+		// warmup. Reusing it avoids the two loading-screen flashes seen in PIE.
 		OnPreloadCompleted.Broadcast(true);
 		return;
 	}
@@ -231,6 +275,9 @@ void UHronoLoadingSubsystem::HandlePostLoadMap(UWorld* LoadedWorld)
 
 	const FString LoadedMapName = UWorld::RemovePIEPrefix(
 		FPackageName::GetShortName(LoadedWorld->GetOutermost()->GetName()));
+	UE_LOG(LogHrono, Log,
+		TEXT("Post-load map '%s' received; expected gameplay map is '%s'."),
+		*LoadedMapName, *TargetGameplayMapName);
 	if (TargetGameplayMapName.IsEmpty() || LoadedMapName.Equals(TargetGameplayMapName, ESearchCase::IgnoreCase))
 	{
 		bArmNextMapWarmup = false;
@@ -259,16 +306,17 @@ void UHronoLoadingSubsystem::HandlePreloadComplete()
 		ViewportProgressBar->SetPercent(PreloadProgress);
 	}
 	OnPreloadProgress.Broadcast(PreloadProgress);
-	HideViewportLoadingOverlay();
 
 	if (bSuccess)
 	{
 		bArmNextMapWarmup = true;
-		PrepareMovieLoadingScreen();
+		// Do not remove the viewport overlay here. It remains visible while the
+		// Blueprint creates/joins the session and is reused by BeginWorldWarmup.
 	}
 	else
 	{
 		UE_LOG(LogHrono, Error, TEXT("One or more gameplay assets failed to preload."));
+		HideViewportLoadingOverlay();
 		ReleasePreloadedAssets();
 	}
 	OnPreloadCompleted.Broadcast(bSuccess);
@@ -276,6 +324,8 @@ void UHronoLoadingSubsystem::HandlePreloadComplete()
 
 void UHronoLoadingSubsystem::BeginWorldWarmup(UWorld* LoadedWorld)
 {
+	UE_LOG(LogHrono, Log, TEXT("Beginning post-travel warmup for '%s'."),
+		*GetNameSafe(LoadedWorld));
 	WarmupWorld = LoadedWorld;
 	WarmupStartTime = FPlatformTime::Seconds();
 	StableReadyFrames = 0;
@@ -296,6 +346,8 @@ void UHronoLoadingSubsystem::FinishWorldWarmup(bool bTimedOut)
 	{
 		SetPlayerInputBlocked(World, false);
 	}
+	UE_LOG(LogHrono, Log, TEXT("Post-travel warmup finished (timed out: %s)."),
+		bTimedOut ? TEXT("true") : TEXT("false"));
 	bWorldWarmupActive = false;
 	WarmupWorld.Reset();
 	TargetGameplayMapName.Reset();
