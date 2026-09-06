@@ -7,6 +7,7 @@
 #include "HronoCharacter.h"
 #include "Net/UnrealNetwork.h"
 #include "Ritual/RitualChairAudioReplication.h"
+#include "Ritual/TableRitualGate.h"
 
 ARitualBottle::ARitualBottle()
 {
@@ -109,6 +110,14 @@ bool ARitualBottle::SpinBottle(AHronoCharacter* FirstVictim, AHronoCharacter* Se
 	{
 		UE_LOG(LogTemp, Warning,
 			TEXT("[RitualBottle] Spin Bottle ignored for %s because it was not called on the server"),
+			*GetName());
+		return false;
+	}
+
+	if (!TableRitualGate::IsUnlocked(this))
+	{
+		UE_LOG(LogTemp, Log,
+			TEXT("[TableRitualGate] %s cannot spin until the cursed image is picked up"),
 			*GetName());
 		return false;
 	}

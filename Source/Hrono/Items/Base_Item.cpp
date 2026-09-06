@@ -5,6 +5,7 @@
 #include "Net/UnrealNetwork.h"
 #include "GameplayTagsManager.h"
 #include "HronoCharacter.h"
+#include "Ritual/TableRitualGate.h"
 #include "Camera/CameraComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
@@ -247,6 +248,8 @@ bool ABase_Item::AttachToCharacter()
 		ForceNetUpdate();
 	}
 	OnHeldStateChanged(true, Player);
+
+	TableRitualGate::NotifySuccessfulPickup(*this, *Player);
 	return true;
 }
 

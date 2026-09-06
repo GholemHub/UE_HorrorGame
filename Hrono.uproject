@@ -49,7 +49,7 @@
 		},
 		{
 			"Name": "SocketSubsystemSteamIP",
-			"Enabled": true
+			"Enabled": false
 		},
 		{
 			"Name": "ModelContextProtocol",

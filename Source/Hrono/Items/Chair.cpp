@@ -1,6 +1,7 @@
 #include "Chair.h"
 // Fill out your copyright notice in the Description page of Project Settings.
 #include "HronoCharacter.h"
+#include "Ritual/TableRitualGate.h"
 #include "Components/SceneComponent.h"
 #include "Kismet/GameplayStatics.h"
 #include "Sound/SoundBase.h"
@@ -30,6 +31,15 @@ void AChair::Use_Implementation(AActor* Character)
 
     if (!Hrono)
         return;
+
+	if (!TableRitualGate::CanUseChair(*this))
+	{
+		UE_LOG(LogTemp, Log,
+			TEXT("[TableRitualGate] %s cannot seat %s until the cursed image is picked up"),
+			*GetName(), *GetNameSafe(Hrono));
+		return;
+	}
+
     // bIsSit still reflects the state *before* this toggle, so play the sound
     // matching the action the player is about to perform.
     UGameplayStatics::PlaySoundAtLocation(this, bIsSit ? StandUpSound : SitSound, GetActorLocation());

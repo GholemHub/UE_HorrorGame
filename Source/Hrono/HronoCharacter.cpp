@@ -923,6 +923,7 @@ void AHronoCharacter::ServerPickupItem_Implementation(ABase_Item* Item)
 }
 
 #include "Items/Chair.h"
+#include "Ritual/TableRitualGate.h"
 
 void AHronoCharacter::OnRep_CurrentChair(AChair* PreviousChair)
 {
@@ -1030,6 +1031,9 @@ void AHronoCharacter::SitOnChair(AChair* Chair)
 	if (!HasAuthority())
 		return;
 
+	if (!IsValid(Chair) || !TableRitualGate::CanUseChair(*Chair))
+		return;
+
 	if (bIsSitting || CurrentChair)
 		return;
 
@@ -1055,7 +1059,7 @@ void AHronoCharacter::SitOnChair(AChair* Chair)
 
 bool AHronoCharacter::ForceSitOnChair(AChair* Chair)
 {
-	if (!HasAuthority() || !IsValid(Chair))
+	if (!HasAuthority() || !IsValid(Chair) || !TableRitualGate::CanUseChair(*Chair))
 	{
 		return false;
 	}
