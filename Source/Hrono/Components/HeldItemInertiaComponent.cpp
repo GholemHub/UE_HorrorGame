@@ -23,6 +23,22 @@ FRotator UHeldItemInertiaComponent::GetCurrentRotationOffset() const
 	return FRotator(RotationOffset.X, RotationOffset.Y, RotationOffset.Z);
 }
 
+void UHeldItemInertiaComponent::SetActionPoseOffset(
+	FVector LocationOffset,
+	FRotator InRotationOffset)
+{
+	ActionPositionOffset = LocationOffset;
+	ActionRotationOffset = InRotationOffset;
+	ApplyCurrentOffset();
+}
+
+void UHeldItemInertiaComponent::ClearActionPoseOffset()
+{
+	ActionPositionOffset = FVector::ZeroVector;
+	ActionRotationOffset = FRotator::ZeroRotator;
+	ApplyCurrentOffset();
+}
+
 void UHeldItemInertiaComponent::BeginHeld(
 	AHronoCharacter* Character,
 	const FTransform& InBaseRelativeTransform)
@@ -57,6 +73,8 @@ void UHeldItemInertiaComponent::EndHeld(bool bRestoreBaseTransform)
 	PositionVelocity = FVector::ZeroVector;
 	RotationOffset = FVector::ZeroVector;
 	RotationVelocity = FVector::ZeroVector;
+	ActionPositionOffset = FVector::ZeroVector;
+	ActionRotationOffset = FRotator::ZeroRotator;
 }
 
 void UHeldItemInertiaComponent::ResetInertia()
@@ -132,6 +150,11 @@ void UHeldItemInertiaComponent::TickComponent(
 		if (!PositionOffset.IsNearlyZero() || !RotationOffset.IsNearlyZero())
 		{
 			ResetInertia();
+		}
+		else
+		{
+			// Action poses must remain visible even when passive inertia is disabled.
+			ApplyCurrentOffset();
 		}
 		return;
 	}
@@ -310,9 +333,12 @@ void UHeldItemInertiaComponent::ApplyCurrentOffset()
 		return;
 	}
 
-	const FVector FinalLocation = BaseRelativeTransform.GetLocation() + PositionOffset;
+	const FVector FinalLocation = BaseRelativeTransform.GetLocation()
+		+ PositionOffset
+		+ ActionPositionOffset;
 	const FQuat OffsetRotation(FRotator(RotationOffset.X, RotationOffset.Y, RotationOffset.Z));
-	FQuat FinalRotation = OffsetRotation * BaseRelativeTransform.GetRotation();
+	const FQuat ActionRotation(ActionRotationOffset);
+	FQuat FinalRotation = ActionRotation * OffsetRotation * BaseRelativeTransform.GetRotation();
 	FinalRotation.Normalize();
 	Root->SetRelativeLocationAndRotation(FinalLocation, FinalRotation);
 

@@ -1,7 +1,7 @@
 #include "Items/AxeItem.h"
 
 #include "HronoCharacter.h"
-#include "Components/SceneComponent.h"
+#include "Components/HeldItemInertiaComponent.h"
 #include "Engine/World.h"
 
 AAxeItem::AAxeItem()
@@ -37,8 +37,7 @@ void AAxeItem::Tick(float DeltaSeconds)
 		return;
 	}
 
-	USceneComponent* AxeRoot = GetRootComponent();
-	if (!IsValid(AxeRoot))
+	if (!IsValid(HeldItemInertia))
 	{
 		bSwingAnimationActive = false;
 		return;
@@ -50,14 +49,14 @@ void AAxeItem::Tick(float DeltaSeconds)
 	const float RaisedAlpha = FMath::InterpEaseInOut(0.0f, 1.0f, LinearAlpha, 2.0f);
 
 	const FQuat RaisedRotation = FQuat::Slerp(
-		SwingTargetRotation.Quaternion(),
-		SwingInitialRotation.Quaternion(),
+		FRotator(SwingAngleY, 0.0f, 0.0f).Quaternion(),
+		FQuat::Identity,
 		RaisedAlpha);
-	AxeRoot->SetRelativeRotation(RaisedRotation);
+	HeldItemInertia->SetActionPoseOffset(FVector::ZeroVector, RaisedRotation.Rotator());
 
 	if (LinearAlpha >= 1.0f)
 	{
-		AxeRoot->SetRelativeRotation(SwingInitialRotation);
+		HeldItemInertia->ClearActionPoseOffset();
 		bSwingAnimationActive = false;
 	}
 }
@@ -102,16 +101,14 @@ void AAxeItem::MulticastStartSwing_Implementation()
 	}
 
 	SwingAnimationElapsed = 0.0f;
-	SwingInitialRotation = HoldOffset.GetRotation().Rotator();
-	SwingTargetRotation = SwingInitialRotation;
-	SwingTargetRotation.Pitch += SwingAngleY;
-	SwingTargetRotation.Normalize();
 	bSwingAnimationActive = true;
 
 	// The downward part of the swing is deliberately immediate. Tick then raises
 	// the axe smoothly back to the original held rotation.
-	if (USceneComponent* AxeRoot = GetRootComponent())
+	if (IsValid(HeldItemInertia))
 	{
-		AxeRoot->SetRelativeRotation(SwingTargetRotation);
+		HeldItemInertia->SetActionPoseOffset(
+			FVector::ZeroVector,
+			FRotator(SwingAngleY, 0.0f, 0.0f));
 	}
 }

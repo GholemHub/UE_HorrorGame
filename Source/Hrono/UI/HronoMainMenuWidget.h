@@ -51,7 +51,7 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Main Menu|Style")
 	TObjectPtr<UFont> MenuFont;
 
-	/** Gameplay map whose hard dependencies are preloaded before either session request. */
+	/** Gameplay destination used to identify and warm up the world after session travel. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Main Menu|Loading")
 	TSoftObjectPtr<UWorld> GameplayMapToPreload;
 

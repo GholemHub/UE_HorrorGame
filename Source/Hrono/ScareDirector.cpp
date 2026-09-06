@@ -110,6 +110,14 @@ void AScareDirector::BeginPlay()
 		ChooseCursedRoom();
 	}
 
+	if (bForceImmediateHuntAtMaxThreat && Threat >= MaxThreat && CanStartHunt())
+	{
+		UE_LOG(LogGhostHuntDirector, Warning,
+			TEXT("[%s] Maximum Threat was already active at BeginPlay; forcing an immediate Hunt."),
+			*GetName());
+		RequestTriggeredHunt(OrganicHuntTimelineTarget, false, false, false);
+	}
+
 	if (PassiveThreatPerInterval > 0.0f && PassiveThreatInterval > 0.0f)
 	{
 		GetWorldTimerManager().SetTimer(
@@ -419,9 +427,19 @@ void AScareDirector::SetThreatInternal(float Value, const FString& Reason)
 		return;
 	}
 
-	const float NewThreat = FMath::Clamp(Value, 0.0f, FMath::Max(1.0f, MaxThreat));
+	const float EffectiveMaxThreat = FMath::Max(1.0f, MaxThreat);
+	const float NewThreat = FMath::Clamp(Value, 0.0f, EffectiveMaxThreat);
 	if (FMath::IsNearlyEqual(Threat, NewThreat))
 	{
+		if (bForceImmediateHuntAtMaxThreat
+			&& NewThreat >= EffectiveMaxThreat
+			&& CanStartHunt())
+		{
+			UE_LOG(LogGhostHuntDirector, Warning,
+				TEXT("[%s] Maximum Threat was reasserted with no active Hunt; forcing Babaj spawn."),
+				*GetName());
+			RequestTriggeredHunt(OrganicHuntTimelineTarget, false, false, false);
+		}
 		return;
 	}
 
@@ -432,6 +450,17 @@ void AScareDirector::SetThreatInternal(float Value, const FString& Reason)
 		*GetName(), PreviousThreat, Threat, *LastThreatStateChangeReason);
 
 	UpdateThreatState(LastThreatStateChangeReason);
+
+	if (bForceImmediateHuntAtMaxThreat
+		&& Threat >= EffectiveMaxThreat
+		&& CanStartHunt())
+	{
+		UE_LOG(LogGhostHuntDirector, Warning,
+			TEXT("[%s] Threat reached maximum %.1f; forcing an immediate Hunt and Babaj spawn."),
+			*GetName(), Threat);
+		RequestTriggeredHunt(OrganicHuntTimelineTarget, false, false, false);
+		return;
+	}
 
 	if (CanStartHunt())
 	{

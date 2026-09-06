@@ -42,6 +42,18 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Held Item Inertia")
 	FRotator GetCurrentRotationOffset() const;
 
+	/**
+	 * Adds an item-authored local pose on top of the normal held-item inertia.
+	 * This is intended for short procedural actions such as an axe swing. The
+	 * offset is cosmetic and should be driven on every machine that displays it.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Held Item Inertia|Action")
+	void SetActionPoseOffset(FVector LocationOffset, FRotator RotationOffset);
+
+	/** Restores the normal held pose without disturbing accumulated inertia. */
+	UFUNCTION(BlueprintCallable, Category = "Held Item Inertia|Action")
+	void ClearActionPoseOffset();
+
 	/** Native lifecycle hooks used by ABase_Item. */
 	void BeginHeld(AHronoCharacter* Character, const FTransform& InBaseRelativeTransform);
 	void EndHeld(bool bRestoreBaseTransform);
@@ -67,6 +79,8 @@ private:
 	/** Pitch, Yaw, Roll in X, Y, Z. */
 	FVector RotationOffset = FVector::ZeroVector;
 	FVector RotationVelocity = FVector::ZeroVector;
+	FVector ActionPositionOffset = FVector::ZeroVector;
+	FRotator ActionRotationOffset = FRotator::ZeroRotator;
 	FVector PreviousCharacterVelocity = FVector::ZeroVector;
 	FVector PreviousCharacterLocation = FVector::ZeroVector;
 	FRotator PreviousViewRotation = FRotator::ZeroRotator;

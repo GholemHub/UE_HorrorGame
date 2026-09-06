@@ -17,7 +17,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FHronoPreloadProgressSignature, floa
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FHronoPreloadCompletedSignature, bool, bSuccess);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FHronoWorldReadySignature);
 
-/** Persistent preload, travel-screen, and post-travel warmup service. */
+/** Persistent asset preload, travel-screen, and post-travel warmup service. */
 UCLASS(BlueprintType)
 class HRONO_API UHronoLoadingSubsystem : public UGameInstanceSubsystem
 {
@@ -27,7 +27,10 @@ public:
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
 
-	/** Loads the map and optional soft assets, retaining them through the next travel. */
+	/**
+	 * Tracks the destination map and preloads only optional soft assets. The UWorld
+	 * itself is deliberately left to OpenLevel/ServerTravel.
+	 */
 	UFUNCTION(BlueprintCallable, Category = "Hrono|Loading")
 	void PreloadGameplayContent(
 		TSoftObjectPtr<UWorld> GameplayMap,
@@ -73,6 +76,8 @@ private:
 	TWeakObjectPtr<UWorld> WarmupWorld;
 	FString TargetGameplayMapName;
 	FDelegateHandle PostLoadMapHandle;
+	FDelegateHandle TravelFailureHandle;
+	FDelegateHandle NetworkFailureHandle;
 	float PreloadProgress = 0.0f;
 	double WarmupStartTime = 0.0;
 	int32 StableReadyFrames = 0;

@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 using UnrealBuildTool;
+using System.IO;
 
 public class Hrono : ModuleRules
 {
@@ -30,6 +31,17 @@ public class Hrono : ModuleRules
 		PrivateDependencyModuleNames.AddRange(new string[] {
 			"MoviePlayer"
 		});
+
+		// Steam supplies the App ID when launched from the client. Keep a local copy next
+		// to Shipping executables as well so direct packaged-build testing can initialize
+		// SteamAPI and the overlay. Exclude steam_appid.txt from the final Steam depot.
+		if (Target.Platform == UnrealTargetPlatform.Win64 && Target.Configuration == UnrealTargetConfiguration.Shipping)
+		{
+			RuntimeDependencies.Add(
+				"$(TargetOutputDir)/steam_appid.txt",
+				Path.Combine(ModuleDirectory, "../../steam_appid.txt"),
+				StagedFileType.NonUFS);
+		}
 
 		PublicIncludePaths.AddRange(new string[] {
 			"Hrono",

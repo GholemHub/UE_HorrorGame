@@ -14,8 +14,10 @@
 #include "Items/Base_Item.h"
 #include "Items/Drag_Item.h"
 #include "Items/RitualGoatSkull.h"
+#include "Kismet/GameplayStatics.h"
 #include "Net/UnrealNetwork.h"
 #include "ScareDirector.h"
+#include "Sound/SoundBase.h"
 #include "TimerManager.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogCursedRoomRitual, Log, All);
@@ -839,6 +841,10 @@ void ACursedRoomRitual::BeginLocalHouseFlicker()
 		return;
 	}
 
+	// All controlled lights begin this mode visibly enabled. Tracking the pulse
+	// edge prevents repeated OFF timer samples from replaying the sound.
+	bLastHouseFlickerPulseOn = true;
+
 	for (TActorIterator<ALight_Env> It(GetWorld()); It; ++It)
 	{
 		ALight_Env* EnvironmentLight = *It;
@@ -928,6 +934,7 @@ void ACursedRoomRitual::EndLocalHouseFlicker(bool bRestorePreviousState)
 	PreviousEnvironmentLightFlicker.Reset();
 	PreviousGenericLightVisibility.Reset();
 	FlickeringEmissiveSwitchers.Reset();
+	bLastHouseFlickerPulseOn = true;
 }
 
 void ACursedRoomRitual::UpdateLocalHouseFlicker()
@@ -938,6 +945,8 @@ void ACursedRoomRitual::UpdateLocalHouseFlicker()
 	}
 
 	const bool bPulseOn = FMath::FRand() > 0.30f;
+	const bool bTurnedOffThisPulse = bLastHouseFlickerPulseOn && !bPulseOn;
+	bLastHouseFlickerPulseOn = bPulseOn;
 	for (const TPair<TWeakObjectPtr<ULightComponentBase>, bool>& Pair : PreviousGenericLightVisibility)
 	{
 		if (ULightComponentBase* LightComponent = Pair.Key.Get())
@@ -951,6 +960,11 @@ void ACursedRoomRitual::UpdateLocalHouseFlicker()
 		{
 			Switcher->ApplyEmissiveStateToLinkedActors(bPulseOn);
 		}
+	}
+
+	if (bTurnedOffThisPulse && FlickerOffSound)
+	{
+		UGameplayStatics::PlaySound2D(this, FlickerOffSound);
 	}
 
 	const float MinInterval = FMath::Max(0.04f,
