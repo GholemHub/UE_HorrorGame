@@ -89,8 +89,6 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Components")
 	USceneComponent* PointSet;
 
-	virtual void UpdateMeshForLocalPlayer() override;
-
 	// =========================================================
 	// AUDIO (placeholder sounds — assign any sound in Blueprint)
 	// =========================================================
@@ -345,6 +343,12 @@ protected:
 	/** Stops subclass-specific animation code that would otherwise fight the E-key animation. */
 	virtual void CancelNativeAnimationForAutomaticInteraction(
 		USceneComponent* MovementComponent);
+
+	/** Additional active state supplied by specialized actors such as wardrobes. */
+	virtual bool RequiresAdditionalActiveTick() const { return false; }
+
+	/** Tick only while native animation/debug work or a legacy Blueprint Tick needs it. */
+	void RefreshActiveTickState();
 
 	UPROPERTY(Transient)
 	bool bDoorAnimationActive = false;

@@ -117,6 +117,7 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void CancelNativeAnimationForAutomaticInteraction(
 		USceneComponent* MovementComponent) override;
+	virtual bool RequiresAdditionalActiveTick() const override;
 
 	UFUNCTION()
 	void OnRep_RightDoorRotation();

@@ -26,6 +26,7 @@ void AAxeItem::Tick(float DeltaSeconds)
 
 	if (!bSwingAnimationActive)
 	{
+		RefreshItemTickEnabled();
 		return;
 	}
 
@@ -34,12 +35,14 @@ void AAxeItem::Tick(float DeltaSeconds)
 	if (!IsValid(OwningCharacter) || !bIsPickedUp)
 	{
 		bSwingAnimationActive = false;
+		RefreshItemTickEnabled();
 		return;
 	}
 
 	if (!IsValid(HeldItemInertia))
 	{
 		bSwingAnimationActive = false;
+		RefreshItemTickEnabled();
 		return;
 	}
 
@@ -58,6 +61,7 @@ void AAxeItem::Tick(float DeltaSeconds)
 	{
 		HeldItemInertia->ClearActionPoseOffset();
 		bSwingAnimationActive = false;
+		RefreshItemTickEnabled();
 	}
 }
 
@@ -102,6 +106,7 @@ void AAxeItem::MulticastStartSwing_Implementation()
 
 	SwingAnimationElapsed = 0.0f;
 	bSwingAnimationActive = true;
+	RefreshItemTickEnabled(true);
 
 	// The downward part of the swing is deliberately immediate. Tick then raises
 	// the axe smoothly back to the original held rotation.

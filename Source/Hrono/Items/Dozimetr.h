@@ -19,7 +19,6 @@ class HRONO_API ADozimetr : public ABase_Item
 
 public:
 	ADozimetr();
-	virtual void Tick(float DeltaSeconds) override;
 	virtual void GetLifetimeReplicatedProps(
 		TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
