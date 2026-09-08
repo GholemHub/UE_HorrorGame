@@ -814,7 +814,7 @@ FHitResult AHronoCharacter::PerformInteractTrace(bool bIsDrag)
 	FVector Start = Camera->GetComponentLocation();
 	FVector End = Start + Camera->GetForwardVector() * InteractTraceDistance;
 
-	DrawDebugLine(
+	/*DrawDebugLine(
 		GetWorld(),
 		Start,
 		End,
@@ -823,7 +823,7 @@ FHitResult AHronoCharacter::PerformInteractTrace(bool bIsDrag)
 		0.2f,
 		0,
 		2.0f
-	);
+	);*/
 
 	FCollisionQueryParams Params;
 	Params.AddIgnoredActor(this);

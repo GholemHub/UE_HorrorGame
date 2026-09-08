@@ -18,6 +18,7 @@ ADrag_Item::ADrag_Item()
 {
 	// Set this actor to call Tick() every frame.  You can turn this off to improve performance if you don't need it.
 	PrimaryActorTick.bCanEverTick = true;
+	PrimaryActorTick.bStartWithTickEnabled = false;
 	bReplicates = true; // Door open/closed state must replicate so server collision matches clients
 
     SceneRoot =
@@ -25,12 +26,14 @@ ADrag_Item::ADrag_Item()
             TEXT("SceneRoot"));
 
     RootComponent = SceneRoot;
+	SceneRoot->SetMobility(EComponentMobility::Movable);
 
     FrameMesh =
         CreateDefaultSubobject<UStaticMeshComponent>(
             TEXT("FrameMesh"));
 
     FrameMesh->SetupAttachment(SceneRoot);
+	FrameMesh->SetMobility(EComponentMobility::Movable);
 
 	ItemMesh->SetupAttachment(FrameMesh);
 
@@ -277,6 +280,7 @@ void ADrag_Item::MulticastStartDoorAnimation_Implementation(
     DoorAnimationElapsed = 0.0f;
     ActiveDoorAnimationDuration = FMath::Max(Duration, KINDA_SMALL_NUMBER);
     bDoorAnimationActive = true;
+	RefreshActiveTickState();
 
 	DoorMovementComponent->SetRelativeRotation(DoorAnimationStartRotation);
     DoorRotation = DoorAnimationStartRotation;
@@ -333,6 +337,7 @@ void ADrag_Item::UpdateDoorAnimation(float DeltaTime)
         RefreshDoorClosedState();
         ForceNetUpdate();
     }
+	RefreshActiveTickState();
 }
 
 USceneComponent* ADrag_Item::GetPrimaryDoorMovementComponent() const
@@ -531,6 +536,7 @@ void ADrag_Item::MulticastStartAutomaticPanelAnimation_Implementation(
 	Animation.StartRotation = MovementComponent->GetRelativeRotation().GetNormalized();
 	Animation.TargetRotation = TargetRotation.GetNormalized();
 	StartMoveSound(bLinear);
+	RefreshActiveTickState();
 }
 
 void ADrag_Item::CancelNativeAnimationForAutomaticInteraction(
@@ -540,6 +546,7 @@ void ADrag_Item::CancelNativeAnimationForAutomaticInteraction(
 	{
 		bDoorAnimationActive = false;
 	}
+	RefreshActiveTickState();
 }
 
 void ADrag_Item::UpdateAutomaticPanelAnimations(float DeltaTime)
@@ -615,6 +622,7 @@ void ADrag_Item::UpdateAutomaticPanelAnimations(float DeltaTime)
 	if (AutomaticPanelAnimations.IsEmpty())
 	{
 		StopMoveSound();
+		RefreshActiveTickState();
 	}
 }
 
@@ -903,11 +911,6 @@ void ADrag_Item::OnRep_IsClosed()
     OnDoorStateChanged.Broadcast(bIsClosed);
 }
 
-void ADrag_Item::UpdateMeshForLocalPlayer()
-{
-    Super::UpdateMeshForLocalPlayer();
-}
-
 // Called when the game starts or when spawned
 // ADrag_Item::BeginPlay
 void ADrag_Item::BeginPlay()
@@ -954,6 +957,17 @@ void ADrag_Item::BeginPlay()
         ItemMesh->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_PAST, ECR_Block);
         ItemMesh->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_FUTURE, ECR_Block);
     }
+
+	RefreshActiveTickState();
+}
+
+void ADrag_Item::RefreshActiveTickState()
+{
+	RefreshItemTickEnabled(
+		bDoorAnimationActive
+		|| !AutomaticPanelAnimations.IsEmpty()
+		|| bShowDoorDebugOnScreen
+		|| RequiresAdditionalActiveTick());
 }
 
 // Called every frame
@@ -961,7 +975,6 @@ void ADrag_Item::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 
-    UpdateMeshForLocalPlayer();
     UpdateDoorAnimation(DeltaTime);
 	UpdateAutomaticPanelAnimations(DeltaTime);
 
@@ -984,6 +997,8 @@ void ADrag_Item::Tick(float DeltaTime)
 				Rotation.Yaw,
 				bIsClosed ? TEXT("true") : TEXT("false")));
     }
+
+	RefreshActiveTickState();
 }
 
 

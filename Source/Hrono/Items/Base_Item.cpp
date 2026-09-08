@@ -26,12 +26,15 @@ ABase_Item::ABase_Item()
 	SetReplicateMovement(true); // CRITICAL: Allows the drop fall/position to replicate!
 
 	PrimaryActorTick.bCanEverTick = true;
+	PrimaryActorTick.bStartWithTickEnabled = false;
 
 	DefaultSceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("DefaultSceneRoot"));
 	RootComponent = DefaultSceneRoot;
+	DefaultSceneRoot->SetMobility(EComponentMobility::Movable);
 
 	ItemMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("ItemMesh"));
 	ItemMesh->SetupAttachment(DefaultSceneRoot);
+	ItemMesh->SetMobility(EComponentMobility::Movable);
 	ItemMesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 	ItemMesh->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
 
@@ -222,17 +225,19 @@ void ABase_Item::OnRep_DroppedPhysicsEnabled()
 
 void ABase_Item::UpdateMeshForLocalPlayer()
 {
-	APlayerController* PC = GetWorld()->GetFirstPlayerController();
+	APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
 	if (!PC) return;
 
 	auto Character = Cast<AHronoCharacter>(PC->GetPawn());
 	if (!Character) return;
 
 	EItemTimeline TargetTimeline = Character->GetTimeline();
+	if (CurrentCachedTimeline == TargetTimeline)
+	{
+		return;
+	}
 
 	UpdateVisibilityForLocalPlayer(TargetTimeline);
-
-	CurrentCachedTimeline = TargetTimeline;
 }
 
 void ABase_Item::UpdateVisibilityForLocalPlayer(EItemTimeline ViewerTimeline)
@@ -251,6 +256,8 @@ void ABase_Item::UpdateVisibilityForLocalPlayer(EItemTimeline ViewerTimeline)
 			SceneComponent->SetVisibility(bShouldBeVisible, /*bPropagateToChildren=*/false);
 		}
 	}
+
+	CurrentCachedTimeline = ViewerTimeline;
 }
 
 bool ABase_Item::TryPickUp(AHronoCharacter* Character)
@@ -697,6 +704,7 @@ void ABase_Item::ApplyDroppedPhysicsState()
 void ABase_Item::PostInitializeComponents()
 {
 	Super::PostInitializeComponents();
+	EnsureMovableComponentHierarchy();
 
 	// Cache the Blueprint-authored mesh pose before initial replicated properties
 	// can enable Chaos physics. BeginPlay is too late for runtime-spawned items on
@@ -712,6 +720,38 @@ void ABase_Item::PostInitializeComponents()
 	SetHeldSceneCapturesEnabled(false);
 }
 
+void ABase_Item::EnsureMovableComponentHierarchy()
+{
+	TSet<USceneComponent*> VisitedComponents;
+	TFunction<void(USceneComponent*)> MakeMovableChildFirst;
+	MakeMovableChildFirst = [this, &VisitedComponents, &MakeMovableChildFirst](
+		USceneComponent* Component)
+	{
+		if (!IsValid(Component)
+			|| Component->GetOwner() != this
+			|| VisitedComponents.Contains(Component))
+		{
+			return;
+		}
+
+		VisitedComponents.Add(Component);
+		TArray<USceneComponent*> Children;
+		Component->GetChildrenComponents(false, Children);
+		for (USceneComponent* Child : Children)
+		{
+			MakeMovableChildFirst(Child);
+		}
+
+		Component->SetMobility(EComponentMobility::Movable);
+	};
+
+	TInlineComponentArray<USceneComponent*> SceneComponents(this);
+	for (USceneComponent* SceneComponent : SceneComponents)
+	{
+		MakeMovableChildFirst(SceneComponent);
+	}
+}
+
 // Called when the game starts or when spawned
 void ABase_Item::BeginPlay()
 {
@@ -721,6 +761,23 @@ void ABase_Item::BeginPlay()
 	const AHronoCharacter* HeldBy = Cast<AHronoCharacter>(OwningCharacter);
 	SetHeldSceneCapturesEnabled(
 		bIsPickedUp && IsValid(HeldBy) && HeldBy->IsLocallyControlled());
+	RefreshItemTickEnabled();
+}
+
+bool ABase_Item::HasBlueprintTickImplementation() const
+{
+	const UFunction* TickFunction = GetClass()->FindFunctionByName(
+		GET_FUNCTION_NAME_CHECKED(AActor, ReceiveTick));
+	return IsValid(TickFunction)
+		&& TickFunction->GetOuterUClass() != AActor::StaticClass();
+}
+
+void ABase_Item::RefreshItemTickEnabled(bool bTemporaryNativeActivity)
+{
+	SetActorTickEnabled(
+		bTemporaryNativeActivity
+		|| RequiresContinuousItemTick()
+		|| HasBlueprintTickImplementation());
 }
 
 void ABase_Item::ApplyItemTimelineState()
@@ -766,13 +823,3 @@ void ABase_Item::ApplyItemTimelineState()
 	// Refresh visibility immediately after a timeline change instead of waiting for Tick.
 	UpdateMeshForLocalPlayer();
 }
-
-// Called every frame
-void ABase_Item::Tick(float DeltaTime)
-{
-	Super::Tick(DeltaTime);
-
-	UpdateMeshForLocalPlayer();
-	
-}
-

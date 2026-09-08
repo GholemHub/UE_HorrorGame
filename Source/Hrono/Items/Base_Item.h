@@ -207,6 +207,18 @@ protected:
 	virtual void PostInitializeComponents() override;
 	virtual void BeginPlay() override;
 
+	/** True only when a native subclass genuinely needs to tick while idle. */
+	virtual bool RequiresContinuousItemTick() const { return false; }
+
+	/** Keeps legacy Blueprint Event Tick graphs alive while native idle items stay dormant. */
+	bool HasBlueprintTickImplementation() const;
+
+	/** Enables Tick for a temporary native activity, a continuous subclass, or a Blueprint Tick graph. */
+	void RefreshItemTickEnabled(bool bTemporaryNativeActivity = false);
+
+	/** Pickable actors and every component in their attachment hierarchy must be movable. */
+	void EnsureMovableComponentHierarchy();
+
 	/** The mesh's authored transform under DefaultSceneRoot, restored after physics detaches it. */
 	FTransform ItemMeshRelativeTransform = FTransform::Identity;
 
@@ -232,7 +244,6 @@ protected:
 	bool bInteractionHovered = false;
 	bool bInteractionHighlighted = false;
 public:	
-	virtual void Tick(float DeltaTime) override;
 	UStaticMeshComponent* GetItemMesh() const { return ItemMesh; }
 	UHeldItemInertiaComponent* GetHeldItemInertia() const { return HeldItemInertia; }
 

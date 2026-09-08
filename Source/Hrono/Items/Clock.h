@@ -85,6 +85,11 @@ public:
 	virtual void Use_Implementation(AActor* Character) override;
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
+protected:
+	virtual bool RequiresContinuousItemTick() const override { return true; }
+
+public:
+
 	/** Sets the clock to InteractionResetTime and plays TimeResetSound. Server only. */
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Clock")
 	void ResetClock(AActor* Character = nullptr);

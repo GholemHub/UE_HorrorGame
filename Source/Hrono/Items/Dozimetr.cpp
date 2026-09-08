@@ -19,15 +19,6 @@ ADozimetr::ADozimetr()
 	}
 }
 
-void ADozimetr::Tick(float DeltaSeconds)
-{
-	Super::Tick(DeltaSeconds);
-
-	// Also reconcile outside RepNotify. This covers listen-server ownership transfers
-	// and makes the detector resilient to owner/state replication arriving in any order.
-	RefreshLocalDetectionState();
-}
-
 void ADozimetr::GetLifetimeReplicatedProps(
 	TArray<FLifetimeProperty>& OutLifetimeProps) const
 {

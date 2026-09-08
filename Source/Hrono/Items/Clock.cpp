@@ -110,9 +110,8 @@ void AClock::BeginPlay()
 void AClock::Tick(float DeltaSeconds)
 {
 	// Skipping Super::Tick prevents the legacy Blueprint ReceiveTick graph from
-	// running alongside the native implementation. Preserve Base_Item's useful work.
+	// running alongside the native implementation.
 	(void)DeltaSeconds;
-	UpdateMeshForLocalPlayer();
 	UpdateClockVisual();
 }
 

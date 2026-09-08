@@ -173,6 +173,13 @@ void AHidingWardrobe::CancelNativeAnimationForAutomaticInteraction(
 	{
 		bRightDoorAnimationActive = false;
 	}
+	RefreshActiveTickState();
+}
+
+bool AHidingWardrobe::RequiresAdditionalActiveTick() const
+{
+	return bRightDoorAnimationActive
+		|| (HasAuthority() && CharactersInsideSafetyVolume.Num() > 0);
 }
 
 USceneComponent* AHidingWardrobe::GetPrimaryDoorMovementComponent() const
@@ -302,6 +309,7 @@ void AHidingWardrobe::MulticastStartRightDoorAnimation_Implementation(
 	RightDoorAnimationElapsed = 0.0f;
 	ActiveRightDoorAnimationDuration = FMath::Max(Duration, KINDA_SMALL_NUMBER);
 	bRightDoorAnimationActive = true;
+	RefreshActiveTickState();
 	RightDoorPivot->SetRelativeRotation(RightDoorAnimationStartRotation);
 	RightDoorRotation = RightDoorAnimationStartRotation;
 }
@@ -350,6 +358,7 @@ void AHidingWardrobe::UpdateRightDoorAnimation(float DeltaTime)
 		RefreshDoorClosedState();
 		ForceNetUpdate();
 	}
+	RefreshActiveTickState();
 }
 
 bool AHidingWardrobe::AreDoorsOpenForHiding() const
@@ -475,6 +484,7 @@ void AHidingWardrobe::HandleSafetyVolumeBeginOverlap(
 	}
 
 	CharactersInsideSafetyVolume.Add(Player);
+	RefreshActiveTickState();
 	const bool bDoorsSafe = AreDoorsClosedForSafety();
 	Player->SetSafeInHidingWardrobe(bDoorsSafe);
 	UE_LOG(LogTemp, Log,
@@ -502,6 +512,7 @@ void AHidingWardrobe::HandleSafetyVolumeEndOverlap(
 	}
 
 	CharactersInsideSafetyVolume.Remove(Player);
+	RefreshActiveTickState();
 	Player->SetSafeInHidingWardrobe(false);
 	UE_LOG(LogTemp, Log,
 		TEXT("[WardrobeSafetyVolume] %s exited %s. Safe=false"),
@@ -565,6 +576,7 @@ void AHidingWardrobe::ClearWardrobeSafety()
 	}
 
 	CharactersInsideSafetyVolume.Empty();
+	RefreshActiveTickState();
 }
 
 void AHidingWardrobe::ApplyHidingState(AHronoCharacter* Player, bool bEntering)

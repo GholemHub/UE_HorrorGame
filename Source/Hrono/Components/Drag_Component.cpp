@@ -16,6 +16,7 @@ UDrag_Component::UDrag_Component()
 	// Set this component to be initialized when the game starts, and to be ticked every frame.  You can turn these features
 	// off to improve performance if you don't need them.
 	PrimaryComponentTick.bCanEverTick = true;
+	PrimaryComponentTick.bStartWithTickEnabled = false;
 
 	// ...
 }
@@ -25,6 +26,7 @@ UDrag_Component::UDrag_Component()
 void UDrag_Component::BeginPlay()
 {
 	Super::BeginPlay();
+	SetComponentTickEnabled(false);
 
 	if (USceneComponent* MovementComponent = GetTargetMovementComponent())
 	{
@@ -228,6 +230,8 @@ void UDrag_Component::StartDrag(APlayerController* PC, FVector WorldGrabPoint)
 		Drag_Item->NotifyDragStarted(bLinearDrag);
 	}
 
+	SetComponentTickEnabled(true);
+
 	//UE_LOG(LogTemp, Log, TEXT("Drag started"));
 }
 
@@ -236,6 +240,7 @@ void UDrag_Component::StopDrag()
 	bIsRotating = false;
 	RotatingController = nullptr;
 	bHasGrabPoint = false;
+	SetComponentTickEnabled(false);
 
 	// Stop the looping movement sound on the owning door/shelf actor.
 	if (ADrag_Item* Drag_Item = Cast<ADrag_Item>(GetOwner()))
