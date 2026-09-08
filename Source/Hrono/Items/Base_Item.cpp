@@ -9,6 +9,7 @@
 #include "Camera/CameraComponent.h"
 #include "Components/MeshComponent.h"
 #include "Components/PrimitiveComponent.h"
+#include "Components/SceneCaptureComponent2D.h"
 #include "Components/SceneComponent.h"
 #include "Components/HeldItemInertiaComponent.h"
 #include "Engine/World.h"
@@ -277,6 +278,7 @@ bool ABase_Item::TryPickUp(AHronoCharacter* Character)
 bool ABase_Item::AttachToCharacter()
 {
 	bInteractionHovered = false;
+	SetHeldSceneCapturesEnabled(false);
 
 	if (HasAuthority())
 	{
@@ -345,6 +347,7 @@ bool ABase_Item::AttachToCharacter()
 		ForceNetUpdate();
 	}
 	OnHeldStateChanged(true, Player);
+	SetHeldSceneCapturesEnabled(Player->IsLocallyControlled());
 
 	TableRitualGate::NotifySuccessfulPickup(*this, *Player);
 	return true;
@@ -538,6 +541,7 @@ void ABase_Item::OnRep_OwningCharacter(AHronoCharacter* PreviousOwningCharacter)
 		bIsPickedUp = false;
 		UpdateMeshForLocalPlayer();
 		OnHeldStateChanged(false, PreviousOwningCharacter);
+		SetHeldSceneCapturesEnabled(false);
 	}
 }
 
@@ -603,7 +607,41 @@ void ABase_Item::DetachFromCharacter()
 	}
 	SetActorEnableCollision(true);
 	OnHeldStateChanged(false, PreviousOwningCharacter);
+	SetHeldSceneCapturesEnabled(false);
 
+}
+
+void ABase_Item::SetHeldSceneCapturesEnabled(bool bEnabled)
+{
+	if (!bOnlyRunSceneCaptureWhileLocallyHeld)
+	{
+		return;
+	}
+
+	const bool bShouldCapture = bEnabled && GetNetMode() != NM_DedicatedServer;
+	TInlineComponentArray<USceneCaptureComponent2D*> SceneCaptures(this);
+	for (USceneCaptureComponent2D* SceneCapture : SceneCaptures)
+	{
+		if (!IsValid(SceneCapture))
+		{
+			continue;
+		}
+
+		// Capture-on-movement is redundant while capturing every held frame and can
+		// otherwise wake a dropped item when physics or replication moves it.
+		SceneCapture->bCaptureEveryFrame = bShouldCapture;
+		SceneCapture->bCaptureOnMovement = false;
+		SceneCapture->SetComponentTickEnabled(bShouldCapture);
+
+		if (bShouldCapture)
+		{
+			SceneCapture->Activate(true);
+		}
+		else
+		{
+			SceneCapture->Deactivate();
+		}
+	}
 }
 
 void ABase_Item::ConfigureDroppedCollision(UPrimitiveComponent* PrimitiveComponent)
@@ -668,6 +706,10 @@ void ABase_Item::PostInitializeComponents()
 	{
 		ItemMeshRelativeTransform = ItemMesh->GetRelativeTransform();
 	}
+
+	// Blueprint-created captures are already registered by this point, but the
+	// world has not started ticking yet. Disable them before the first game frame.
+	SetHeldSceneCapturesEnabled(false);
 }
 
 // Called when the game starts or when spawned
@@ -675,6 +717,10 @@ void ABase_Item::BeginPlay()
 {
 	Super::BeginPlay();
 	ApplyItemTimelineState();
+
+	const AHronoCharacter* HeldBy = Cast<AHronoCharacter>(OwningCharacter);
+	SetHeldSceneCapturesEnabled(
+		bIsPickedUp && IsValid(HeldBy) && HeldBy->IsLocallyControlled());
 }
 
 void ABase_Item::ApplyItemTimelineState()

@@ -13,6 +13,7 @@
 class AHronoCharacter;
 class UMaterialInterface;
 class UMeshComponent;
+class USceneCaptureComponent2D;
 class USoundBase;
 class UHeldItemInertiaComponent;
 
@@ -158,6 +159,13 @@ public:
 	UFUNCTION(BlueprintImplementableEvent, BlueprintCallable, Category = "Item|Pickup")
 	void OnHeldStateChanged(bool bIsHeld, AHronoCharacter* Character);
 
+	/**
+	 * Keeps expensive SceneCapture components dormant while this item is in the
+	 * world. A held capture is enabled only on the owning local player's machine.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Item|Performance")
+	bool bOnlyRunSceneCaptureWhileLocallyHeld = true;
+
 	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_OwningCharacter)
 	AHronoCharacter* OwningCharacter;
 
@@ -207,6 +215,7 @@ protected:
 	void ApplyDroppedPhysicsState();
 	void RefreshInteractionHighlight();
 	void LogHeldTransformState(const TCHAR* Context) const;
+	void SetHeldSceneCapturesEnabled(bool bEnabled);
 
 	/** Restores world physics and timeline interaction responses for a dropped item. */
 	void ConfigureDroppedCollision(UPrimitiveComponent* PrimitiveComponent);
