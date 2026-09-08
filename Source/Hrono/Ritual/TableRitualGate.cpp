@@ -5,6 +5,7 @@
 #include "HronoCharacter.h"
 #include "Items/Base_Item.h"
 #include "Items/Chair.h"
+#include "UObject/Package.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogTableRitualGate, Log, All);
 
@@ -101,4 +102,26 @@ bool TableRitualGate::IsUnlocked(const UObject* WorldContextObject)
 bool TableRitualGate::CanUseChair(const AChair& Chair)
 {
 	return !IsChairBesideTableRitualManager(Chair) || IsUnlocked(&Chair);
+}
+
+bool TableRitualGate::IsRitualInProgress(const UObject* WorldContextObject)
+{
+	UWorld* World = WorldContextObject ? WorldContextObject->GetWorld() : nullptr;
+	if (!IsValid(World))
+	{
+		return false;
+	}
+
+	for (TActorIterator<AChair> It(World); It; ++It)
+	{
+		const AChair* Chair = *It;
+		if (IsValid(Chair)
+			&& Chair->IsRitualStarted
+			&& IsChairBesideTableRitualManager(*Chair))
+		{
+			return true;
+		}
+	}
+
+	return false;
 }

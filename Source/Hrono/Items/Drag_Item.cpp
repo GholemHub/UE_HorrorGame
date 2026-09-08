@@ -7,6 +7,7 @@
 #include "HronoCollisionChannels.h"
 #include "Net/UnrealNetwork.h"
 #include "Components/AudioComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "Kismet/GameplayStatics.h"
 #include "Sound/SoundBase.h"
 
@@ -60,6 +61,7 @@ void ADrag_Item::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifeti
 	DOREPLIFETIME(ADrag_Item, PastBarricadeCount);
 	DOREPLIFETIME(ADrag_Item, FutureBarricadeCount);
 	DOREPLIFETIME(ADrag_Item, TriggerLockCount);
+	DOREPLIFETIME(ADrag_Item, bUseAutomaticOpenClose);
 
 }
 
@@ -351,6 +353,269 @@ UDrag_Component* ADrag_Item::FindDragComponentForHit(const UPrimitiveComponent* 
 
 	// Preserve the old single-door behavior if a Blueprint has unusual nested collision.
 	return DragComponent;
+}
+
+UDrag_Component* ADrag_Item::FindDragComponentForInteractionName(
+	FName InteractionComponentName) const
+{
+	if (InteractionComponentName.IsNone())
+	{
+		return nullptr;
+	}
+
+	TInlineComponentArray<UPrimitiveComponent*> PrimitiveComponents(this);
+	for (UPrimitiveComponent* Primitive : PrimitiveComponents)
+	{
+		if (IsValid(Primitive) && Primitive->GetFName() == InteractionComponentName)
+		{
+			TInlineComponentArray<UDrag_Component*> DragComponents(this);
+			for (UDrag_Component* Candidate : DragComponents)
+			{
+				if (IsValid(Candidate) && Candidate->MatchesHitComponent(Primitive))
+				{
+					return Candidate;
+				}
+			}
+			return nullptr;
+		}
+	}
+
+	return nullptr;
+}
+
+bool ADrag_Item::ToggleAutomaticOpenClose(FName InteractionComponentName)
+{
+	if (!HasAuthority() || !bUseAutomaticOpenClose)
+	{
+		return false;
+	}
+
+	UDrag_Component* SelectedDrag =
+		FindDragComponentForInteractionName(InteractionComponentName);
+	USceneComponent* MovementComponent = SelectedDrag
+		? SelectedDrag->GetTargetMovementComponent()
+		: nullptr;
+	if (!IsValid(SelectedDrag) || !IsValid(MovementComponent))
+	{
+		return false;
+	}
+
+	const bool bLinear = SelectedDrag->bIsShelf || SelectedDrag->bIsCupBoard;
+	bool bCurrentlyOpen = false;
+	bool bOpening = true;
+	FVector TargetLocation = MovementComponent->GetRelativeLocation();
+	FRotator TargetRotation = MovementComponent->GetRelativeRotation();
+
+	// If E is pressed again during movement, reverse the current request immediately.
+	const FDragItemAutomaticPanelAnimation* ExistingAnimation =
+		AutomaticPanelAnimations.FindByPredicate(
+			[MovementComponent](const FDragItemAutomaticPanelAnimation& Animation)
+			{
+				return Animation.MovementComponent.Get() == MovementComponent;
+			});
+
+	if (bLinear)
+	{
+		const FVector ClosedLocation = SelectedDrag->bIsCupBoard
+			? SelectedDrag->CupBoardClosedLocation
+			: SelectedDrag->ShelfClosedLocation;
+		const FVector SlideAxis = (SelectedDrag->bIsCupBoard
+			? SelectedDrag->CupBoardSlideAxis
+			: SelectedDrag->ShelfSlideAxis).GetSafeNormal();
+		const float MaximumDistance = FMath::Max(0.0f, SelectedDrag->bIsCupBoard
+			? SelectedDrag->CupBoardMaxDistance
+			: SelectedDrag->ShelfMaxDistance);
+		if (SlideAxis.IsNearlyZero())
+		{
+			return false;
+		}
+
+		const float CurrentOffset = FVector::DotProduct(
+			MovementComponent->GetRelativeLocation() - ClosedLocation,
+			SlideAxis);
+		bCurrentlyOpen = CurrentOffset > MaximumDistance * 0.5f;
+		bOpening = ExistingAnimation ? !ExistingAnimation->bOpening : !bCurrentlyOpen;
+		TargetLocation = ClosedLocation + SlideAxis * (bOpening ? MaximumDistance : 0.0f);
+	}
+	else
+	{
+		float OpenYaw = 0.0f;
+		if (SelectedDrag->bUseCustomDoorAngleLimits)
+		{
+			OpenYaw = FMath::Abs(SelectedDrag->MinimumDoorYaw)
+				> FMath::Abs(SelectedDrag->MaximumDoorYaw)
+				? SelectedDrag->MinimumDoorYaw
+				: SelectedDrag->MaximumDoorYaw;
+		}
+		else
+		{
+			const float Direction = ItemType == EItemType::DraggableInvertLeft
+				? 1.0f
+				: -1.0f;
+			OpenYaw = Direction * FMath::Abs(AnimatedDoorOpenAngle);
+		}
+
+		const float CurrentYaw = FMath::UnwindDegrees(
+			MovementComponent->GetRelativeRotation().Yaw);
+		bCurrentlyOpen = FMath::Abs(CurrentYaw) > FMath::Abs(OpenYaw) * 0.5f;
+		bOpening = ExistingAnimation ? !ExistingAnimation->bOpening : !bCurrentlyOpen;
+		TargetRotation.Yaw = bOpening ? OpenYaw : 0.0f;
+	}
+
+	MulticastStartAutomaticPanelAnimation(
+		bLinear,
+		bOpening,
+		MovementComponent->GetFName(),
+		TargetLocation,
+		TargetRotation,
+		FMath::Max(AutomaticOpenCloseDuration, KINDA_SMALL_NUMBER));
+	return true;
+}
+
+bool ADrag_Item::ShouldUseAutomaticOpenClose(const AActor* Interactor) const
+{
+	return bUseAutomaticOpenClose;
+}
+
+USceneComponent* ADrag_Item::ResolveAutomaticMovementComponent(
+	bool bLinear,
+	FName MovementComponentName) const
+{
+	return bLinear
+		? FindShelfMovementComponent(MovementComponentName)
+		: FindDoorMovementComponent(MovementComponentName);
+}
+
+void ADrag_Item::MulticastStartAutomaticPanelAnimation_Implementation(
+	bool bLinear,
+	bool bOpening,
+	FName MovementComponentName,
+	FVector TargetLocation,
+	FRotator TargetRotation,
+	float Duration)
+{
+	USceneComponent* MovementComponent = ResolveAutomaticMovementComponent(
+		bLinear,
+		MovementComponentName);
+	if (!IsValid(MovementComponent))
+	{
+		return;
+	}
+	CancelNativeAnimationForAutomaticInteraction(MovementComponent);
+
+	TInlineComponentArray<UDrag_Component*> DragComponents(this);
+	for (UDrag_Component* Component : DragComponents)
+	{
+		if (IsValid(Component)
+			&& Component->GetTargetMovementComponent() == MovementComponent
+			&& Component->bIsRotating)
+		{
+			Component->StopDrag();
+		}
+	}
+
+	AutomaticPanelAnimations.RemoveAll(
+		[MovementComponent](const FDragItemAutomaticPanelAnimation& Animation)
+		{
+			return Animation.MovementComponent.Get() == MovementComponent;
+		});
+
+	FDragItemAutomaticPanelAnimation& Animation = AutomaticPanelAnimations.AddDefaulted_GetRef();
+	Animation.MovementComponent = MovementComponent;
+	Animation.MovementComponentName = MovementComponentName;
+	Animation.bLinear = bLinear;
+	Animation.bOpening = bOpening;
+	Animation.Duration = FMath::Max(Duration, KINDA_SMALL_NUMBER);
+	Animation.StartLocation = MovementComponent->GetRelativeLocation();
+	Animation.TargetLocation = TargetLocation;
+	Animation.StartRotation = MovementComponent->GetRelativeRotation().GetNormalized();
+	Animation.TargetRotation = TargetRotation.GetNormalized();
+	StartMoveSound(bLinear);
+}
+
+void ADrag_Item::CancelNativeAnimationForAutomaticInteraction(
+	USceneComponent* MovementComponent)
+{
+	if (MovementComponent == GetPrimaryDoorMovementComponent())
+	{
+		bDoorAnimationActive = false;
+	}
+}
+
+void ADrag_Item::UpdateAutomaticPanelAnimations(float DeltaTime)
+{
+	if (AutomaticPanelAnimations.IsEmpty())
+	{
+		return;
+	}
+
+	for (int32 Index = AutomaticPanelAnimations.Num() - 1; Index >= 0; --Index)
+	{
+		FDragItemAutomaticPanelAnimation& Animation = AutomaticPanelAnimations[Index];
+		USceneComponent* MovementComponent = Animation.MovementComponent.Get();
+		if (!IsValid(MovementComponent))
+		{
+			AutomaticPanelAnimations.RemoveAtSwap(Index);
+			continue;
+		}
+
+		Animation.Elapsed += DeltaTime;
+		const float Alpha = FMath::Clamp(Animation.Elapsed / Animation.Duration, 0.0f, 1.0f);
+		const float EasedAlpha = FMath::InterpEaseInOut(
+			0.0f,
+			1.0f,
+			Alpha,
+			FMath::Max(1.0f, AutomaticOpenCloseEaseExponent));
+
+		if (Animation.bLinear)
+		{
+			MovementComponent->SetRelativeLocation(FMath::Lerp(
+				Animation.StartLocation,
+				Animation.TargetLocation,
+				EasedAlpha));
+		}
+		else
+		{
+			const auto LerpAngle = [EasedAlpha](float Start, float Target)
+			{
+				return Start + FMath::FindDeltaAngleDegrees(Start, Target) * EasedAlpha;
+			};
+			MovementComponent->SetRelativeRotation(FRotator(
+				LerpAngle(Animation.StartRotation.Pitch, Animation.TargetRotation.Pitch),
+				LerpAngle(Animation.StartRotation.Yaw, Animation.TargetRotation.Yaw),
+				LerpAngle(Animation.StartRotation.Roll, Animation.TargetRotation.Roll)));
+		}
+
+		if (Alpha < 1.0f)
+		{
+			continue;
+		}
+
+		MovementComponent->SetRelativeLocation(Animation.TargetLocation);
+		MovementComponent->SetRelativeRotation(Animation.TargetRotation);
+		if (HasAuthority())
+		{
+			if (Animation.bLinear)
+			{
+				ApplyShelfPositionFromServer(
+					Animation.MovementComponentName,
+					Animation.TargetLocation);
+			}
+			else
+			{
+				ApplyDoorRotationFromServer(
+					Animation.MovementComponentName,
+					Animation.TargetRotation);
+			}
+		}
+
+		AutomaticPanelAnimations.RemoveAtSwap(Index);
+	}
+
+	if (AutomaticPanelAnimations.IsEmpty())
+	{
+		StopMoveSound();
+	}
 }
 
 USceneComponent* ADrag_Item::FindDoorMovementComponent(FName DoorComponentName) const
@@ -698,6 +963,7 @@ void ADrag_Item::Tick(float DeltaTime)
 
     UpdateMeshForLocalPlayer();
     UpdateDoorAnimation(DeltaTime);
+	UpdateAutomaticPanelAnimations(DeltaTime);
 
     if (GEngine && bShowDoorDebugOnScreen)
     {

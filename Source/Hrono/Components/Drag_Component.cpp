@@ -4,6 +4,7 @@
 #include "Components/Drag_Component.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "Items/Drag_Item.h"
 #include "HronoCharacter.h"
 #include "InputCoreTypes.h"
@@ -80,6 +81,18 @@ bool UDrag_Component::MatchesHitComponent(const UPrimitiveComponent* HitComponen
 void UDrag_Component::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+
+	if (const ADrag_Item* DragItem = Cast<ADrag_Item>(GetOwner()))
+	{
+		if (DragItem->bUseAutomaticOpenClose)
+		{
+			if (bIsRotating)
+			{
+				StopDrag();
+			}
+			return;
+		}
+	}
 	
 	if (!bIsRotating || !RotatingController)
 	{
@@ -112,6 +125,13 @@ void UDrag_Component::TickComponent(float DeltaTime, ELevelTick TickType, FActor
 void UDrag_Component::StartDrag(APlayerController* PC, FVector WorldGrabPoint)
 {
 	if (!PC) return;
+	if (const ADrag_Item* DragItem = Cast<ADrag_Item>(GetOwner()))
+	{
+		if (DragItem->bUseAutomaticOpenClose)
+		{
+			return;
+		}
+	}
 
 	bIsRotating = true;
 	RotatingController = PC;

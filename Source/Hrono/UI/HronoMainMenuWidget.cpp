@@ -21,10 +21,13 @@
 #include "Components/VerticalBoxSlot.h"
 #include "Components/WidgetSwitcher.h"
 #include "EnhancedActionKeyMapping.h"
+#include "Engine/Engine.h"
 #include "Engine/Font.h"
+#include "Engine/GameInstance.h"
 #include "Engine/LocalPlayer.h"
 #include "GameFramework/GameUserSettings.h"
 #include "GameFramework/PlayerController.h"
+#include "HronoCharacter.h"
 #include "InputAction.h"
 #include "InputMappingContext.h"
 #include "Kismet/GameplayStatics.h"
@@ -40,6 +43,11 @@ const FString UHronoMainMenuWidget::AudioSettingsSlot(TEXT("HronoMenuSettings"))
 
 namespace HronoMenu
 {
+	constexpr float MinMouseSensitivity = 0.1f;
+	constexpr float MaxMouseSensitivity = 3.0f;
+	constexpr float MinFieldOfView = 70.0f;
+	constexpr float MaxFieldOfView = 120.0f;
+
 	TArray<TWeakObjectPtr<UHronoMainMenuWidget>> ActiveMenuInstances;
 
 	UTextBlock* MakeText(UWidgetTree* Tree, UFont* FontObject, const FText& Text, int32 Size = 18, bool bBold = false)
@@ -126,6 +134,16 @@ namespace HronoMenu
 			Slot->SetVerticalAlignment(VAlign_Center);
 		}
 	}
+
+	void AddSliderValue(UHorizontalBox* Row, UTextBlock* ValueText)
+	{
+		if (UHorizontalBoxSlot* Slot = Row->AddChildToHorizontalBox(ValueText))
+		{
+			Slot->SetSize(FSlateChildSize(ESlateSizeRule::Automatic));
+			Slot->SetPadding(FMargin(12.0f, 0.0f, 0.0f, 0.0f));
+			Slot->SetVerticalAlignment(VAlign_Center);
+		}
+	}
 }
 
 UHronoMainMenuWidget::UHronoMainMenuWidget(const FObjectInitializer& ObjectInitializer)
@@ -186,6 +204,7 @@ void UHronoMainMenuWidget::NativeConstruct()
 	RefreshControlsList();
 	BindWidgetEvents();
 	ApplyAudioSettings(0.0f);
+	ApplyPlayerSettings();
 	ShowMainMenu();
 
 	if (UGameInstance* GameInstance = GetGameInstance())
@@ -375,6 +394,32 @@ void UHronoMainMenuWidget::BuildDefaultWidgetTree()
 	VSyncCheckBox = WidgetTree->ConstructWidget<UCheckBox>(UCheckBox::StaticClass(), TEXT("VSyncCheckBox"));
 	AddRowControl(VSyncRow, VSyncCheckBox);
 
+	UHorizontalBox* FieldOfViewRow = MakeSettingRow(
+		WidgetTree, MenuFont, SettingsColumn, FText::FromString(TEXT("Field of view")));
+	FieldOfViewSlider = WidgetTree->ConstructWidget<USlider>(
+		USlider::StaticClass(), TEXT("FieldOfViewSlider"));
+	FieldOfViewSlider->SetMinValue(MinFieldOfView);
+	FieldOfViewSlider->SetMaxValue(MaxFieldOfView);
+	FieldOfViewSlider->SetStepSize(1.0f);
+	AddRowControl(FieldOfViewRow, FieldOfViewSlider);
+	FieldOfViewValueText = MakeText(WidgetTree, MenuFont, FText::FromString(TEXT("90")), 16);
+	FieldOfViewValueText->SetMinDesiredWidth(36.0f);
+	FieldOfViewValueText->SetJustification(ETextJustify::Right);
+	AddSliderValue(FieldOfViewRow, FieldOfViewValueText);
+
+	UHorizontalBox* MouseSensitivityRow = MakeSettingRow(
+		WidgetTree, MenuFont, SettingsColumn, FText::FromString(TEXT("Mouse sensitivity")));
+	MouseSensitivitySlider = WidgetTree->ConstructWidget<USlider>(
+		USlider::StaticClass(), TEXT("MouseSensitivitySlider"));
+	MouseSensitivitySlider->SetMinValue(MinMouseSensitivity);
+	MouseSensitivitySlider->SetMaxValue(MaxMouseSensitivity);
+	MouseSensitivitySlider->SetStepSize(0.05f);
+	AddRowControl(MouseSensitivityRow, MouseSensitivitySlider);
+	MouseSensitivityValueText = MakeText(WidgetTree, MenuFont, FText::FromString(TEXT("1.00")), 16);
+	MouseSensitivityValueText->SetMinDesiredWidth(42.0f);
+	MouseSensitivityValueText->SetJustification(ETextJustify::Right);
+	AddSliderValue(MouseSensitivityRow, MouseSensitivityValueText);
+
 	UTextBlock* AudioHeading = MakeText(WidgetTree, MenuFont, FText::FromString(TEXT("AUDIO")), 22, true);
 	SettingsColumn->AddChildToVerticalBox(AudioHeading)->SetPadding(FMargin(0.0f, 22.0f, 0.0f, 10.0f));
 
@@ -465,6 +510,10 @@ void UHronoMainMenuWidget::ResolveNamedWidgets()
 	if (!MasterVolumeSlider) MasterVolumeSlider = Cast<USlider>(Find(TEXT("MasterVolumeSlider")));
 	if (!MusicVolumeSlider) MusicVolumeSlider = Cast<USlider>(Find(TEXT("MusicVolumeSlider")));
 	if (!SfxVolumeSlider) SfxVolumeSlider = Cast<USlider>(Find(TEXT("SfxVolumeSlider")));
+	if (!MouseSensitivitySlider) MouseSensitivitySlider = Cast<USlider>(Find(TEXT("MouseSensitivitySlider")));
+	if (!FieldOfViewSlider) FieldOfViewSlider = Cast<USlider>(Find(TEXT("FieldOfViewSlider")));
+	if (!MouseSensitivityValueText) MouseSensitivityValueText = Cast<UTextBlock>(Find(TEXT("MouseSensitivityValueText")));
+	if (!FieldOfViewValueText) FieldOfViewValueText = Cast<UTextBlock>(Find(TEXT("FieldOfViewValueText")));
 	if (!ControlsList) ControlsList = Cast<UVerticalBox>(Find(TEXT("ControlsList")));
 }
 
@@ -494,6 +543,8 @@ void UHronoMainMenuWidget::BindWidgetEvents()
 	if (MasterVolumeSlider) MasterVolumeSlider->OnValueChanged.AddUniqueDynamic(this, &ThisClass::HandleMasterVolumeChanged);
 	if (MusicVolumeSlider) MusicVolumeSlider->OnValueChanged.AddUniqueDynamic(this, &ThisClass::HandleMusicVolumeChanged);
 	if (SfxVolumeSlider) SfxVolumeSlider->OnValueChanged.AddUniqueDynamic(this, &ThisClass::HandleSfxVolumeChanged);
+	if (MouseSensitivitySlider) MouseSensitivitySlider->OnValueChanged.AddUniqueDynamic(this, &ThisClass::HandleMouseSensitivityChanged);
+	if (FieldOfViewSlider) FieldOfViewSlider->OnValueChanged.AddUniqueDynamic(this, &ThisClass::HandleFieldOfViewChanged);
 	bEventsBound = true;
 }
 
@@ -596,15 +647,24 @@ void UHronoMainMenuWidget::LoadAudioSettings()
 			MasterVolume = FMath::Clamp(Save->MasterVolume, 0.0f, 1.0f);
 			MusicVolume = FMath::Clamp(Save->MusicVolume, 0.0f, 1.0f);
 			SfxVolume = FMath::Clamp(Save->SfxVolume, 0.0f, 1.0f);
+			MouseSensitivity = FMath::Clamp(
+				Save->MouseSensitivity, HronoMenu::MinMouseSensitivity, HronoMenu::MaxMouseSensitivity);
+			FieldOfView = FMath::Clamp(
+				Save->FieldOfView, HronoMenu::MinFieldOfView, HronoMenu::MaxFieldOfView);
 		}
 	}
 
 	OriginalMasterVolume = MasterVolume;
 	OriginalMusicVolume = MusicVolume;
 	OriginalSfxVolume = SfxVolume;
+	OriginalMouseSensitivity = MouseSensitivity;
+	OriginalFieldOfView = FieldOfView;
 	if (MasterVolumeSlider) MasterVolumeSlider->SetValue(MasterVolume);
 	if (MusicVolumeSlider) MusicVolumeSlider->SetValue(MusicVolume);
 	if (SfxVolumeSlider) SfxVolumeSlider->SetValue(SfxVolume);
+	if (MouseSensitivitySlider) MouseSensitivitySlider->SetValue(MouseSensitivity);
+	if (FieldOfViewSlider) FieldOfViewSlider->SetValue(FieldOfView);
+	UpdatePlayerSettingLabels();
 }
 
 void UHronoMainMenuWidget::ApplyAudioSettings(float FadeTime)
@@ -650,6 +710,30 @@ void UHronoMainMenuWidget::ApplyAudioSettings(float FadeTime)
 	}
 }
 
+void UHronoMainMenuWidget::ApplyPlayerSettings()
+{
+	if (AHronoCharacter* Character = Cast<AHronoCharacter>(
+		UGameplayStatics::GetPlayerCharacter(this, 0)))
+	{
+		Character->ApplyLocalPlayerSettings(MouseSensitivity, FieldOfView);
+	}
+}
+
+void UHronoMainMenuWidget::UpdatePlayerSettingLabels()
+{
+	if (MouseSensitivityValueText)
+	{
+		FNumberFormattingOptions NumberOptions;
+		NumberOptions.SetMinimumFractionalDigits(2);
+		NumberOptions.SetMaximumFractionalDigits(2);
+		MouseSensitivityValueText->SetText(FText::AsNumber(MouseSensitivity, &NumberOptions));
+	}
+	if (FieldOfViewValueText)
+	{
+		FieldOfViewValueText->SetText(FText::AsNumber(FMath::RoundToInt(FieldOfView)));
+	}
+}
+
 void UHronoMainMenuWidget::SaveAudioSettings()
 {
 	UHronoMenuSettingsSaveGame* Save = Cast<UHronoMenuSettingsSaveGame>(
@@ -661,6 +745,8 @@ void UHronoMainMenuWidget::SaveAudioSettings()
 	Save->MasterVolume = MasterVolume;
 	Save->MusicVolume = MusicVolume;
 	Save->SfxVolume = SfxVolume;
+	Save->MouseSensitivity = MouseSensitivity;
+	Save->FieldOfView = FieldOfView;
 	UGameplayStatics::SaveGameToSlot(Save, AudioSettingsSlot, 0);
 }
 
@@ -678,6 +764,8 @@ void UHronoMainMenuWidget::ShowOptions()
 	OriginalMasterVolume = MasterVolume;
 	OriginalMusicVolume = MusicVolume;
 	OriginalSfxVolume = SfxVolume;
+	OriginalMouseSensitivity = MouseSensitivity;
+	OriginalFieldOfView = FieldOfView;
 	RefreshControlsList();
 	if (PageSwitcher && PageSwitcher->GetNumWidgets() > 1)
 	{
@@ -730,10 +818,13 @@ void UHronoMainMenuWidget::ApplySettings()
 	}
 
 	ApplyAudioSettings(0.1f);
+	ApplyPlayerSettings();
 	SaveAudioSettings();
 	OriginalMasterVolume = MasterVolume;
 	OriginalMusicVolume = MusicVolume;
 	OriginalSfxVolume = SfxVolume;
+	OriginalMouseSensitivity = MouseSensitivity;
+	OriginalFieldOfView = FieldOfView;
 }
 
 void UHronoMainMenuWidget::CancelSettings()
@@ -745,10 +836,16 @@ void UHronoMainMenuWidget::CancelSettings()
 	MasterVolume = OriginalMasterVolume;
 	MusicVolume = OriginalMusicVolume;
 	SfxVolume = OriginalSfxVolume;
+	MouseSensitivity = OriginalMouseSensitivity;
+	FieldOfView = OriginalFieldOfView;
 	if (MasterVolumeSlider) MasterVolumeSlider->SetValue(MasterVolume);
 	if (MusicVolumeSlider) MusicVolumeSlider->SetValue(MusicVolume);
 	if (SfxVolumeSlider) SfxVolumeSlider->SetValue(SfxVolume);
+	if (MouseSensitivitySlider) MouseSensitivitySlider->SetValue(MouseSensitivity);
+	if (FieldOfViewSlider) FieldOfViewSlider->SetValue(FieldOfView);
+	UpdatePlayerSettingLabels();
 	ApplyAudioSettings(0.1f);
+	ApplyPlayerSettings();
 	PopulateGraphicsSettings();
 }
 
@@ -943,4 +1040,20 @@ void UHronoMainMenuWidget::HandleSfxVolumeChanged(float Value)
 {
 	SfxVolume = Value;
 	ApplyAudioSettings(0.05f);
+}
+
+void UHronoMainMenuWidget::HandleMouseSensitivityChanged(float Value)
+{
+	MouseSensitivity = FMath::Clamp(
+		Value, HronoMenu::MinMouseSensitivity, HronoMenu::MaxMouseSensitivity);
+	UpdatePlayerSettingLabels();
+	ApplyPlayerSettings();
+}
+
+void UHronoMainMenuWidget::HandleFieldOfViewChanged(float Value)
+{
+	FieldOfView = FMath::Clamp(
+		Value, HronoMenu::MinFieldOfView, HronoMenu::MaxFieldOfView);
+	UpdatePlayerSettingLabels();
+	ApplyPlayerSettings();
 }

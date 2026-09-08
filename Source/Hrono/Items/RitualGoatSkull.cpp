@@ -118,6 +118,11 @@ void ARitualGoatSkull::SetRitualKinematic()
 	SetRitualLocked(true);
 	if (ItemMesh)
 	{
+		if (ItemMesh->IsSimulatingPhysics())
+		{
+			ItemMesh->SetPhysicsLinearVelocity(FVector::ZeroVector);
+			ItemMesh->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+		}
 		ItemMesh->SetSimulatePhysics(false);
 		ItemMesh->SetEnableGravity(false);
 		ItemMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);

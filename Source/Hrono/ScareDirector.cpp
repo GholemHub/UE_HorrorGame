@@ -3,6 +3,7 @@
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "Entities/TimelineEntityActor.h"
 #include "Components/SceneComponent.h"
 #include "Components/Drag_Component.h"
 #include "Enviroment/Light_Env.h"
@@ -14,6 +15,7 @@
 #include "Interface/GhostHuntAIInterface.h"
 #include "Items/Base_Item.h"
 #include "Items/Drag_Item.h"
+#include "Ritual/TableRitualGate.h"
 #include "Kismet/KismetSystemLibrary.h"
 #include "Net/UnrealNetwork.h"
 #include "TimerManager.h"
@@ -57,6 +59,7 @@ AScareDirector::AScareDirector()
 void AScareDirector::BeginPlay()
 {
 	Super::BeginPlay();
+	StartTimelineEntityManagement();
 
 #if !UE_BUILD_SHIPPING
 	StartDebugScreenTimer();
@@ -139,12 +142,125 @@ void AScareDirector::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	{
 		ClearHuntTimers();
 		GetWorldTimerManager().ClearTimer(PassiveThreatTimerHandle);
+		GetWorldTimerManager().ClearTimer(TimelineEntityRefreshTimerHandle);
 		GetWorldTimerManager().ClearTimer(CooldownTimerHandle);
 		GetWorldTimerManager().ClearTimer(DebugScreenTimerHandle);
 		GetWorldTimerManager().ClearTimer(DebugTestScenarioTimerHandle);
 	}
 
+	for (ATimelineEntityActor* Entity : TimelineEntities)
+	{
+		if (IsValid(Entity))
+		{
+			Entity->ClearDirectorVisibilityControl();
+		}
+	}
+
 	Super::EndPlay(EndPlayReason);
+}
+
+void AScareDirector::StartTimelineEntityManagement()
+{
+	if (!bShowOnlyNearestTimelineEntity || GetNetMode() == NM_DedicatedServer || !GetWorld())
+	{
+		return;
+	}
+
+	DiscoverTimelineEntities();
+	RefreshTimelineEntityVisibility();
+	GetWorldTimerManager().SetTimer(
+		TimelineEntityRefreshTimerHandle,
+		this,
+		&AScareDirector::RefreshTimelineEntityVisibility,
+		FMath::Max(0.05f, TimelineEntityRefreshInterval),
+		true);
+}
+
+void AScareDirector::DiscoverTimelineEntities()
+{
+	TimelineEntities.RemoveAllSwap([](const TObjectPtr<ATimelineEntityActor>& Entity)
+	{
+		return !IsValid(Entity);
+	});
+
+	if (!bAutoDiscoverTimelineEntities || !GetWorld())
+	{
+		return;
+	}
+
+	for (TActorIterator<ATimelineEntityActor> It(GetWorld()); It; ++It)
+	{
+		TimelineEntities.AddUnique(*It);
+	}
+}
+
+void AScareDirector::RegisterTimelineEntity(ATimelineEntityActor* Entity)
+{
+	if (!IsValid(Entity))
+	{
+		return;
+	}
+
+	TimelineEntities.AddUnique(Entity);
+	if (bShowOnlyNearestTimelineEntity && GetNetMode() != NM_DedicatedServer)
+	{
+		RefreshTimelineEntityVisibility();
+	}
+}
+
+void AScareDirector::UnregisterTimelineEntity(ATimelineEntityActor* Entity)
+{
+	TimelineEntities.Remove(Entity);
+	if (ActiveTimelineEntity == Entity)
+	{
+		ActiveTimelineEntity = nullptr;
+	}
+}
+
+void AScareDirector::RefreshTimelineEntityVisibility()
+{
+	if (!bShowOnlyNearestTimelineEntity || GetNetMode() == NM_DedicatedServer || !GetWorld())
+	{
+		return;
+	}
+
+	DiscoverTimelineEntities();
+
+	APlayerController* PlayerController = GetWorld()->GetFirstPlayerController();
+	AHronoCharacter* Character = PlayerController
+		? Cast<AHronoCharacter>(PlayerController->GetPawn())
+		: nullptr;
+
+	ATimelineEntityActor* NearestEntity = nullptr;
+	float NearestDistanceSquared = TNumericLimits<float>::Max();
+	if (IsValid(Character))
+	{
+		for (ATimelineEntityActor* Entity : TimelineEntities)
+		{
+			if (!IsValid(Entity) || !Entity->IsAvailableForCharacter(*Character))
+			{
+				continue;
+			}
+
+			const float DistanceSquared = FVector::DistSquared(
+				Character->GetActorLocation(),
+				Entity->GetActorLocation());
+			if (DistanceSquared < NearestDistanceSquared)
+			{
+				NearestDistanceSquared = DistanceSquared;
+				NearestEntity = Entity;
+			}
+		}
+	}
+
+	ActiveTimelineEntity = NearestEntity;
+	for (ATimelineEntityActor* Entity : TimelineEntities)
+	{
+		if (IsValid(Entity))
+		{
+			Entity->SetDirectorVisibility(Entity == ActiveTimelineEntity);
+		}
+	}
 }
 
 void AScareDirector::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -842,6 +958,14 @@ bool AScareDirector::SpawnBabajAtRandomPoint()
 		return false;
 	}
 
+	if (TableRitualGate::IsRitualInProgress(this))
+	{
+		UE_LOG(LogGhostHuntDirector, Log,
+			TEXT("[%s] [BabajSpawn] Spawn blocked because the table ritual is in progress."),
+			*GetName());
+		return false;
+	}
+
 	if (!BabajClass)
 	{
 		UE_LOG(LogGhostHuntDirector, Error,
@@ -904,6 +1028,16 @@ void AScareDirector::ReceiveSpawnBabaj_Implementation(
 {
 	if (!HasAuthority() || !GetWorld())
 	{
+		return;
+	}
+
+	// Keep the final SpawnActor protected even if native code calls this event
+	// implementation directly instead of using SpawnBabajAtRandomPoint.
+	if (TableRitualGate::IsRitualInProgress(this))
+	{
+		UE_LOG(LogGhostHuntDirector, Log,
+			TEXT("[%s] [BabajSpawn] Native spawn blocked because the table ritual is in progress."),
+			*GetName());
 		return;
 	}
 
@@ -1324,10 +1458,19 @@ void AScareDirector::StartActualHunt()
 	const bool bBabajSpawnRequested = SpawnBabajAtRandomPoint();
 	if (!bBabajSpawnRequested)
 	{
-		UE_LOG(LogGhostHuntDirector, Error,
-			TEXT("[%s] [BabajSpawn] Hunt entered Manifestation, but no spawn could be requested. "
-				"Check BabajClass and placed BP_ItemPointSpawn actors."),
-			*GetName());
+		if (TableRitualGate::IsRitualInProgress(this))
+		{
+			UE_LOG(LogGhostHuntDirector, Log,
+				TEXT("[%s] [BabajSpawn] Hunt continues without Babaj during the table ritual."),
+				*GetName());
+		}
+		else
+		{
+			UE_LOG(LogGhostHuntDirector, Error,
+				TEXT("[%s] [BabajSpawn] Hunt entered Manifestation, but no spawn could be requested. "
+					"Check BabajClass and placed BP_ItemPointSpawn actors."),
+				*GetName());
+		}
 	}
 
 	const float MinDuration = FMath::Max(1.0f, FMath::Min(HuntDurationMin, HuntDurationMax));

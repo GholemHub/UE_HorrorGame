@@ -17,4 +17,7 @@ namespace TableRitualGate
 
 	/** Ordinary chairs stay usable; only chairs beside BP_TableRitualManager are gated. */
 	bool CanUseChair(const AChair& Chair);
+
+	/** Server-authoritative: true while any table-ritual chair is marked as active. */
+	bool IsRitualInProgress(const UObject* WorldContextObject);
 }

@@ -11,6 +11,8 @@
 #include "Base_Item.generated.h"
 
 class AHronoCharacter;
+class UMaterialInterface;
+class UMeshComponent;
 class USoundBase;
 class UHeldItemInertiaComponent;
 
@@ -43,6 +45,30 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Item TAG")
 	bool UsableValid = true;
+
+	/** Local-only overlay shown while the local player aims at this item. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Item|Interaction Highlight")
+	TObjectPtr<UMaterialInterface> InteractionOverlayMaterial;
+
+	/** Allows individual item classes or placed instances to opt out of aim-based highlighting. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Item|Interaction Highlight")
+	bool bUseInteractionHighlight = true;
+
+	/** Applies or removes the local interaction overlay from every mesh owned by this item. */
+	UFUNCTION(BlueprintCallable, Category = "Item|Interaction Highlight")
+	void SetInteractionHighlighted(bool bHighlighted);
+
+	/** Keeps the overlay enabled until explicitly cleared, independently of aiming. Server-authored. */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Item|Interaction Highlight")
+	void SetInteractionHighlightForced(bool bForced);
+
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, ReplicatedUsing = OnRep_ForceInteractionHighlight,
+		Category = "Item|Interaction Highlight")
+	bool bForceInteractionHighlight = false;
+
+	/** Whether this item is currently a valid highlight target for the supplied local viewer. */
+	UFUNCTION(BlueprintPure, Category = "Item|Interaction Highlight")
+	bool CanHighlightFor(const AHronoCharacter* Viewer) const;
 
 	/** Explicit opt-in: only these items may be offered through a bound mirror. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Item|Mirror Transfer")
@@ -162,6 +188,9 @@ public:
 	UFUNCTION()
 	void OnRep_DroppedPhysicsEnabled();
 
+	UFUNCTION()
+	void OnRep_ForceInteractionHighlight();
+
 	/** Cosmetic hook for item-specific transfer effects. */
 	UFUNCTION(BlueprintImplementableEvent, Category = "Item|Mirror Transfer")
 	void OnMirrorTransferStateChanged(EMirrorItemTransferState NewState);
@@ -176,6 +205,7 @@ protected:
 	/** Applies mesh, gameplay tag, collision, and local visibility for ItemTimeline. */
 	void ApplyItemTimelineState();
 	void ApplyDroppedPhysicsState();
+	void RefreshInteractionHighlight();
 	void LogHeldTransformState(const TCHAR* Context) const;
 
 	/** Restores world physics and timeline interaction responses for a dropped item. */
@@ -186,6 +216,12 @@ protected:
 
 	UPROPERTY(ReplicatedUsing = OnRep_DroppedPhysicsEnabled)
 	bool bDroppedPhysicsEnabled = false;
+
+	/** Original overlays are restored instead of being blindly cleared. Local cosmetic state only. */
+	TMap<TWeakObjectPtr<UMeshComponent>, TWeakObjectPtr<UMaterialInterface>> PreviousOverlayMaterials;
+
+	bool bInteractionHovered = false;
+	bool bInteractionHighlighted = false;
 public:	
 	virtual void Tick(float DeltaTime) override;
 	UStaticMeshComponent* GetItemMesh() const { return ItemMesh; }
