@@ -22,6 +22,9 @@ class HRONO_API AChair : public ABase_Item
 public:
 	AChair();
 	virtual void Use_Implementation(AActor* Character) override;
+	/** Chairs are interacted with, never picked up. Keeping this override here
+	 *  prevents any non-chair item with ItemType=Chair from entering seat logic. */
+	virtual bool TryPickUp(AHronoCharacter* Character) override;
 
 	/**
 	 * Teleports SelectedCharacter to SitPoint and seats them immediately, regardless

@@ -23,8 +23,10 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "Engine/Engine.h"
+#include "Enviroment/PlayerVisibilityZone.h"
 #include "Kismet/GameplayStatics.h"
 #include "Sound/SoundBase.h"
+#include "UI/HronoMenuSettingsSaveGame.h"
 
 void AHronoCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
@@ -377,9 +379,11 @@ void AHronoCharacter::RefreshTimelineVisibilityForLocalPlayer()
 		const bool bSameTimeline = ViewerTimeline == EItemTimeline::Both
 			|| OtherTimeline == EItemTimeline::Both
 			|| ViewerTimeline == OtherTimeline;
+		const bool bRevealedByVisibilityZone =
+			APlayerVisibilityZone::ShouldRevealToViewer(World, LocalViewer, OtherCharacter);
 		const TWeakObjectPtr<AHronoCharacter> OtherKey(OtherCharacter);
 
-		if (!bSameTimeline)
+		if (!bSameTimeline && !bRevealedByVisibilityZone)
 		{
 			const bool bWasAlreadyHidden = HiddenCharacters.Contains(OtherKey);
 			for (UPrimitiveComponent* RenderComponent : RenderComponents)
@@ -611,7 +615,7 @@ void AHronoCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 
 		// Looking/Aiming
 		EnhancedInputComponent->BindAction(LookAction, ETriggerEvent::Triggered, this, &AHronoCharacter::LookInput);
-		EnhancedInputComponent->BindAction(MouseLookAction, ETriggerEvent::Triggered, this, &AHronoCharacter::LookInput);
+		EnhancedInputComponent->BindAction(MouseLookAction, ETriggerEvent::Triggered, this, &AHronoCharacter::MouseLookInput);
 
 		EnhancedInputComponent->BindAction(InteractAction, ETriggerEvent::Started, this, &AHronoCharacter::DoInteract);
 
@@ -706,6 +710,7 @@ void AHronoCharacter::BeginPlay()
 	OnRep_TimelineMirrorRequested();
 	RefreshTimelineVisibilityForLocalPlayer();
 	ApplySprintMovementSpeed();
+	LoadLocalPlayerSettings();
 
 	// DEBUG: Print timeline
 	const char* TimelineStr = (CharacterTimeline == EItemTimeline::Future) ? "FUTURE" : "PAST";
@@ -721,6 +726,7 @@ void AHronoCharacter::PawnClientRestart()
 	ApplyMirrorFromCharacterTimeline();
 	RefreshHeldItemsInteractionPoint();
 	RefreshTimelineVisibilityForLocalPlayer();
+	LoadLocalPlayerSettings();
 }
 
 void AHronoCharacter::Tick(float DeltaTime)
@@ -745,6 +751,53 @@ void AHronoCharacter::Tick(float DeltaTime)
 	{
 		UpdateStamina(DeltaTime);
 	}
+
+	if (IsLocallyControlled())
+	{
+		UpdateInteractionHighlight();
+	}
+}
+
+void AHronoCharacter::UpdateInteractionHighlight()
+{
+	ABase_Item* NewHighlightedItem = nullptr;
+	UCameraComponent* Camera = GetFirstPersonCameraComponent();
+	UWorld* World = GetWorld();
+	if (IsValid(Camera) && IsValid(World))
+	{
+		const FVector Start = Camera->GetComponentLocation();
+		const FVector End = Start + Camera->GetForwardVector() * InteractTraceDistance;
+		FCollisionQueryParams Params(SCENE_QUERY_STAT(InteractionHighlight), false, this);
+		FHitResult HitResult;
+		const ECollisionChannel TraceChannel = CharacterTimeline == EItemTimeline::Future
+			? ECC_GameTraceChannel3
+			: ECC_GameTraceChannel2;
+
+		if (World->LineTraceSingleByChannel(HitResult, Start, End, TraceChannel, Params))
+		{
+			ABase_Item* HitItem = Cast<ABase_Item>(HitResult.GetActor());
+			if (IsValid(HitItem) && HitItem->CanHighlightFor(this))
+			{
+				NewHighlightedItem = HitItem;
+			}
+		}
+	}
+
+	ABase_Item* PreviousItem = HighlightedInteractionItem.Get();
+	if (PreviousItem == NewHighlightedItem)
+	{
+		return;
+	}
+
+	if (IsValid(PreviousItem))
+	{
+		PreviousItem->SetInteractionHighlighted(false);
+	}
+	if (IsValid(NewHighlightedItem))
+	{
+		NewHighlightedItem->SetInteractionHighlighted(true);
+	}
+	HighlightedInteractionItem = NewHighlightedItem;
 }
 
 FHitResult AHronoCharacter::PerformInteractTrace(bool bIsDrag)
@@ -1261,6 +1314,14 @@ void AHronoCharacter::HandleDrag(const FHitResult& HitResult)
 		return;
 	}
 
+	if (Item->bUseAutomaticOpenClose)
+	{
+		UE_LOG(LogTemp, Log,
+			TEXT("HandleDrag ignored for %s because automatic E interaction is enabled"),
+			*GetNameSafe(Item));
+		return;
+	}
+
 	// Multi-door actors own more than one UDrag_Component. Select the one whose
 	// interaction primitive was actually hit instead of always taking the first.
 	auto DragComponent = Item->FindDragComponentForHit(HitResult.GetComponent());
@@ -1361,6 +1422,7 @@ void AHronoCharacter::Server_SetDoorRotation_Implementation(ADrag_Item* Door, FR
 {
 	if (!IsValid(Door)
 		|| NewRotation.ContainsNaN()
+		|| Door->bUseAutomaticOpenClose
 		|| Door->IsLockedByTrigger()
 		|| Door->IsDoorBlockedForTimeline(CharacterTimeline)
 		|| (Door->ItemTimeline != EItemTimeline::Both && Door->ItemTimeline != CharacterTimeline)
@@ -1380,6 +1442,7 @@ void AHronoCharacter::Server_SetDoorPanelRotation_Implementation(
 {
 	if (!IsValid(Door)
 		|| NewRotation.ContainsNaN()
+		|| Door->bUseAutomaticOpenClose
 		|| Door->IsLockedByTrigger()
 		|| Door->IsDoorBlockedForTimeline(CharacterTimeline)
 		|| (Door->ItemTimeline != EItemTimeline::Both && Door->ItemTimeline != CharacterTimeline)
@@ -1508,7 +1571,7 @@ bool AHronoCharacter::TransferHeldItemTo(AHronoCharacter* TargetCharacter, ABase
 
 void AHronoCharacter::Server_SetShelfPosition_Implementation(ADrag_Item* Shelf, const FVector& NewPosition)
 {
-	if (!Shelf)
+	if (!Shelf || Shelf->bUseAutomaticOpenClose)
 	{
 		return;
 	}
@@ -1529,6 +1592,7 @@ void AHronoCharacter::Server_SetShelfPanelPosition_Implementation(
 {
 	if (!IsValid(Shelf)
 		|| NewPosition.ContainsNaN()
+		|| Shelf->bUseAutomaticOpenClose
 		|| (Shelf->ItemTimeline != EItemTimeline::Both
 			&& Shelf->ItemTimeline != CharacterTimeline)
 		|| FVector::DistSquared(GetActorLocation(), Shelf->GetActorLocation())
@@ -1550,6 +1614,25 @@ void AHronoCharacter::OnEnyInteractTrace(FHitResult HitResult)
 {
 	if (AActor* HitActor = HitResult.GetActor())
 	{
+		ADrag_Item* DragItem = Cast<ADrag_Item>(HitActor);
+		const FName InteractionComponentName = HitResult.GetComponent()
+			? HitResult.GetComponent()->GetFName()
+			: NAME_None;
+		if (DragItem
+			&& DragItem->ShouldUseAutomaticOpenClose(this)
+			&& DragItem->FindDragComponentForInteractionName(InteractionComponentName))
+		{
+			if (HasAuthority())
+			{
+				PerformAutomaticDragItemInteraction(DragItem, InteractionComponentName);
+			}
+			else
+			{
+				Server_ToggleAutomaticDragItem(DragItem, InteractionComponentName);
+			}
+			return;
+		}
+
 		const bool bImplementsInterface = HitActor->Implements<UEnviroment_Interface>();
 		UE_LOG(LogTemp, Warning,
 			TEXT("[InteractionDebug] TRACE CALLBACK Player=%s Actor=%s Component=%s Interface=%d Authority=%d"),
@@ -1571,6 +1654,48 @@ void AHronoCharacter::OnEnyInteractTrace(FHitResult HitResult)
 	}
 }
 
+void AHronoCharacter::PerformAutomaticDragItemInteraction(
+	ADrag_Item* Item,
+	FName InteractionComponentName)
+{
+	if (!HasAuthority()
+		|| !IsValid(Item)
+		|| !Item->ShouldUseAutomaticOpenClose(this)
+		|| InteractionComponentName.IsNone()
+		|| !Item->FindDragComponentForInteractionName(InteractionComponentName)
+		|| Item->IsLockedByTrigger()
+		|| Item->IsDoorBlockedForTimeline(CharacterTimeline)
+		|| (Item->ItemTimeline != EItemTimeline::Both
+			&& Item->ItemTimeline != CharacterTimeline)
+		|| FVector::DistSquared(GetActorLocation(), Item->GetActorLocation())
+			> FMath::Square(InteractTraceDistance + 200.0f))
+	{
+		return;
+	}
+
+	if (Item->bNeedKeyActor)
+	{
+		if (!Item->CanUnlockWithItem(CurrentHeldItem))
+		{
+			return;
+		}
+		ServerUnlockWithHeldKey_Implementation(Item);
+		if (Item->bNeedKeyActor)
+		{
+			return;
+		}
+	}
+
+	Item->ToggleAutomaticOpenClose(InteractionComponentName);
+}
+
+void AHronoCharacter::Server_ToggleAutomaticDragItem_Implementation(
+	ADrag_Item* Item,
+	FName InteractionComponentName)
+{
+	PerformAutomaticDragItemInteraction(Item, InteractionComponentName);
+}
+
 void AHronoCharacter::PickupItem(ABase_Item* Item)
 {
 	UE_LOG(LogTemp, Warning, TEXT("PickupItem Authority=%d"), HasAuthority());
@@ -1583,12 +1708,6 @@ void AHronoCharacter::PickupItem(ABase_Item* Item)
 
 	if (!Item)
 	{
-		return;
-	}
-
-	if (Item->ItemType == EItemType::Chair)
-	{
-		Item->Use(this);
 		return;
 	}
 
@@ -1681,6 +1800,59 @@ void AHronoCharacter::LookInput(const FInputActionValue& Value)
 	// pass the axis values to the aim input
 	DoAim(LookAxisVector.X, LookAxisVector.Y);
 
+}
+
+void AHronoCharacter::MouseLookInput(const FInputActionValue& Value)
+{
+	FVector2D LookAxisVector = Value.Get<FVector2D>();
+	if (bCorrectLookInputWhenMirrored && IsMirroredViewEnabled())
+	{
+		LookAxisVector.X *= -1.0f;
+	}
+
+	DoAim(
+		LookAxisVector.X * MouseSensitivity,
+		LookAxisVector.Y * MouseSensitivity);
+}
+
+void AHronoCharacter::ApplyLocalPlayerSettings(
+	float NewMouseSensitivity,
+	float NewFieldOfView)
+{
+	if (!IsLocallyControlled())
+	{
+		return;
+	}
+
+	MouseSensitivity = FMath::Clamp(NewMouseSensitivity, 0.1f, 3.0f);
+	CameraFieldOfView = FMath::Clamp(NewFieldOfView, 70.0f, 120.0f);
+	if (IsValid(FirstPersonCameraComponent))
+	{
+		FirstPersonCameraComponent->SetFieldOfView(CameraFieldOfView);
+	}
+}
+
+void AHronoCharacter::LoadLocalPlayerSettings()
+{
+	if (!IsLocallyControlled())
+	{
+		return;
+	}
+
+	float SavedMouseSensitivity = 1.0f;
+	float SavedFieldOfView = 90.0f;
+	static const FString SettingsSlot(TEXT("HronoMenuSettings"));
+	if (UGameplayStatics::DoesSaveGameExist(SettingsSlot, 0))
+	{
+		if (const UHronoMenuSettingsSaveGame* Save = Cast<UHronoMenuSettingsSaveGame>(
+			UGameplayStatics::LoadGameFromSlot(SettingsSlot, 0)))
+		{
+			SavedMouseSensitivity = Save->MouseSensitivity;
+			SavedFieldOfView = Save->FieldOfView;
+		}
+	}
+
+	ApplyLocalPlayerSettings(SavedMouseSensitivity, SavedFieldOfView);
 }
 
 void AHronoCharacter::DoAim(float Yaw, float Pitch)

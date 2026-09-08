@@ -7,11 +7,15 @@
 #include "HronoCharacter.h"
 #include "Ritual/TableRitualGate.h"
 #include "Camera/CameraComponent.h"
+#include "Components/MeshComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/HeldItemInertiaComponent.h"
+#include "Engine/World.h"
 #include "Kismet/GameplayStatics.h"
+#include "Materials/MaterialInterface.h"
 #include "Sound/SoundBase.h"
+#include "UObject/ConstructorHelpers.h"
 
 // Sets default values
 ABase_Item::ABase_Item()
@@ -32,6 +36,95 @@ ABase_Item::ABase_Item()
 
 	HeldItemInertia = CreateDefaultSubobject<UHeldItemInertiaComponent>(TEXT("HeldItemInertia"));
 
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> InteractionOverlayFinder(
+		TEXT("/Game/_Alex/Materials/M_InteractionOverlay.M_InteractionOverlay"));
+	if (InteractionOverlayFinder.Succeeded())
+	{
+		InteractionOverlayMaterial = InteractionOverlayFinder.Object;
+	}
+
+}
+
+void ABase_Item::SetInteractionHighlighted(bool bHighlighted)
+{
+	bInteractionHovered = bHighlighted;
+	RefreshInteractionHighlight();
+}
+
+void ABase_Item::SetInteractionHighlightForced(bool bForced)
+{
+	if (!HasAuthority() || bForceInteractionHighlight == bForced)
+	{
+		return;
+	}
+
+	bForceInteractionHighlight = bForced;
+	RefreshInteractionHighlight();
+	ForceNetUpdate();
+}
+
+void ABase_Item::OnRep_ForceInteractionHighlight()
+{
+	RefreshInteractionHighlight();
+}
+
+void ABase_Item::RefreshInteractionHighlight()
+{
+	const bool bHighlightRequested = bForceInteractionHighlight
+		|| (bInteractionHovered && bUseInteractionHighlight);
+	const bool bShouldHighlight = bHighlightRequested
+		&& IsValid(InteractionOverlayMaterial)
+		&& !bIsPickedUp
+		&& !IsHidden();
+	if (bInteractionHighlighted == bShouldHighlight)
+	{
+		return;
+	}
+
+	TInlineComponentArray<UMeshComponent*> MeshComponents(this);
+	if (bShouldHighlight)
+	{
+		PreviousOverlayMaterials.Reset();
+		for (UMeshComponent* MeshComponent : MeshComponents)
+		{
+			if (!IsValid(MeshComponent))
+			{
+				continue;
+			}
+
+			PreviousOverlayMaterials.Add(MeshComponent, MeshComponent->GetOverlayMaterial());
+			MeshComponent->SetOverlayMaterial(InteractionOverlayMaterial);
+		}
+	}
+	else
+	{
+		for (UMeshComponent* MeshComponent : MeshComponents)
+		{
+			if (!IsValid(MeshComponent))
+			{
+				continue;
+			}
+
+			const TWeakObjectPtr<UMaterialInterface>* PreviousMaterial =
+				PreviousOverlayMaterials.Find(MeshComponent);
+			MeshComponent->SetOverlayMaterial(
+				PreviousMaterial ? PreviousMaterial->Get() : nullptr);
+		}
+		PreviousOverlayMaterials.Reset();
+	}
+
+	bInteractionHighlighted = bShouldHighlight;
+}
+
+bool ABase_Item::CanHighlightFor(const AHronoCharacter* Viewer) const
+{
+	return IsValid(Viewer)
+		&& bUseInteractionHighlight
+		&& IsValid(InteractionOverlayMaterial)
+		&& UsableValid
+		&& !bIsPickedUp
+		&& !IsHidden()
+		&& (ItemTimeline == EItemTimeline::Both || ItemTimeline == Viewer->GetTimeline());
 }
 
 
@@ -48,6 +141,7 @@ void ABase_Item::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifeti
 	DOREPLIFETIME(ABase_Item, ItemTimeline);
 	DOREPLIFETIME(ABase_Item, MirrorTransferState);
 	DOREPLIFETIME(ABase_Item, bDroppedPhysicsEnabled);
+	DOREPLIFETIME(ABase_Item, bForceInteractionHighlight);
 }
 
 void ABase_Item::SetMirrorTransferState(EMirrorItemTransferState NewState)
@@ -182,6 +276,8 @@ bool ABase_Item::TryPickUp(AHronoCharacter* Character)
 
 bool ABase_Item::AttachToCharacter()
 {
+	bInteractionHovered = false;
+
 	if (HasAuthority())
 	{
 		bDroppedPhysicsEnabled = false;
@@ -240,6 +336,7 @@ bool ABase_Item::AttachToCharacter()
 	}
 
 	bIsPickedUp = true;
+	RefreshInteractionHighlight();
 	UpdateMeshForLocalPlayer();
 	if (HasAuthority())
 	{
@@ -370,6 +467,7 @@ void ABase_Item::LogHeldTransformState(const TCHAR* Context) const
 
 void ABase_Item::OnPickedUp(AHronoCharacter* Character)
 {
+	SetInteractionHighlightForced(false);
 	OwningCharacter = Character;
 
 	// Set native network ownership to allow safe attachment replication

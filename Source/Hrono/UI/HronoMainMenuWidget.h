@@ -16,6 +16,7 @@ class USlider;
 class USoundBase;
 class USoundClass;
 class USoundMix;
+class UTextBlock;
 class UVerticalBox;
 class UWidgetSwitcher;
 class UWorld;
@@ -144,7 +145,9 @@ private:
 	void PopulateGraphicsSettings();
 	void LoadAudioSettings();
 	void ApplyAudioSettings(float FadeTime);
+	void ApplyPlayerSettings();
 	void SaveAudioSettings();
+	void UpdatePlayerSettingLabels();
 	FText GetFriendlyActionName(FName ActionName) const;
 	void BeginSessionRequest(bool bCreateSession);
 	void DispatchPendingSessionRequest();
@@ -181,6 +184,12 @@ private:
 
 	UFUNCTION()
 	void HandleSfxVolumeChanged(float Value);
+
+	UFUNCTION()
+	void HandleMouseSensitivityChanged(float Value);
+
+	UFUNCTION()
+	void HandleFieldOfViewChanged(float Value);
 
 	UPROPERTY(Transient)
 	TObjectPtr<UWidgetSwitcher> PageSwitcher;
@@ -228,6 +237,18 @@ private:
 	TObjectPtr<USlider> SfxVolumeSlider;
 
 	UPROPERTY(Transient)
+	TObjectPtr<USlider> MouseSensitivitySlider;
+
+	UPROPERTY(Transient)
+	TObjectPtr<USlider> FieldOfViewSlider;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UTextBlock> MouseSensitivityValueText;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UTextBlock> FieldOfViewValueText;
+
+	UPROPERTY(Transient)
 	TObjectPtr<UVerticalBox> ControlsList;
 
 	UPROPERTY(Transient)
@@ -236,9 +257,13 @@ private:
 	float MasterVolume = 1.0f;
 	float MusicVolume = 1.0f;
 	float SfxVolume = 1.0f;
+	float MouseSensitivity = 1.0f;
+	float FieldOfView = 90.0f;
 	float OriginalMasterVolume = 1.0f;
 	float OriginalMusicVolume = 1.0f;
 	float OriginalSfxVolume = 1.0f;
+	float OriginalMouseSensitivity = 1.0f;
+	float OriginalFieldOfView = 90.0f;
 	bool bSoundMixPushed = false;
 	bool bEventsBound = false;
 	bool bPendingCreateSession = false;

@@ -11,6 +11,7 @@
 #include "Enviroment/Light_Env.h"
 #include "Enviroment/Switcher_Env.h"
 #include "GameFramework/GameStateBase.h"
+#include "HronoCollisionChannels.h"
 #include "Items/Base_Item.h"
 #include "Items/Drag_Item.h"
 #include "Items/RitualGoatSkull.h"
@@ -235,6 +236,9 @@ void ACursedRoomRitual::StartRitual(
 	ActiveTestedRoom = TestedRoom;
 	ReplicatedState.PastSkull = PastSkull;
 	ReplicatedState.FutureSkull = FutureSkull;
+	ReplicatedState.RoomCenter = IsValid(TestedRoom->RoomVolume)
+		? TestedRoom->RoomVolume->GetComponentLocation()
+		: TestedRoom->GetActorLocation();
 	++ReplicatedState.SequenceId;
 	PastSkull->SetRitualLocked(true);
 	FutureSkull->SetRitualLocked(true);
@@ -337,6 +341,20 @@ void ACursedRoomRitual::HandleStateFinished()
 		}
 		break;
 	case ECursedRoomRitualState::Scratching:
+		SetState(
+			ECursedRoomRitualState::ReturningToRoomCenter,
+			FMath::Max(0.1f, ReturnToCenterDuration));
+		break;
+	case ECursedRoomRitualState::ReturningToRoomCenter:
+		ApplyReturnToCenterTransform(
+			ReplicatedState.PastSkull, ReplicatedState.PastStartTransform, 1.0f);
+		ApplyReturnToCenterTransform(
+			ReplicatedState.FutureSkull, ReplicatedState.FutureStartTransform, 1.0f);
+		BeginSuccessfulSkullFall();
+		break;
+	case ECursedRoomRitualState::FallingToBreak:
+		// A floor hit normally completes each skull independently. This timeout
+		// prevents the ritual from stalling on unusual collision geometry.
 		CompleteSuccessfulRitual();
 		break;
 	case ECursedRoomRitualState::FallingSilent:
@@ -367,6 +385,8 @@ void ACursedRoomRitual::ApplyReplicatedState()
 		ReplicatedState.State == ECursedRoomRitualState::Rising
 		|| ReplicatedState.State == ECursedRoomRitualState::Hovering
 		|| ReplicatedState.State == ECursedRoomRitualState::Scratching
+		|| ReplicatedState.State == ECursedRoomRitualState::ReturningToRoomCenter
+		|| ReplicatedState.State == ECursedRoomRitualState::FallingToBreak
 		|| ReplicatedState.State == ECursedRoomRitualState::FallingSilent;
 	if (HasAuthority())
 	{
@@ -431,6 +451,36 @@ void ACursedRoomRitual::ApplyReplicatedState()
 		}
 		StartStageUpdates();
 		break;
+	case ECursedRoomRitualState::ReturningToRoomCenter:
+		// Freeze physics first, then drive a synchronized smooth transform back to
+		// the center authored by the room volume.
+		if (IsValid(ReplicatedState.PastSkull))
+		{
+			ReplicatedState.PastSkull->SetRitualKinematic();
+		}
+		if (IsValid(ReplicatedState.FutureSkull))
+		{
+			ReplicatedState.FutureSkull->SetRitualKinematic();
+		}
+		StartStageUpdates();
+		break;
+	case ECursedRoomRitualState::FallingToBreak:
+		for (ARitualGoatSkull* Skull : {
+			ReplicatedState.PastSkull.Get(),
+			ReplicatedState.FutureSkull.Get() })
+		{
+			if (IsValid(Skull) && !Skull->WasDestroyedByRitual())
+			{
+				Skull->SetRitualPhysics(false);
+				if (UStaticMeshComponent* SkullMesh = Skull->GetItemMesh())
+				{
+					// Past and Future skulls share the same center but must not
+					// physically collide with one another while falling.
+					SkullMesh->SetCollisionResponseToChannel(COLLISION_CHANNEL_ITEM, ECR_Ignore);
+				}
+			}
+		}
+		break;
 	case ECursedRoomRitualState::FallingSilent:
 		if (IsValid(ReplicatedState.PastSkull))
 		{
@@ -492,6 +542,15 @@ void ACursedRoomRitual::UpdateActiveStage()
 		return;
 	}
 
+	if (ReplicatedState.State == ECursedRoomRitualState::ReturningToRoomCenter)
+	{
+		ApplyReturnToCenterTransform(
+			ReplicatedState.PastSkull, ReplicatedState.PastStartTransform, Alpha);
+		ApplyReturnToCenterTransform(
+			ReplicatedState.FutureSkull, ReplicatedState.FutureStartTransform, Alpha);
+		return;
+	}
+
 	// Only the server drives rigid bodies. Root-body movement replication carries
 	// the result to clients; clients never choose forces or ritual outcomes.
 	if (!HasAuthority())
@@ -531,6 +590,25 @@ void ACursedRoomRitual::ApplyRiseTransform(
 	const FVector TargetLocation = StartTransform.GetLocation() + FVector::UpVector * HoverHeight;
 	Skull->GetItemMesh()->SetWorldLocationAndRotation(
 		FMath::Lerp(StartTransform.GetLocation(), TargetLocation, FMath::SmoothStep(0.0f, 1.0f, Alpha)),
+		StartTransform.GetRotation(),
+		false,
+		nullptr,
+		ETeleportType::TeleportPhysics);
+}
+
+void ACursedRoomRitual::ApplyReturnToCenterTransform(
+	ARitualGoatSkull* Skull,
+	const FTransform& StartTransform,
+	float Alpha) const
+{
+	if (!IsValid(Skull) || !IsValid(Skull->GetItemMesh()))
+	{
+		return;
+	}
+
+	const float SmoothAlpha = FMath::SmoothStep(0.0f, 1.0f, Alpha);
+	Skull->GetItemMesh()->SetWorldLocationAndRotation(
+		FMath::Lerp(StartTransform.GetLocation(), ReplicatedState.RoomCenter, SmoothAlpha),
 		StartTransform.GetRotation(),
 		false,
 		nullptr,
@@ -595,6 +673,7 @@ ABase_Item* ACursedRoomRitual::SpawnTimelineKey(
 
 	Key->SetItemTimeline(Timeline);
 	Key->FinishSpawning(SpawnTransform);
+	Key->SetInteractionHighlightForced(true);
 	if (UStaticMeshComponent* KeyMesh = Key->GetItemMesh())
 	{
 		KeyMesh->SetNotifyRigidBodyCollision(true);
@@ -610,6 +689,98 @@ ABase_Item* ACursedRoomRitual::SpawnTimelineKey(
 	return Key;
 }
 
+void ACursedRoomRitual::BeginSuccessfulSkullFall()
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	StopStageUpdates();
+	BrokenSkulls.Reset();
+	LandedKeys.Reset();
+	SpawnedPastKey = nullptr;
+	SpawnedFutureKey = nullptr;
+	bSuccessfulConsequencesApplied = false;
+
+	for (ARitualGoatSkull* Skull : {
+		ReplicatedState.PastSkull.Get(),
+		ReplicatedState.FutureSkull.Get() })
+	{
+		if (IsValid(Skull) && IsValid(Skull->GetItemMesh()))
+		{
+			Skull->GetItemMesh()->SetNotifyRigidBodyCollision(true);
+			Skull->GetItemMesh()->OnComponentHit.AddUniqueDynamic(
+				this, &ACursedRoomRitual::HandleFallingSkullHit);
+		}
+	}
+
+	SetState(
+		ECursedRoomRitualState::FallingToBreak,
+		FMath::Max(0.1f, SkullFallTimeout));
+}
+
+void ACursedRoomRitual::HandleFallingSkullHit(
+	UPrimitiveComponent* HitComponent,
+	AActor* OtherActor,
+	UPrimitiveComponent* OtherComponent,
+	FVector NormalImpulse,
+	const FHitResult& Hit)
+{
+	if (!HasAuthority()
+		|| ReplicatedState.State != ECursedRoomRitualState::FallingToBreak
+		|| Hit.ImpactNormal.Z < 0.45f
+		|| !IsValid(HitComponent))
+	{
+		return;
+	}
+
+	ARitualGoatSkull* Skull = Cast<ARitualGoatSkull>(HitComponent->GetOwner());
+	if (Skull != ReplicatedState.PastSkull && Skull != ReplicatedState.FutureSkull)
+	{
+		return;
+	}
+
+	BreakFallingSkull(Skull);
+	const int32 ExpectedSkulls =
+		(IsValid(ReplicatedState.PastSkull) ? 1 : 0)
+		+ (IsValid(ReplicatedState.FutureSkull) ? 1 : 0);
+	if (ExpectedSkulls > 0 && BrokenSkulls.Num() >= ExpectedSkulls)
+	{
+		CompleteSuccessfulRitual();
+	}
+}
+
+void ACursedRoomRitual::BreakFallingSkull(ARitualGoatSkull* Skull)
+{
+	if (!HasAuthority() || !IsValid(Skull) || BrokenSkulls.Contains(Skull))
+	{
+		return;
+	}
+
+	BrokenSkulls.Add(Skull);
+	if (UStaticMeshComponent* SkullMesh = Skull->GetItemMesh())
+	{
+		SkullMesh->OnComponentHit.RemoveDynamic(this, &ACursedRoomRitual::HandleFallingSkullHit);
+	}
+
+	if (Skull == ReplicatedState.PastSkull)
+	{
+		SpawnedPastKey = SpawnTimelineKey(PastKeyClass, EItemTimeline::Past, Skull);
+	}
+	else if (Skull == ReplicatedState.FutureSkull)
+	{
+		SpawnedFutureKey = SpawnTimelineKey(FutureKeyClass, EItemTimeline::Future, Skull);
+	}
+
+	Skull->ExplodeFromRitual();
+	ForceNetUpdate();
+	UE_LOG(LogCursedRoomRitual, Log,
+		TEXT("[Ritual] %s hit the floor, broke, and spawned key %s"),
+		*GetNameSafe(Skull),
+		*GetNameSafe(Skull == ReplicatedState.PastSkull ? SpawnedPastKey.Get() : SpawnedFutureKey.Get()));
+}
+
 void ACursedRoomRitual::CompleteSuccessfulRitual()
 {
 	if (!HasAuthority())
@@ -618,32 +789,14 @@ void ACursedRoomRitual::CompleteSuccessfulRitual()
 	}
 
 	StopStageUpdates();
-	LandedKeys.Reset();
-	bSuccessfulConsequencesApplied = false;
-	if (IsValid(ReplicatedState.PastSkull))
-	{
-		ReplicatedState.PastSkull->RestoreNormalGravity();
-	}
-	if (IsValid(ReplicatedState.FutureSkull))
-	{
-		ReplicatedState.FutureSkull->RestoreNormalGravity();
-	}
-
-	SpawnedPastKey = SpawnTimelineKey(PastKeyClass, EItemTimeline::Past, ReplicatedState.PastSkull);
-	SpawnedFutureKey = SpawnTimelineKey(FutureKeyClass, EItemTimeline::Future, ReplicatedState.FutureSkull);
-
-	if (IsValid(ReplicatedState.PastSkull))
-	{
-		ReplicatedState.PastSkull->ExplodeFromRitual();
-	}
-	if (IsValid(ReplicatedState.FutureSkull))
-	{
-		ReplicatedState.FutureSkull->ExplodeFromRitual();
-	}
+	// The normal path reaches here after both floor hits. On timeout, break any
+	// skull that is still falling so the ritual cannot remain locked forever.
+	BreakFallingSkull(ReplicatedState.PastSkull);
+	BreakFallingSkull(ReplicatedState.FutureSkull);
 
 	SetState(ECursedRoomRitualState::Completed, 0.0f);
 	const int32 ExpectedKeys = (IsValid(SpawnedPastKey) ? 1 : 0) + (IsValid(SpawnedFutureKey) ? 1 : 0);
-	if (ExpectedKeys == 0)
+	if (ExpectedKeys == 0 || LandedKeys.Num() >= ExpectedKeys)
 	{
 		FinishSuccessfulRitualAfterKeysLand();
 	}
@@ -668,7 +821,10 @@ void ACursedRoomRitual::HandleSpawnedKeyHit(
 	FVector NormalImpulse,
 	const FHitResult& Hit)
 {
-	if (!HasAuthority() || ReplicatedState.State != ECursedRoomRitualState::Completed
+	const bool bAcceptLanding =
+		ReplicatedState.State == ECursedRoomRitualState::FallingToBreak
+		|| ReplicatedState.State == ECursedRoomRitualState::Completed;
+	if (!HasAuthority() || !bAcceptLanding
 		|| Hit.ImpactNormal.Z < 0.45f || !IsValid(HitComponent))
 	{
 		return;
@@ -685,7 +841,8 @@ void ACursedRoomRitual::HandleSpawnedKeyHit(
 	UE_LOG(LogCursedRoomRitual, Log,
 		TEXT("[RitualKey] %s landed (%d/%d, ImpactNormal=%s)"),
 		*GetNameSafe(Key), LandedKeys.Num(), ExpectedKeys, *Hit.ImpactNormal.ToCompactString());
-	if (ExpectedKeys > 0 && LandedKeys.Num() >= ExpectedKeys)
+	if (ReplicatedState.State == ECursedRoomRitualState::Completed
+		&& ExpectedKeys > 0 && LandedKeys.Num() >= ExpectedKeys)
 	{
 		FinishSuccessfulRitualAfterKeysLand();
 	}

@@ -24,6 +24,8 @@ enum class ECursedRoomRitualState : uint8
 	Rising,
 	Hovering,
 	Scratching,
+	ReturningToRoomCenter,
+	FallingToBreak,
 	FallingSilent,
 	Completed,
 	Failed
@@ -69,6 +71,10 @@ struct HRONO_API FCursedRoomRitualReplicatedState
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Cursed Room Ritual")
 	FTransform FutureStartTransform = FTransform::Identity;
+
+	/** World-space center of the tested room volume, authored by the server. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Cursed Room Ritual")
+	FVector RoomCenter = FVector::ZeroVector;
 };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
@@ -138,6 +144,16 @@ public:
 		meta = (ClampMin = "0.1", Units = "s"))
 	float ScratchDuration = 7.0f;
 
+	/** Time used to smoothly move the skulls from their last impulse positions to the room center. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Sequence",
+		meta = (ClampMin = "0.1", Units = "s"))
+	float ReturnToCenterDuration = 3.0f;
+
+	/** Safety timeout: remaining skulls break if no valid floor hit arrives in this time. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Sequence",
+		meta = (ClampMin = "0.1", Units = "s"))
+	float SkullFallTimeout = 5.0f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Failure",
 		meta = (ClampMin = "0.0", Units = "s"))
 	float WrongRoomFallingSilenceDuration = 5.0f;
@@ -167,7 +183,7 @@ public:
 	TSubclassOf<ABase_Item> FutureKeyClass;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Keys")
-	FVector KeySpawnOffset = FVector(0.0f, 0.0f, -10.0f);
+	FVector KeySpawnOffset = FVector(0.0f, 0.0f, 20.0f);
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Keys",
 		meta = (ClampMin = "0.1", Units = "s"))
@@ -257,6 +273,14 @@ protected:
 		FVector NormalImpulse,
 		const FHitResult& Hit);
 
+	UFUNCTION()
+	void HandleFallingSkullHit(
+		UPrimitiveComponent* HitComponent,
+		AActor* OtherActor,
+		UPrimitiveComponent* OtherComponent,
+		FVector NormalImpulse,
+		const FHitResult& Hit);
+
 private:
 	ARoom* FindContainingRoom(const AActor* Actor) const;
 	bool FindSkullPairInRoom(ARoom*& OutRoom, ARitualGoatSkull*& OutPast, ARitualGoatSkull*& OutFuture) const;
@@ -269,9 +293,12 @@ private:
 	void StartStageUpdates();
 	void StopStageUpdates();
 	void ApplyRiseTransform(ARitualGoatSkull* Skull, const FTransform& StartTransform, float Alpha) const;
+	void ApplyReturnToCenterTransform(ARitualGoatSkull* Skull, const FTransform& StartTransform, float Alpha) const;
 	void ApplyUpwardAcceleration(ARitualGoatSkull* Skull, float Acceleration) const;
 	void ApplyRandomImpulse(ARitualGoatSkull* Skull, int32 ImpulseIndex, int32 TimelineSalt) const;
 	ABase_Item* SpawnTimelineKey(TSubclassOf<ABase_Item> KeyClass, EItemTimeline Timeline, ARitualGoatSkull* SourceSkull);
+	void BeginSuccessfulSkullFall();
+	void BreakFallingSkull(ARitualGoatSkull* Skull);
 	void CompleteSuccessfulRitual();
 	void FinishSuccessfulRitualAfterKeysLand();
 	void TriggerWrongRoomConsequences();
@@ -301,6 +328,7 @@ private:
 	int32 LastAppliedImpulseIndex = INDEX_NONE;
 	bool bSuccessfulConsequencesApplied = false;
 	bool bLastHouseFlickerPulseOn = true;
+	TSet<TWeakObjectPtr<ARitualGoatSkull>> BrokenSkulls;
 	TSet<TWeakObjectPtr<ABase_Item>> LandedKeys;
 	TArray<TWeakObjectPtr<ADrag_Item>> LockedRoomDoors;
 	TMap<TWeakObjectPtr<ALight_Env>, bool> PreviousEnvironmentLightFlicker;

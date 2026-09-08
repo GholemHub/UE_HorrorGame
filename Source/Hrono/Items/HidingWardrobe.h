@@ -31,6 +31,7 @@ public:
 	virtual USceneComponent* FindDoorMovementComponent(FName DoorComponentName) const override;
 	virtual void ApplyDoorRotationFromServer(FName DoorComponentName, const FRotator& NewRotation) override;
 	virtual void Interact_Implementation(AActor* Interactor) override;
+	virtual bool ShouldUseAutomaticOpenClose(const AActor* Interactor) const override;
 
 	/** Hinge position for ItemMesh (the left door). Move this to the left edge of the frame. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Wardrobe|Doors")
@@ -114,6 +115,8 @@ public:
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	virtual void CancelNativeAnimationForAutomaticInteraction(
+		USceneComponent* MovementComponent) override;
 
 	UFUNCTION()
 	void OnRep_RightDoorRotation();

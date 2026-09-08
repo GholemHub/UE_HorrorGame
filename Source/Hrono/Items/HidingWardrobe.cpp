@@ -165,6 +165,16 @@ void AHidingWardrobe::Tick(float DeltaTime)
 	}
 }
 
+void AHidingWardrobe::CancelNativeAnimationForAutomaticInteraction(
+	USceneComponent* MovementComponent)
+{
+	Super::CancelNativeAnimationForAutomaticInteraction(MovementComponent);
+	if (MovementComponent == RightDoorPivot)
+	{
+		bRightDoorAnimationActive = false;
+	}
+}
+
 USceneComponent* AHidingWardrobe::GetPrimaryDoorMovementComponent() const
 {
 	return LeftDoorPivot;
@@ -385,6 +395,15 @@ void AHidingWardrobe::Interact_Implementation(AActor* Interactor)
 	{
 		AnimateDoor(true);
 	}
+}
+
+bool AHidingWardrobe::ShouldUseAutomaticOpenClose(const AActor* Interactor) const
+{
+	// E must always let the occupant leave. Outside the wardrobe, clicking an
+	// actual door panel uses automatic open/close; clicking the frame keeps the
+	// inherited hiding interaction available.
+	return Super::ShouldUseAutomaticOpenClose(Interactor)
+		&& HiddenPlayer != Interactor;
 }
 
 bool AHidingWardrobe::TryEnterWardrobe(AHronoCharacter* Player)

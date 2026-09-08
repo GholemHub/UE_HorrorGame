@@ -3,6 +3,7 @@
 #include "HronoCharacter.h"
 #include "Ritual/TableRitualGate.h"
 #include "Components/SceneComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "Kismet/GameplayStatics.h"
 #include "Sound/SoundBase.h"
 
@@ -10,6 +11,8 @@
 
 AChair::AChair()
 {
+	ItemType = EItemType::Chair;
+
 	SitPoint = CreateDefaultSubobject<USceneComponent>(TEXT("SitPoint"));
 	StandUpPoint = CreateDefaultSubobject<USceneComponent>(TEXT("StandUpPoint"));
 
@@ -27,6 +30,11 @@ void AChair::NotifyCharacterSat(AHronoCharacter* Character)
 
 void AChair::Use_Implementation(AActor* Character)
 {
+	if (!HasAuthority())
+	{
+		return;
+	}
+
     AHronoCharacter* Hrono = Cast<AHronoCharacter>(Character);
 
     if (!Hrono)
@@ -45,6 +53,20 @@ void AChair::Use_Implementation(AActor* Character)
     UGameplayStatics::PlaySoundAtLocation(this, bIsSit ? StandUpSound : SitSound, GetActorLocation());
 
     Hrono->SitOnChair(this);
+}
+
+bool AChair::TryPickUp(AHronoCharacter* Character)
+{
+	if (!HasAuthority()
+		|| !IsValid(Character)
+		|| (ItemTimeline != EItemTimeline::Both
+			&& ItemTimeline != Character->GetTimeline()))
+	{
+		return false;
+	}
+
+	Use(Character);
+	return false;
 }
 
 bool AChair::OnBacktToRitualTable(AHronoCharacter* SelectedCharacter)

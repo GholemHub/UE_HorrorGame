@@ -6,7 +6,7 @@
 #include "GameFramework/SaveGame.h"
 #include "HronoMenuSettingsSaveGame.generated.h"
 
-/** Audio values that are not handled by UGameUserSettings. */
+/** Menu values that are not handled by UGameUserSettings. */
 UCLASS()
 class HRONO_API UHronoMenuSettingsSaveGame final : public USaveGame
 {
@@ -21,5 +21,10 @@ public:
 
 	UPROPERTY(SaveGame)
 	float SfxVolume = 1.0f;
-};
 
+	UPROPERTY(SaveGame)
+	float MouseSensitivity = 1.0f;
+
+	UPROPERTY(SaveGame)
+	float FieldOfView = 90.0f;
+};

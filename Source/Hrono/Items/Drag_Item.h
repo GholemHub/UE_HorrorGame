@@ -26,6 +26,21 @@ class UAudioComponent;
 class USplineComponent;
 class UPrimitiveComponent;
 
+/** Runtime state for one panel moving through the optional press-E interaction. */
+struct FDragItemAutomaticPanelAnimation
+{
+	TWeakObjectPtr<USceneComponent> MovementComponent;
+	FName MovementComponentName = NAME_None;
+	bool bLinear = false;
+	bool bOpening = false;
+	float Elapsed = 0.0f;
+	float Duration = 1.0f;
+	FVector StartLocation = FVector::ZeroVector;
+	FVector TargetLocation = FVector::ZeroVector;
+	FRotator StartRotation = FRotator::ZeroRotator;
+	FRotator TargetRotation = FRotator::ZeroRotator;
+};
+
 UCLASS()
 class HRONO_API ADrag_Item : public ABase_Item
 {
@@ -52,6 +67,21 @@ public:
 
 	UPROPERTY(VisibleAnywhere)
 	class UDrag_Component* DragComponent;
+
+	/** When enabled, E toggles the specific door, cupboard panel, shelf, or drawer
+	 *  under the crosshair. Mouse dragging is disabled for this actor. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Replicated, Category = "Interaction|Automatic")
+	bool bUseAutomaticOpenClose = true;
+
+	/** Time used by the press-E open/close animation. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interaction|Automatic",
+		meta = (EditCondition = "bUseAutomaticOpenClose", ClampMin = "0.01", UIMin = "0.1", Units = "s"))
+	float AutomaticOpenCloseDuration = 0.75f;
+
+	/** Ease-in/ease-out shape for automatic doors and drawers. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interaction|Automatic",
+		meta = (EditCondition = "bUseAutomaticOpenClose", ClampMin = "1.0", UIMin = "1.0", UIMax = "5.0"))
+	float AutomaticOpenCloseEaseExponent = 2.0f;
 
 	/** Editable set of points (spline control points) used to author a path/positions
 	 *  for this drag item. Points can be edited directly in the viewport and are
@@ -201,6 +231,16 @@ public:
 	/** Selects the correct drag component for the primitive hit by the interaction trace. */
 	virtual UDrag_Component* FindDragComponentForHit(const UPrimitiveComponent* HitComponent) const;
 
+	/** Server-side equivalent of FindDragComponentForHit using the replicated hit component name. */
+	UDrag_Component* FindDragComponentForInteractionName(FName InteractionComponentName) const;
+
+	/** Toggles the panel associated with InteractionComponentName. Authority only. */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Interaction|Automatic")
+	bool ToggleAutomaticOpenClose(FName InteractionComponentName);
+
+	/** Lets specialized drag items preserve higher-priority E interactions. */
+	virtual bool ShouldUseAutomaticOpenClose(const AActor* Interactor) const;
+
 	/** Resolves a replicated door/pivot identifier to a movement component. */
 	virtual USceneComponent* FindDoorMovementComponent(FName DoorComponentName) const;
 
@@ -288,7 +328,23 @@ protected:
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastStartDoorAnimation(FRotator TargetRotation, float Duration);
 
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastStartAutomaticPanelAnimation(
+		bool bLinear,
+		bool bOpening,
+		FName MovementComponentName,
+		FVector TargetLocation,
+		FRotator TargetRotation,
+		float Duration);
+
 	void UpdateDoorAnimation(float DeltaTime);
+	void UpdateAutomaticPanelAnimations(float DeltaTime);
+	USceneComponent* ResolveAutomaticMovementComponent(
+		bool bLinear,
+		FName MovementComponentName) const;
+	/** Stops subclass-specific animation code that would otherwise fight the E-key animation. */
+	virtual void CancelNativeAnimationForAutomaticInteraction(
+		USceneComponent* MovementComponent);
 
 	UPROPERTY(Transient)
 	bool bDoorAnimationActive = false;
@@ -304,6 +360,8 @@ protected:
 
 	UPROPERTY(Transient)
 	FRotator DoorAnimationTargetRotation = FRotator::ZeroRotator;
+
+	TArray<FDragItemAutomaticPanelAnimation> AutomaticPanelAnimations;
 
 	UFUNCTION(BlueprintCallable, Category = "Shelf")
 	void OnShelfOpened();

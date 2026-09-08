@@ -14,6 +14,7 @@ class UCameraComponent;
 class UInputAction;
 class UDrag_Component;
 class ADrag_Item;
+class ABase_Item;
 class USpotLightComponent;
 class AChair;
 class USoundBase;
@@ -173,6 +174,18 @@ public:
 	/** Plays the footstep sound at the character's feet. Hook this up to an animation notify. */
 	UFUNCTION(BlueprintCallable, Category = "Audio")
 	void PlayFootstepSound();
+
+	/** Current local mouse multiplier loaded from menu settings. */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Input|Settings")
+	float MouseSensitivity = 1.0f;
+
+	/** Current local world-camera FOV loaded from menu settings. */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Input|Settings")
+	float CameraFieldOfView = 90.0f;
+
+	/** Applies local input/camera settings immediately without network replication. */
+	UFUNCTION(BlueprintCallable, Category = "Input|Settings")
+	void ApplyLocalPlayerSettings(float NewMouseSensitivity, float NewFieldOfView);
 
 	/** Called by the engine when the character lands after a fall. */
 	virtual void Landed(const FHitResult& Hit) override;
@@ -347,6 +360,9 @@ protected:
 	/** Called from Input Actions for looking input */
 	void LookInput(const FInputActionValue& Value);
 
+	/** Mouse-only look path so sensitivity does not alter gamepad aiming. */
+	void MouseLookInput(const FInputActionValue& Value);
+
 	/** Handles aim inputs from either controls or UI interfaces */
 	UFUNCTION(BlueprintCallable, Category = "Input")
 	virtual void DoAim(float Yaw, float Pitch);
@@ -375,8 +391,9 @@ protected:
 
 
 
-	UPROPERTY(EditAnywhere, Category = "Input", meta = (ClampMin = 0, Units = "cm"))
-	float InteractTraceDistance = 300.0f;
+	/** Shared interaction/highlight range. Keeping one distance prevents highlighting unusable targets. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interaction", meta = (ClampMin = 0, Units = "cm"))
+	float InteractTraceDistance = 500.0f;
 
 	UFUNCTION()
 	void OnRep_CharacterTimeline(EItemTimeline PreviousTimeline);
@@ -483,8 +500,15 @@ protected:
 	FHitResult PerformInteractTrace(bool bIsDrag);
 	void HandleInteraction(const FHitResult& HitResult);
 	void HandleDrag(const FHitResult& HitResult);
+	void UpdateInteractionHighlight();
+	void PerformAutomaticDragItemInteraction(
+		ADrag_Item* Item,
+		FName InteractionComponentName);
 
 	class UDrag_Component* CurrentDraggedComponent = nullptr;
+
+	/** Item currently highlighted for this local player. Never replicated. */
+	TWeakObjectPtr<ABase_Item> HighlightedInteractionItem;
 
 	UFUNCTION(Server, Reliable)
 	void ServerPickupItem(class ABase_Item* Item);
@@ -575,6 +599,12 @@ public:
 		FName ShelfComponentName,
 		FVector NewPosition);
 
+	/** Requests the server-authoritative E-key toggle for one door/drawer panel. */
+	UFUNCTION(Server, Reliable)
+	void Server_ToggleAutomaticDragItem(
+		ADrag_Item* Item,
+		FName InteractionComponentName);
+
 public:
 		// The Client will call this to tell the server to interact with an object
 		UFUNCTION(Server, Reliable)
@@ -608,5 +638,6 @@ public:
 
 		void OnEnyInteractTrace(FHitResult HitResult);
 		void OnMakeInteractImpulse(FHitResult HitResult);
+		void LoadLocalPlayerSettings();
 };
 

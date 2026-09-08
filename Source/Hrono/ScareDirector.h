@@ -8,6 +8,7 @@
 class AScareDirector;
 class ABase_Item;
 class ARoom;
+class ATimelineEntityActor;
 class USceneComponent;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FGhostThreatStateChangedSignature, EGhostThreatState, OldState, EGhostThreatState, NewState);
@@ -126,6 +127,40 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Hunt|AI")
 	FVector GetLastKnownPlayerPosition() const { return LastKnownPlayerPosition; }
+
+	// ---- Timeline entities -------------------------------------------------------------------
+
+	/**
+	 * Optional explicit apparition pool. When automatic discovery is enabled,
+	 * every placed TimelineEntityActor is added to this list at runtime.
+	 */
+	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category = "Hunt|Timeline Entities")
+	TArray<TObjectPtr<ATimelineEntityActor>> TimelineEntities;
+
+	/** Finds placed/streamed entities automatically in addition to explicit entries. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hunt|Timeline Entities")
+	bool bAutoDiscoverTimelineEntities = true;
+
+	/** Only the nearest available entity in the local player's timeline is shown. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hunt|Timeline Entities")
+	bool bShowOnlyNearestTimelineEntity = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hunt|Timeline Entities",
+		meta = (ClampMin = "0.05", Units = "s"))
+	float TimelineEntityRefreshInterval = 0.2f;
+
+	/** Locally selected entity. This presentation state is intentionally not replicated. */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Hunt|Timeline Entities")
+	TObjectPtr<ATimelineEntityActor> ActiveTimelineEntity;
+
+	UFUNCTION(BlueprintCallable, Category = "Hunt|Timeline Entities")
+	void RegisterTimelineEntity(ATimelineEntityActor* Entity);
+
+	UFUNCTION(BlueprintCallable, Category = "Hunt|Timeline Entities")
+	void UnregisterTimelineEntity(ATimelineEntityActor* Entity);
+
+	UFUNCTION(BlueprintCallable, Category = "Hunt|Timeline Entities")
+	void RefreshTimelineEntityVisibility();
 
 	// ---- Cursed room -------------------------------------------------------------------------
 
@@ -482,6 +517,8 @@ protected:
 	void MulticastForceAllLightsOffForEvent(const FString& Reason);
 
 private:
+	void StartTimelineEntityManagement();
+	void DiscoverTimelineEntities();
 	void ConfigureRoomClockAnomalies(const TArray<ARoom*>& Rooms);
 	void ConfigureRoomHotDots(const TArray<ARoom*>& Rooms);
 	void ConfigureRoomPaintingEvidence(const TArray<ARoom*>& Rooms);
@@ -564,6 +601,7 @@ private:
 	FDebugTuningBackup DebugTuningBackup;
 
 	FTimerHandle PassiveThreatTimerHandle;
+	FTimerHandle TimelineEntityRefreshTimerHandle;
 	FTimerHandle DebugScreenTimerHandle;
 	FTimerHandle DebugTestScenarioTimerHandle;
 	FTimerHandle DebugTestPerceptionTimerHandle;
