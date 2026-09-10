@@ -16,6 +16,7 @@
 #include "Net/UnrealNetwork.h"
 #include "Components/Drag_Component.h"
 #include "Items/Drag_Item.h"
+#include "Items/Chair.h"
 #include "Components/SpotLightComponent.h"
 #include "Interface/Enviroment_Interface.h"
 #include "Items/Base_Item.h"
@@ -27,6 +28,7 @@
 #include "Kismet/GameplayStatics.h"
 #include "Sound/SoundBase.h"
 #include "UI/HronoMenuSettingsSaveGame.h"
+#include "UI/HronoFpsWidget.h"
 
 void AHronoCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
@@ -88,9 +90,10 @@ AHronoCharacter::AHronoCharacter()
 	FirstPersonMesh->SetCollisionProfileName(FName("NoCollision"));
 	GetCapsuleComponent()->SetCollisionResponseToChannel(COLLISION_CHANNEL_ITEM, ECR_Ignore);
 
-	// Create the Camera Component	
+	// Mount the first-person camera on the upper chest so locomotion animation
+	// naturally produces a body-camera feel.
 	FirstPersonCameraComponent = CreateDefaultSubobject<UCameraComponent>(TEXT("First Person Camera"));
-	FirstPersonCameraComponent->SetupAttachment(FirstPersonMesh, FName("head"));
+	FirstPersonCameraComponent->SetupAttachment(FirstPersonMesh, FName("spine_03"));
 	FirstPersonCameraComponent->SetRelativeLocationAndRotation(FVector(-2.8f, 5.89f, 0.0f), FRotator(0.0f, 90.0f, -90.0f));
 	FirstPersonCameraComponent->bUsePawnControlRotation = true;
 	FirstPersonCameraComponent->bEnableFirstPersonFieldOfView = true;
@@ -727,6 +730,25 @@ void AHronoCharacter::PawnClientRestart()
 	RefreshHeldItemsInteractionPoint();
 	RefreshTimelineVisibilityForLocalPlayer();
 	LoadLocalPlayerSettings();
+	UpdateRitualChairGuidance(0.0f, true);
+}
+
+void AHronoCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (ABase_Item* HighlightedItem = HighlightedInteractionItem.Get())
+	{
+		HighlightedItem->SetInteractionHighlighted(false);
+		HighlightedInteractionItem.Reset();
+	}
+	ClearRitualChairGuidance();
+
+	if (IsValid(FpsCounterWidget))
+	{
+		FpsCounterWidget->RemoveFromParent();
+		FpsCounterWidget = nullptr;
+	}
+
+	Super::EndPlay(EndPlayReason);
 }
 
 void AHronoCharacter::Tick(float DeltaTime)
@@ -755,7 +777,72 @@ void AHronoCharacter::Tick(float DeltaTime)
 	if (IsLocallyControlled())
 	{
 		UpdateInteractionHighlight();
+		UpdateRitualChairGuidance(DeltaTime);
 	}
+}
+
+void AHronoCharacter::UpdateRitualChairGuidance(float DeltaTime, bool bForceRefresh)
+{
+	if (!IsLocallyControlled() || !GetWorld())
+	{
+		return;
+	}
+
+	constexpr float RefreshInterval = 0.2f;
+	RitualChairGuidanceRefreshAccumulator += DeltaTime;
+	if (!bForceRefresh && RitualChairGuidanceRefreshAccumulator < RefreshInterval)
+	{
+		return;
+	}
+	RitualChairGuidanceRefreshAccumulator = 0.0f;
+
+	TSet<TWeakObjectPtr<AChair>> NewHighlightedChairs;
+	for (TActorIterator<AChair> It(GetWorld()); It; ++It)
+	{
+		AChair* Chair = *It;
+		if (!IsValid(Chair))
+		{
+			continue;
+		}
+
+		const bool bSameTimeline = Chair->ItemTimeline == EItemTimeline::Both
+			|| Chair->ItemTimeline == CharacterTimeline;
+		const bool bFreeChair = !Chair->bIsSit;
+		const bool bReservedForThisPlayer = !bIsSitting && Chair->GetSitter() == this;
+		const bool bShouldHighlight = Chair->IsRitualGuidanceUnlocked()
+			&& !bIsSitting
+			&& bSameTimeline
+			&& !Chair->IsHidden()
+			&& (bFreeChair || bReservedForThisPlayer);
+
+		Chair->SetInteractionContextHighlighted(bShouldHighlight);
+		if (bShouldHighlight)
+		{
+			NewHighlightedChairs.Add(Chair);
+		}
+	}
+
+	for (const TWeakObjectPtr<AChair>& PreviousChair : RitualGuidanceHighlightedChairs)
+	{
+		if (AChair* Chair = PreviousChair.Get();
+			IsValid(Chair) && !NewHighlightedChairs.Contains(PreviousChair))
+		{
+			Chair->SetInteractionContextHighlighted(false);
+		}
+	}
+	RitualGuidanceHighlightedChairs = MoveTemp(NewHighlightedChairs);
+}
+
+void AHronoCharacter::ClearRitualChairGuidance()
+{
+	for (const TWeakObjectPtr<AChair>& HighlightedChair : RitualGuidanceHighlightedChairs)
+	{
+		if (AChair* Chair = HighlightedChair.Get())
+		{
+			Chair->SetInteractionContextHighlighted(false);
+		}
+	}
+	RitualGuidanceHighlightedChairs.Reset();
 }
 
 void AHronoCharacter::UpdateInteractionHighlight()
@@ -768,17 +855,47 @@ void AHronoCharacter::UpdateInteractionHighlight()
 		const FVector Start = Camera->GetComponentLocation();
 		const FVector End = Start + Camera->GetForwardVector() * InteractTraceDistance;
 		FCollisionQueryParams Params(SCENE_QUERY_STAT(InteractionHighlight), false, this);
-		FHitResult HitResult;
 		const ECollisionChannel TraceChannel = CharacterTimeline == EItemTimeline::Future
 			? ECC_GameTraceChannel3
 			: ECC_GameTraceChannel2;
 
-		if (World->LineTraceSingleByChannel(HitResult, Start, End, TraceChannel, Params))
+		auto ResolveItemFromHit = [this](const FHitResult& HitResult) -> ABase_Item*
 		{
-			ABase_Item* HitItem = Cast<ABase_Item>(HitResult.GetActor());
-			if (IsValid(HitItem) && HitItem->CanHighlightFor(this))
+			AActor* HitActor = HitResult.GetActor();
+			for (int32 ParentDepth = 0; IsValid(HitActor) && ParentDepth < 8; ++ParentDepth)
 			{
-				NewHighlightedItem = HitItem;
+				if (ABase_Item* HitItem = Cast<ABase_Item>(HitActor))
+				{
+					return HitItem->CanHighlightFor(this) ? HitItem : nullptr;
+				}
+				HitActor = HitActor->GetAttachParentActor();
+			}
+			return nullptr;
+		};
+
+		FHitResult HitResult;
+		const bool bTimelineHit = World->LineTraceSingleByChannel(
+			HitResult, Start, End, TraceChannel, Params);
+		if (bTimelineHit)
+		{
+			NewHighlightedItem = ResolveItemFromHit(HitResult);
+		}
+		if (!IsValid(NewHighlightedItem))
+		{
+			// Item Blueprints sometimes override the custom timeline-channel response.
+			// Compare a Visibility hit with the primary hit so an item in front of a wall
+			// can still highlight, without allowing highlights through that wall.
+			FHitResult VisibilityHit;
+			if (World->LineTraceSingleByChannel(
+				VisibilityHit, Start, End, ECC_Visibility, Params))
+			{
+				ABase_Item* VisibilityItem = ResolveItemFromHit(VisibilityHit);
+				const bool bVisibilityIsNotBehindPrimaryHit = !bTimelineHit
+					|| VisibilityHit.Distance <= HitResult.Distance + 1.0f;
+				if (IsValid(VisibilityItem) && bVisibilityIsNotBehindPrimaryHit)
+				{
+					NewHighlightedItem = VisibilityItem;
+				}
 			}
 		}
 	}
@@ -786,6 +903,12 @@ void AHronoCharacter::UpdateInteractionHighlight()
 	ABase_Item* PreviousItem = HighlightedInteractionItem.Get();
 	if (PreviousItem == NewHighlightedItem)
 	{
+		if (IsValid(NewHighlightedItem))
+		{
+			// Revalidate every frame so Blueprint mesh/material changes cannot leave a
+			// focused item visually unhighlighted until the player looks away.
+			NewHighlightedItem->SetInteractionHighlighted(true);
+		}
 		return;
 	}
 
@@ -975,7 +1098,6 @@ void AHronoCharacter::ServerPickupItem_Implementation(ABase_Item* Item)
 	PickupItem(Item);
 }
 
-#include "Items/Chair.h"
 #include "Ritual/TableRitualGate.h"
 
 void AHronoCharacter::OnRep_CurrentChair(AChair* PreviousChair)
@@ -1832,6 +1954,42 @@ void AHronoCharacter::ApplyLocalPlayerSettings(
 	}
 }
 
+void AHronoCharacter::SetFpsCounterEnabled(bool bEnabled)
+{
+	if (!IsLocallyControlled())
+	{
+		return;
+	}
+
+	bShowFpsCounter = bEnabled;
+	if (!bEnabled)
+	{
+		if (IsValid(FpsCounterWidget))
+		{
+			FpsCounterWidget->RemoveFromParent();
+			FpsCounterWidget = nullptr;
+		}
+		return;
+	}
+
+	if (!IsValid(FpsCounterWidget))
+	{
+		APlayerController* LocalController = Cast<APlayerController>(GetController());
+		if (!IsValid(LocalController))
+		{
+			return;
+		}
+
+		FpsCounterWidget = CreateWidget<UHronoFpsWidget>(
+			LocalController, UHronoFpsWidget::StaticClass());
+	}
+
+	if (IsValid(FpsCounterWidget) && !FpsCounterWidget->IsInViewport())
+	{
+		FpsCounterWidget->AddToViewport(10000);
+	}
+}
+
 void AHronoCharacter::LoadLocalPlayerSettings()
 {
 	if (!IsLocallyControlled())
@@ -1841,6 +1999,7 @@ void AHronoCharacter::LoadLocalPlayerSettings()
 
 	float SavedMouseSensitivity = 1.0f;
 	float SavedFieldOfView = 90.0f;
+	bool bSavedShowFps = false;
 	static const FString SettingsSlot(TEXT("HronoMenuSettings"));
 	if (UGameplayStatics::DoesSaveGameExist(SettingsSlot, 0))
 	{
@@ -1849,10 +2008,12 @@ void AHronoCharacter::LoadLocalPlayerSettings()
 		{
 			SavedMouseSensitivity = Save->MouseSensitivity;
 			SavedFieldOfView = Save->FieldOfView;
+			bSavedShowFps = Save->bShowFps;
 		}
 	}
 
 	ApplyLocalPlayerSettings(SavedMouseSensitivity, SavedFieldOfView);
+	SetFpsCounterEnabled(bSavedShowFps);
 }
 
 void AHronoCharacter::DoAim(float Yaw, float Pitch)

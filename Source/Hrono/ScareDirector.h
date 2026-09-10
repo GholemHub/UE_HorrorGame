@@ -7,6 +7,7 @@
 
 class AScareDirector;
 class ABase_Item;
+class ADrag_Item;
 class ARoom;
 class ATimelineEntityActor;
 class USceneComponent;
@@ -365,11 +366,17 @@ public:
 	EItemTimeline OrganicHuntTimelineTarget = EItemTimeline::Both;
 
 	/**
-	 * When enabled, entering Manifesting closes every rotating door and entering
-	 * HuntEligible opens them. Shelves and sliding cupboard panels are ignored.
+	 * When enabled, entering Manifesting closes a random set of rotating doors in
+	 * each timeline and entering HuntEligible opens that same set again. Shelves,
+	 * sliding cupboard panels, and doors shared by both timelines are ignored.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hunt|Doors")
 	bool bAnimateDoorsOnThreatStateChanges = true;
+
+	/** Number of random Past doors and random Future doors affected by aggression. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hunt|Doors",
+		meta = (ClampMin = "0", UIMin = "0"))
+	int32 ThreatStateDoorCountPerTimeline = 3;
 
 	/** Every aggression-band transition turns off all switches and environment lights. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hunt|Lights")
@@ -530,6 +537,7 @@ private:
 	void DispatchThreatStateChanged(EGhostThreatState OldState, EGhostThreatState NewState);
 	void DispatchHuntStateChanged(EGhostHuntState OldState, EGhostHuntState NewState);
 	void AnimateAllDoorsForThreatState(bool bOpen, const FString& Reason);
+	void AnimateRandomDoorsForThreatState(bool bOpen, const FString& Reason);
 	void TurnOffAllLightsForThreatState(EGhostThreatState NewState);
 	USceneComponent* ResolveBabajSpawnComponent(const ABase_Item* SpawnPoint) const;
 	void StartDebugScreenTimer();
@@ -583,6 +591,7 @@ private:
 	TWeakObjectPtr<AActor> TargetedPlayer;
 	TWeakObjectPtr<AActor> DebugTestPlayer;
 	TArray<EGhostHuntOmen> SelectedHuntOmens;
+	TArray<TWeakObjectPtr<ADrag_Item>> ThreatStateAnimatedDoors;
 
 	struct FDebugTuningBackup
 	{

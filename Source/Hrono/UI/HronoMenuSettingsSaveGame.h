@@ -27,4 +27,7 @@ public:
 
 	UPROPERTY(SaveGame)
 	float FieldOfView = 90.0f;
+
+	UPROPERTY(SaveGame)
+	bool bShowFps = false;
 };

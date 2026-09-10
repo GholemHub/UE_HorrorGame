@@ -55,6 +55,12 @@ void ABase_Item::SetInteractionHighlighted(bool bHighlighted)
 	RefreshInteractionHighlight();
 }
 
+void ABase_Item::SetInteractionContextHighlighted(bool bHighlighted)
+{
+	bInteractionContextHighlighted = bHighlighted;
+	RefreshInteractionHighlight();
+}
+
 void ABase_Item::SetInteractionHighlightForced(bool bForced)
 {
 	if (!HasAuthority() || bForceInteractionHighlight == bForced)
@@ -75,20 +81,20 @@ void ABase_Item::OnRep_ForceInteractionHighlight()
 void ABase_Item::RefreshInteractionHighlight()
 {
 	const bool bHighlightRequested = bForceInteractionHighlight
-		|| (bInteractionHovered && bUseInteractionHighlight);
+		|| bInteractionContextHighlighted
+		|| (bInteractionHovered && AllowsAimInteractionHighlight());
 	const bool bShouldHighlight = bHighlightRequested
 		&& IsValid(InteractionOverlayMaterial)
 		&& !bIsPickedUp
 		&& !IsHidden();
-	if (bInteractionHighlighted == bShouldHighlight)
-	{
-		return;
-	}
-
 	TInlineComponentArray<UMeshComponent*> MeshComponents(this);
 	if (bShouldHighlight)
 	{
-		PreviousOverlayMaterials.Reset();
+		if (!bInteractionHighlighted)
+		{
+			PreviousOverlayMaterials.Reset();
+		}
+
 		for (UMeshComponent* MeshComponent : MeshComponents)
 		{
 			if (!IsValid(MeshComponent))
@@ -96,11 +102,20 @@ void ABase_Item::RefreshInteractionHighlight()
 				continue;
 			}
 
-			PreviousOverlayMaterials.Add(MeshComponent, MeshComponent->GetOverlayMaterial());
-			MeshComponent->SetOverlayMaterial(InteractionOverlayMaterial);
+			// Blueprints can replace meshes or clear their overlay while the player is
+			// still aiming at the actor. Cache newly discovered components and repair
+			// the render state instead of trusting only the previous boolean state.
+			if (!PreviousOverlayMaterials.Contains(MeshComponent))
+			{
+				PreviousOverlayMaterials.Add(MeshComponent, MeshComponent->GetOverlayMaterial());
+			}
+			if (MeshComponent->GetOverlayMaterial() != InteractionOverlayMaterial)
+			{
+				MeshComponent->SetOverlayMaterial(InteractionOverlayMaterial);
+			}
 		}
 	}
-	else
+	else if (bInteractionHighlighted || !PreviousOverlayMaterials.IsEmpty())
 	{
 		for (UMeshComponent* MeshComponent : MeshComponents)
 		{
@@ -120,10 +135,31 @@ void ABase_Item::RefreshInteractionHighlight()
 	bInteractionHighlighted = bShouldHighlight;
 }
 
+bool ABase_Item::AllowsAimInteractionHighlight() const
+{
+	// Regular Base_Item actors are pickup items by default. Clocks and the current
+	// painting Blueprints share the Clock item category and must always be eligible.
+	return bUseInteractionHighlight || ItemType == EItemType::Clock;
+}
+
+void ABase_Item::EnsureInteractionOverlayMaterial()
+{
+	if (IsValid(InteractionOverlayMaterial))
+	{
+		return;
+	}
+
+	// Some existing Blueprint CDOs can retain a serialized null value for a native
+	// property added later. Resolve the project default at runtime as a safe fallback.
+	InteractionOverlayMaterial = LoadObject<UMaterialInterface>(
+		nullptr,
+		TEXT("/Game/_Alex/Materials/M_InteractionOverlay.M_InteractionOverlay"));
+}
+
 bool ABase_Item::CanHighlightFor(const AHronoCharacter* Viewer) const
 {
 	return IsValid(Viewer)
-		&& bUseInteractionHighlight
+		&& AllowsAimInteractionHighlight()
 		&& IsValid(InteractionOverlayMaterial)
 		&& UsableValid
 		&& !bIsPickedUp
@@ -756,6 +792,7 @@ void ABase_Item::EnsureMovableComponentHierarchy()
 void ABase_Item::BeginPlay()
 {
 	Super::BeginPlay();
+	EnsureInteractionOverlayMaterial();
 	ApplyItemTimelineState();
 
 	const AHronoCharacter* HeldBy = Cast<AHronoCharacter>(OwningCharacter);

@@ -81,6 +81,15 @@ void TableRitualGate::NotifySuccessfulPickup(
 	}
 
 	UnlockedWorlds.Add(World);
+	for (TActorIterator<AChair> It(World); It; ++It)
+	{
+		AChair* Chair = *It;
+		if (IsValid(Chair) && IsChairBesideTableRitualManager(*Chair))
+		{
+			Chair->SetRitualGuidanceUnlocked(true);
+		}
+	}
+
 	UE_LOG(LogTableRitualGate, Log,
 		TEXT("[TableRitualGate] Unlocked by %s picking up %s"),
 		*Character.GetName(),
@@ -102,6 +111,11 @@ bool TableRitualGate::IsUnlocked(const UObject* WorldContextObject)
 bool TableRitualGate::CanUseChair(const AChair& Chair)
 {
 	return !IsChairBesideTableRitualManager(Chair) || IsUnlocked(&Chair);
+}
+
+bool TableRitualGate::IsTableRitualChair(const AChair& Chair)
+{
+	return IsChairBesideTableRitualManager(Chair);
 }
 
 bool TableRitualGate::IsRitualInProgress(const UObject* WorldContextObject)

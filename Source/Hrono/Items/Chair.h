@@ -54,6 +54,13 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Chair")
 	AHronoCharacter* GetSitter() const { return CurrentSitter; }
 
+	/** True after the cursed image unlocks this table-ritual chair. */
+	UFUNCTION(BlueprintPure, Category = "Chair|Ritual")
+	bool IsRitualGuidanceUnlocked() const { return bRitualGuidanceUnlocked; }
+
+	/** Authority-only state used by TableRitualGate and replicated to every client. */
+	void SetRitualGuidanceUnlocked(bool bUnlocked);
+
 	void SetSitter(AHronoCharacter* Character) { CurrentSitter = Character; }
 
 	/** Played when a character sits down on this chair. Assign any sound in Blueprint. */
@@ -81,5 +88,12 @@ public:
 	USceneComponent* GetStandUpPoint() const { return StandUpPoint; }
 
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+
+protected:
+	virtual void BeginPlay() override;
+	virtual bool AllowsAimInteractionHighlight() const override { return false; }
+
+	UPROPERTY(Replicated, VisibleInstanceOnly, BlueprintReadOnly, Category = "Chair|Ritual")
+	bool bRitualGuidanceUnlocked = false;
 
 };

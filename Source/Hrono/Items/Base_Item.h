@@ -59,6 +59,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Item|Interaction Highlight")
 	void SetInteractionHighlighted(bool bHighlighted);
 
+	/** Local-only guidance overlay controlled by gameplay context rather than aiming. */
+	UFUNCTION(BlueprintCallable, Category = "Item|Interaction Highlight")
+	void SetInteractionContextHighlighted(bool bHighlighted);
+
 	/** Keeps the overlay enabled until explicitly cleared, independently of aiming. Server-authored. */
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Item|Interaction Highlight")
 	void SetInteractionHighlightForced(bool bForced);
@@ -225,6 +229,9 @@ protected:
 	/** Applies mesh, gameplay tag, collision, and local visibility for ItemTimeline. */
 	void ApplyItemTimelineState();
 	void ApplyDroppedPhysicsState();
+	/** Class/category policy for local aim highlighting. Forced highlights are handled separately. */
+	virtual bool AllowsAimInteractionHighlight() const;
+	void EnsureInteractionOverlayMaterial();
 	void RefreshInteractionHighlight();
 	void LogHeldTransformState(const TCHAR* Context) const;
 	void SetHeldSceneCapturesEnabled(bool bEnabled);
@@ -242,6 +249,7 @@ protected:
 	TMap<TWeakObjectPtr<UMeshComponent>, TWeakObjectPtr<UMaterialInterface>> PreviousOverlayMaterials;
 
 	bool bInteractionHovered = false;
+	bool bInteractionContextHighlighted = false;
 	bool bInteractionHighlighted = false;
 public:	
 	UStaticMeshComponent* GetItemMesh() const { return ItemMesh; }

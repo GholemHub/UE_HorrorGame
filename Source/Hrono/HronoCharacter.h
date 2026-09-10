@@ -21,6 +21,7 @@ class USoundBase;
 class UMaterialInterface;
 class UMaterialInstanceDynamic;
 class UPrimitiveComponent;
+class UHronoFpsWidget;
 class AHronoCharacter;
 struct FInputActionValue;
 
@@ -187,8 +188,16 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Input|Settings")
 	void ApplyLocalPlayerSettings(float NewMouseSensitivity, float NewFieldOfView);
 
+	/** Creates or removes the local-only FPS overlay. */
+	UFUNCTION(BlueprintCallable, Category = "Input|Settings")
+	void SetFpsCounterEnabled(bool bEnabled);
+
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Input|Settings")
+	bool bShowFpsCounter = false;
+
 	/** Called by the engine when the character lands after a fall. */
 	virtual void Landed(const FHitResult& Hit) override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, ReplicatedUsing = OnRep_CharacterTimeline, Category = "Timeline")
@@ -423,6 +432,9 @@ protected:
 	UPROPERTY(Transient)
 	TObjectPtr<UMaterialInstanceDynamic> MirrorPostProcessInstance;
 
+	UPROPERTY(Transient)
+	TObjectPtr<UHronoFpsWidget> FpsCounterWidget;
+
 	/** Authored OwnerNoSee values temporarily overridden for the local raster view. */
 	TMap<TWeakObjectPtr<UPrimitiveComponent>, bool> TimelinePrimitiveOwnerNoSeeStates;
 
@@ -501,6 +513,8 @@ protected:
 	void HandleInteraction(const FHitResult& HitResult);
 	void HandleDrag(const FHitResult& HitResult);
 	void UpdateInteractionHighlight();
+	void UpdateRitualChairGuidance(float DeltaTime, bool bForceRefresh = false);
+	void ClearRitualChairGuidance();
 	void PerformAutomaticDragItemInteraction(
 		ADrag_Item* Item,
 		FName InteractionComponentName);
@@ -509,6 +523,10 @@ protected:
 
 	/** Item currently highlighted for this local player. Never replicated. */
 	TWeakObjectPtr<ABase_Item> HighlightedInteractionItem;
+
+	/** Chairs carrying this local player's contextual ritual guidance overlay. */
+	TSet<TWeakObjectPtr<AChair>> RitualGuidanceHighlightedChairs;
+	float RitualChairGuidanceRefreshAccumulator = 0.0f;
 
 	UFUNCTION(Server, Reliable)
 	void ServerPickupItem(class ABase_Item* Item);
