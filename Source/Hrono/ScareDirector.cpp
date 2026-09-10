@@ -942,11 +942,11 @@ void AScareDirector::DispatchThreatStateChanged(EGhostThreatState OldState, EGho
 	{
 		if (bAnimateDoorsOnThreatStateChanges && NewState == EGhostThreatState::Manifesting)
 		{
-			AnimateAllDoorsForThreatState(false, TEXT("Aggression entered Manifesting"));
+			AnimateRandomDoorsForThreatState(false, TEXT("Aggression entered Manifesting"));
 		}
 		else if (bAnimateDoorsOnThreatStateChanges && NewState == EGhostThreatState::HuntEligible)
 		{
-			AnimateAllDoorsForThreatState(true, TEXT("Aggression entered HuntEligible"));
+			AnimateRandomDoorsForThreatState(true, TEXT("Aggression entered HuntEligible"));
 		}
 	}
 }
@@ -1210,6 +1210,143 @@ void AScareDirector::AnimateAllDoorsForThreatState(bool bOpen, const FString& Re
 			DisabledDoorCount,
 			*Reason),
 		bOpen ? FLinearColor(0.2f, 1.0f, 0.25f) : FLinearColor(1.0f, 0.1f, 0.05f),
+		6.0f);
+}
+
+void AScareDirector::AnimateRandomDoorsForThreatState(bool bOpen, const FString& Reason)
+{
+	if (!HasAuthority() || !GetWorld())
+	{
+		return;
+	}
+
+	if (bOpen)
+	{
+		int32 OpenedDoorCount = 0;
+		for (const TWeakObjectPtr<ADrag_Item>& DoorPtr : ThreatStateAnimatedDoors)
+		{
+			ADrag_Item* Door = DoorPtr.Get();
+			if (!IsValid(Door) || !Door->bAllowAnimateDoorOpenClose)
+			{
+				continue;
+			}
+
+			Door->AnimateDoor(true);
+			++OpenedDoorCount;
+		}
+
+		ThreatStateAnimatedDoors.Reset();
+		UE_LOG(LogGhostHuntDirector, Log,
+			TEXT("[%s] OPENED %d previously selected aggression doors. Reason: %s"),
+			*GetName(), OpenedDoorCount, *Reason);
+
+		PrintHuntDebugMessage(
+			FString::Printf(
+				TEXT("DOOR EVENT: OPENED %d selected doors\nWHY: %s"),
+				OpenedDoorCount,
+				*Reason),
+			FLinearColor(0.2f, 1.0f, 0.25f),
+			6.0f);
+		return;
+	}
+
+	// If Manifesting is entered again without HuntEligible being reached, restore
+	// the previous selection before choosing a fresh random set.
+	for (const TWeakObjectPtr<ADrag_Item>& DoorPtr : ThreatStateAnimatedDoors)
+	{
+		if (ADrag_Item* Door = DoorPtr.Get(); IsValid(Door) && Door->bAllowAnimateDoorOpenClose)
+		{
+			Door->AnimateDoor(true);
+		}
+	}
+	ThreatStateAnimatedDoors.Reset();
+
+	TArray<ADrag_Item*> PastCandidates;
+	TArray<ADrag_Item*> FutureCandidates;
+	int32 DisabledDoorCount = 0;
+	int32 SharedTimelineDoorCount = 0;
+
+	for (TActorIterator<ADrag_Item> It(GetWorld()); It; ++It)
+	{
+		ADrag_Item* Door = *It;
+		if (!IsValid(Door)
+			|| !IsValid(Door->DragComponent)
+			|| Door->DragComponent->bIsShelf
+			|| Door->DragComponent->bIsCupBoard)
+		{
+			continue;
+		}
+
+		if (!Door->bAllowAnimateDoorOpenClose)
+		{
+			++DisabledDoorCount;
+			continue;
+		}
+
+		switch (Door->GetItemTimeline())
+		{
+		case EItemTimeline::Past:
+			PastCandidates.Add(Door);
+			break;
+		case EItemTimeline::Future:
+			FutureCandidates.Add(Door);
+			break;
+		case EItemTimeline::Both:
+		default:
+			++SharedTimelineDoorCount;
+			break;
+		}
+	}
+
+	auto SelectAndCloseDoors = [this](TArray<ADrag_Item*>& Candidates, EItemTimeline Timeline)
+	{
+		for (int32 Index = 0; Index < Candidates.Num() - 1; ++Index)
+		{
+			Candidates.Swap(Index, FMath::RandRange(Index, Candidates.Num() - 1));
+		}
+
+		const int32 RequestedCount = FMath::Max(0, ThreatStateDoorCountPerTimeline);
+		const int32 SelectedCount = FMath::Min(RequestedCount, Candidates.Num());
+		for (int32 Index = 0; Index < SelectedCount; ++Index)
+		{
+			ADrag_Item* Door = Candidates[Index];
+			Door->AnimateDoor(false);
+			ThreatStateAnimatedDoors.Add(Door);
+		}
+
+		if (SelectedCount < RequestedCount)
+		{
+			UE_LOG(LogGhostHuntDirector, Warning,
+				TEXT("[%s] Only %d of %d requested aggression doors are available for timeline %s."),
+				*GetName(),
+				SelectedCount,
+				RequestedCount,
+				*StaticEnum<EItemTimeline>()->GetNameStringByValue(static_cast<int64>(Timeline)));
+		}
+
+		return SelectedCount;
+	};
+
+	const int32 ClosedPastDoorCount = SelectAndCloseDoors(PastCandidates, EItemTimeline::Past);
+	const int32 ClosedFutureDoorCount = SelectAndCloseDoors(FutureCandidates, EItemTimeline::Future);
+
+	UE_LOG(LogGhostHuntDirector, Log,
+		TEXT("[%s] CLOSED %d Past and %d Future random aggression doors; %d doors opted out and %d shared-timeline doors were ignored. Reason: %s"),
+		*GetName(),
+		ClosedPastDoorCount,
+		ClosedFutureDoorCount,
+		DisabledDoorCount,
+		SharedTimelineDoorCount,
+		*Reason);
+
+	PrintHuntDebugMessage(
+		FString::Printf(
+			TEXT("DOOR EVENT: CLOSED %d Past + %d Future doors\n%d shared-timeline doors ignored\nWHY: %s"),
+			ClosedPastDoorCount,
+			ClosedFutureDoorCount,
+			SharedTimelineDoorCount,
+			*Reason),
+		FLinearColor(1.0f, 0.1f, 0.05f),
 		6.0f);
 }
 

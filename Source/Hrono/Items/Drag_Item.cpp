@@ -20,6 +20,7 @@ ADrag_Item::ADrag_Item()
 	PrimaryActorTick.bCanEverTick = true;
 	PrimaryActorTick.bStartWithTickEnabled = false;
 	bReplicates = true; // Door open/closed state must replicate so server collision matches clients
+	bUseInteractionHighlight = false;
 
     SceneRoot =
         CreateDefaultSubobject<USceneComponent>(

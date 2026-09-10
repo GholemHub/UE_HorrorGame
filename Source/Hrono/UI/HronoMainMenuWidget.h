@@ -228,6 +228,9 @@ private:
 	TObjectPtr<UCheckBox> VSyncCheckBox;
 
 	UPROPERTY(Transient)
+	TObjectPtr<UCheckBox> ShowFpsCheckBox;
+
+	UPROPERTY(Transient)
 	TObjectPtr<USlider> MasterVolumeSlider;
 
 	UPROPERTY(Transient)
@@ -259,11 +262,13 @@ private:
 	float SfxVolume = 1.0f;
 	float MouseSensitivity = 1.0f;
 	float FieldOfView = 90.0f;
+	bool bShowFps = false;
 	float OriginalMasterVolume = 1.0f;
 	float OriginalMusicVolume = 1.0f;
 	float OriginalSfxVolume = 1.0f;
 	float OriginalMouseSensitivity = 1.0f;
 	float OriginalFieldOfView = 90.0f;
+	bool bOriginalShowFps = false;
 	bool bSoundMixPushed = false;
 	bool bEventsBound = false;
 	bool bPendingCreateSession = false;

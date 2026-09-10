@@ -12,6 +12,7 @@
 AChair::AChair()
 {
 	ItemType = EItemType::Chair;
+	bUseInteractionHighlight = false;
 
 	SitPoint = CreateDefaultSubobject<USceneComponent>(TEXT("SitPoint"));
 	StandUpPoint = CreateDefaultSubobject<USceneComponent>(TEXT("StandUpPoint"));
@@ -21,6 +22,28 @@ AChair::AChair()
 		SitPoint->SetupAttachment(ItemMesh);
 		StandUpPoint->SetupAttachment(ItemMesh);
 	}
+}
+
+void AChair::BeginPlay()
+{
+	Super::BeginPlay();
+	if (HasAuthority()
+		&& TableRitualGate::IsUnlocked(this)
+		&& TableRitualGate::IsTableRitualChair(*this))
+	{
+		SetRitualGuidanceUnlocked(true);
+	}
+}
+
+void AChair::SetRitualGuidanceUnlocked(bool bUnlocked)
+{
+	if (!HasAuthority() || bRitualGuidanceUnlocked == bUnlocked)
+	{
+		return;
+	}
+
+	bRitualGuidanceUnlocked = bUnlocked;
+	ForceNetUpdate();
 }
 
 void AChair::NotifyCharacterSat(AHronoCharacter* Character)
@@ -110,4 +133,5 @@ void AChair::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimePr
 
     DOREPLIFETIME(AChair, bIsSit);
     DOREPLIFETIME(AChair, CurrentSitter);
+	DOREPLIFETIME(AChair, bRitualGuidanceUnlocked);
 }

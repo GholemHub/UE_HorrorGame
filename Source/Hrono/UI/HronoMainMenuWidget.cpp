@@ -394,6 +394,12 @@ void UHronoMainMenuWidget::BuildDefaultWidgetTree()
 	VSyncCheckBox = WidgetTree->ConstructWidget<UCheckBox>(UCheckBox::StaticClass(), TEXT("VSyncCheckBox"));
 	AddRowControl(VSyncRow, VSyncCheckBox);
 
+	UHorizontalBox* ShowFpsRow = MakeSettingRow(
+		WidgetTree, MenuFont, SettingsColumn, FText::FromString(TEXT("Show FPS")));
+	ShowFpsCheckBox = WidgetTree->ConstructWidget<UCheckBox>(
+		UCheckBox::StaticClass(), TEXT("ShowFpsCheckBox"));
+	AddRowControl(ShowFpsRow, ShowFpsCheckBox);
+
 	UHorizontalBox* FieldOfViewRow = MakeSettingRow(
 		WidgetTree, MenuFont, SettingsColumn, FText::FromString(TEXT("Field of view")));
 	FieldOfViewSlider = WidgetTree->ConstructWidget<USlider>(
@@ -507,6 +513,7 @@ void UHronoMainMenuWidget::ResolveNamedWidgets()
 	if (!QualityCombo) QualityCombo = Cast<UComboBoxString>(Find(TEXT("QualityCombo")));
 	if (!FrameRateCombo) FrameRateCombo = Cast<UComboBoxString>(Find(TEXT("FrameRateCombo")));
 	if (!VSyncCheckBox) VSyncCheckBox = Cast<UCheckBox>(Find(TEXT("VSyncCheckBox")));
+	if (!ShowFpsCheckBox) ShowFpsCheckBox = Cast<UCheckBox>(Find(TEXT("ShowFpsCheckBox")));
 	if (!MasterVolumeSlider) MasterVolumeSlider = Cast<USlider>(Find(TEXT("MasterVolumeSlider")));
 	if (!MusicVolumeSlider) MusicVolumeSlider = Cast<USlider>(Find(TEXT("MusicVolumeSlider")));
 	if (!SfxVolumeSlider) SfxVolumeSlider = Cast<USlider>(Find(TEXT("SfxVolumeSlider")));
@@ -651,6 +658,7 @@ void UHronoMainMenuWidget::LoadAudioSettings()
 				Save->MouseSensitivity, HronoMenu::MinMouseSensitivity, HronoMenu::MaxMouseSensitivity);
 			FieldOfView = FMath::Clamp(
 				Save->FieldOfView, HronoMenu::MinFieldOfView, HronoMenu::MaxFieldOfView);
+			bShowFps = Save->bShowFps;
 		}
 	}
 
@@ -659,11 +667,13 @@ void UHronoMainMenuWidget::LoadAudioSettings()
 	OriginalSfxVolume = SfxVolume;
 	OriginalMouseSensitivity = MouseSensitivity;
 	OriginalFieldOfView = FieldOfView;
+	bOriginalShowFps = bShowFps;
 	if (MasterVolumeSlider) MasterVolumeSlider->SetValue(MasterVolume);
 	if (MusicVolumeSlider) MusicVolumeSlider->SetValue(MusicVolume);
 	if (SfxVolumeSlider) SfxVolumeSlider->SetValue(SfxVolume);
 	if (MouseSensitivitySlider) MouseSensitivitySlider->SetValue(MouseSensitivity);
 	if (FieldOfViewSlider) FieldOfViewSlider->SetValue(FieldOfView);
+	if (ShowFpsCheckBox) ShowFpsCheckBox->SetIsChecked(bShowFps);
 	UpdatePlayerSettingLabels();
 }
 
@@ -716,6 +726,7 @@ void UHronoMainMenuWidget::ApplyPlayerSettings()
 		UGameplayStatics::GetPlayerCharacter(this, 0)))
 	{
 		Character->ApplyLocalPlayerSettings(MouseSensitivity, FieldOfView);
+		Character->SetFpsCounterEnabled(bShowFps);
 	}
 }
 
@@ -747,6 +758,7 @@ void UHronoMainMenuWidget::SaveAudioSettings()
 	Save->SfxVolume = SfxVolume;
 	Save->MouseSensitivity = MouseSensitivity;
 	Save->FieldOfView = FieldOfView;
+	Save->bShowFps = bShowFps;
 	UGameplayStatics::SaveGameToSlot(Save, AudioSettingsSlot, 0);
 }
 
@@ -766,6 +778,7 @@ void UHronoMainMenuWidget::ShowOptions()
 	OriginalSfxVolume = SfxVolume;
 	OriginalMouseSensitivity = MouseSensitivity;
 	OriginalFieldOfView = FieldOfView;
+	bOriginalShowFps = bShowFps;
 	RefreshControlsList();
 	if (PageSwitcher && PageSwitcher->GetNumWidgets() > 1)
 	{
@@ -775,6 +788,11 @@ void UHronoMainMenuWidget::ShowOptions()
 
 void UHronoMainMenuWidget::ApplySettings()
 {
+	if (ShowFpsCheckBox)
+	{
+		bShowFps = ShowFpsCheckBox->IsChecked();
+	}
+
 	UGameUserSettings* Settings = GEngine ? GEngine->GetGameUserSettings() : nullptr;
 	if (Settings)
 	{
@@ -825,6 +843,7 @@ void UHronoMainMenuWidget::ApplySettings()
 	OriginalSfxVolume = SfxVolume;
 	OriginalMouseSensitivity = MouseSensitivity;
 	OriginalFieldOfView = FieldOfView;
+	bOriginalShowFps = bShowFps;
 }
 
 void UHronoMainMenuWidget::CancelSettings()
@@ -838,11 +857,13 @@ void UHronoMainMenuWidget::CancelSettings()
 	SfxVolume = OriginalSfxVolume;
 	MouseSensitivity = OriginalMouseSensitivity;
 	FieldOfView = OriginalFieldOfView;
+	bShowFps = bOriginalShowFps;
 	if (MasterVolumeSlider) MasterVolumeSlider->SetValue(MasterVolume);
 	if (MusicVolumeSlider) MusicVolumeSlider->SetValue(MusicVolume);
 	if (SfxVolumeSlider) SfxVolumeSlider->SetValue(SfxVolume);
 	if (MouseSensitivitySlider) MouseSensitivitySlider->SetValue(MouseSensitivity);
 	if (FieldOfViewSlider) FieldOfViewSlider->SetValue(FieldOfView);
+	if (ShowFpsCheckBox) ShowFpsCheckBox->SetIsChecked(bShowFps);
 	UpdatePlayerSettingLabels();
 	ApplyAudioSettings(0.1f);
 	ApplyPlayerSettings();

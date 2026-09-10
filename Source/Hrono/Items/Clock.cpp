@@ -40,6 +40,7 @@ void FClockTimeOfDay::Normalize()
 AClock::AClock()
 {
 	ItemType = EItemType::Clock;
+	bUseInteractionHighlight = true;
 	InteractionResetTime.Hour = 12;
 	InteractionResetTime.Minute = 0;
 	InteractionResetTime.Second = 0;
