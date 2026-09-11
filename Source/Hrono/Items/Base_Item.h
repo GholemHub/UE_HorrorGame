@@ -55,6 +55,20 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Item|Interaction Highlight")
 	bool bUseInteractionHighlight = true;
 
+	/**
+	 * Master switch for every interaction overlay on this item. When false, aim,
+	 * context, and forced highlight requests keep their state but render no overlay.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite,
+		BlueprintSetter = SetInteractionOverlayAllowed,
+		Category = "Item|Interaction Highlight",
+		meta = (DisplayName = "Allow Interaction Overlay"))
+	bool bAllowInteractionOverlay = true;
+
+	/** Changes the master overlay switch and refreshes existing mesh components immediately. */
+	UFUNCTION(BlueprintCallable, Category = "Item|Interaction Highlight")
+	void SetInteractionOverlayAllowed(bool bAllowed);
+
 	/** Applies or removes the local interaction overlay from every mesh owned by this item. */
 	UFUNCTION(BlueprintCallable, Category = "Item|Interaction Highlight")
 	void SetInteractionHighlighted(bool bHighlighted);

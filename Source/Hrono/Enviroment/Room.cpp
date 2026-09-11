@@ -7,6 +7,7 @@
 #include "Items/Clock.h"
 #include "Items/Drag_Item.h"
 #include "Items/HotDot.h"
+#include "Items/PaintItem.h"
 #include "Net/UnrealNetwork.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogRoom, Log, All);
@@ -693,6 +694,13 @@ void ARoom::ApplyPaintingEvidencePattern()
 			continue;
 		}
 
+		// Always clear the previous visual before selecting a new evidence pattern.
+		// This also makes changing the cursed room during a session safe.
+		if (APaintItem* NativePainting = Cast<APaintItem>(Painting))
+		{
+			NativePainting->SetPaintAnomalyType(EPaintAnomalyType::None);
+		}
+
 		if (Painting->ItemTimeline == EItemTimeline::Past)
 		{
 			PastPaintings.Add(Painting);
@@ -704,25 +712,30 @@ void ARoom::ApplyPaintingEvidencePattern()
 	}
 
 	PaintingEvidenceState.SelectedPaintings.Reset();
-	const auto SelectPainting = [this](const TArray<ABase_Item*>& Candidates, int32 Salt) -> ABase_Item*
+	// Consume a real deterministic random stream instead of taking a fixed hash
+	// modulo the array size. The previous hash path could repeatedly land on the
+	// same low bits for small Blueprint arrays, making the same paintings appear
+	// cursed across PIE/game runs even though the top-level seed had changed.
+	FRandomStream PaintingRandom(PaintingEvidenceState.PatternSeed);
+	const auto SelectRandomPainting = [&PaintingRandom](
+		const TArray<ABase_Item*>& Candidates) -> ABase_Item*
 	{
 		if (Candidates.IsEmpty())
 		{
 			return nullptr;
 		}
-		const uint32 SelectionHash = HashCombine(
-			GetTypeHash(PaintingEvidenceState.PatternSeed),
-			GetTypeHash(Salt));
-		return Candidates[static_cast<int32>(SelectionHash % Candidates.Num())];
+		return Candidates[PaintingRandom.RandRange(0, Candidates.Num() - 1)];
 	};
 
 	if (bIsCursed)
 	{
-		if (ABase_Item* PastPainting = SelectPainting(PastPaintings, 301))
+		// Exactly one random Past and one random Future entry are chosen from the
+		// BP_Room -> Contents -> Paintings list on every game configuration.
+		if (ABase_Item* PastPainting = SelectRandomPainting(PastPaintings))
 		{
 			PaintingEvidenceState.SelectedPaintings.Add(PastPainting);
 		}
-		if (ABase_Item* FuturePainting = SelectPainting(FuturePaintings, 401))
+		if (ABase_Item* FuturePainting = SelectRandomPainting(FuturePaintings))
 		{
 			PaintingEvidenceState.SelectedPaintings.Add(FuturePainting);
 		}
@@ -742,11 +755,11 @@ void ARoom::ApplyPaintingEvidencePattern()
 		ABase_Item* SelectedPainting = nullptr;
 		if (OrdinaryResult == 1)
 		{
-			SelectedPainting = SelectPainting(PastPaintings, 501);
+			SelectedPainting = SelectRandomPainting(PastPaintings);
 		}
 		else if (OrdinaryResult == 2)
 		{
-			SelectedPainting = SelectPainting(FuturePaintings, 601);
+			SelectedPainting = SelectRandomPainting(FuturePaintings);
 		}
 
 		if (SelectedPainting)
@@ -759,14 +772,54 @@ void ARoom::ApplyPaintingEvidencePattern()
 	{
 		DispatchCursedPaintingEvent();
 	}
+
+	// A cursed room receives two selected paintings (Past + Future), while an
+	// ordinary room receives at most one. Alternate the two clue types in the
+	// cursed pair, but never enable both clues on the same actor.
+	const bool bFirstSelectedUsesEyes = RoomClockPatterns::PositiveModulo(
+		PaintingEvidenceState.PatternSeed,
+		2) == 0;
+	for (int32 SelectedIndex = 0;
+		SelectedIndex < PaintingEvidenceState.SelectedPaintings.Num();
+		++SelectedIndex)
+	{
+		AActor* SelectedActor = PaintingEvidenceState.SelectedPaintings[SelectedIndex];
+		APaintItem* NativePainting = Cast<APaintItem>(SelectedActor);
+		if (!IsValid(NativePainting))
+		{
+			UE_LOG(LogRoom, Warning,
+				TEXT("[%s] Selected painting %s is not derived from APaintItem; its native anomaly cannot be enabled."),
+				*GetName(), *GetNameSafe(SelectedActor));
+			continue;
+		}
+
+		const bool bUseEyes = bIsCursed
+			? (SelectedIndex % 2 == 0) == bFirstSelectedUsesEyes
+			: RoomClockPatterns::PositiveModulo(
+				PaintingEvidenceState.PatternSeed + SelectedIndex,
+				2) == 0;
+		NativePainting->SetPaintAnomalyType(
+			bUseEyes ? EPaintAnomalyType::Eyes : EPaintAnomalyType::Tentacles);
+	}
+
 	ForceNetUpdate();
+	TArray<FString> SelectedPaintingNames;
+	SelectedPaintingNames.Reserve(PaintingEvidenceState.SelectedPaintings.Num());
+	for (const AActor* SelectedPainting : PaintingEvidenceState.SelectedPaintings)
+	{
+		SelectedPaintingNames.Add(GetNameSafe(SelectedPainting));
+	}
 	UE_LOG(LogRoom, Log,
-		TEXT("[%s] Painting evidence selected: Cursed=%s Count=%d Pattern=%d Seed=%d."),
+		TEXT("[%s] Painting evidence selected: Cursed=%s Count=%d Pattern=%d Seed=%d "
+			"Candidates(Past=%d Future=%d) Selected=[%s]."),
 		*GetName(),
 		bIsCursed ? TEXT("true") : TEXT("false"),
 		PaintingEvidenceState.SelectedPaintings.Num(),
 		PaintingEvidenceState.PatternIndex,
-		PaintingEvidenceState.PatternSeed);
+		PaintingEvidenceState.PatternSeed,
+		PastPaintings.Num(),
+		FuturePaintings.Num(),
+		*FString::Join(SelectedPaintingNames, TEXT(", ")));
 }
 
 void ARoom::DispatchCursedPaintingEvent()

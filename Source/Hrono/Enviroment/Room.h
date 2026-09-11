@@ -129,7 +129,10 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Room|Components")
 	TObjectPtr<UBoxComponent> RoomVolume;
 
-	/** Placed painting actors. Each valid evidence painting must derive from ABase_Item. */
+	/**
+	 * Placed painting actors. Evidence selection reads ABase_Item::ItemTimeline;
+	 * native anomaly visibility additionally requires APaintItem.
+	 */
 	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category = "Room|Contents",
 		meta = (DisplayName = "Paintings"))
 	TArray<TObjectPtr<AActor>> Paintings;

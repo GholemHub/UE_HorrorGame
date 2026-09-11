@@ -49,6 +49,12 @@ ABase_Item::ABase_Item()
 
 }
 
+void ABase_Item::SetInteractionOverlayAllowed(bool bAllowed)
+{
+	bAllowInteractionOverlay = bAllowed;
+	RefreshInteractionHighlight();
+}
+
 void ABase_Item::SetInteractionHighlighted(bool bHighlighted)
 {
 	bInteractionHovered = bHighlighted;
@@ -83,7 +89,8 @@ void ABase_Item::RefreshInteractionHighlight()
 	const bool bHighlightRequested = bForceInteractionHighlight
 		|| bInteractionContextHighlighted
 		|| (bInteractionHovered && AllowsAimInteractionHighlight());
-	const bool bShouldHighlight = bHighlightRequested
+	const bool bShouldHighlight = bAllowInteractionOverlay
+		&& bHighlightRequested
 		&& IsValid(InteractionOverlayMaterial)
 		&& !bIsPickedUp
 		&& !IsHidden();
@@ -159,6 +166,7 @@ void ABase_Item::EnsureInteractionOverlayMaterial()
 bool ABase_Item::CanHighlightFor(const AHronoCharacter* Viewer) const
 {
 	return IsValid(Viewer)
+		&& bAllowInteractionOverlay
 		&& AllowsAimInteractionHighlight()
 		&& IsValid(InteractionOverlayMaterial)
 		&& UsableValid
