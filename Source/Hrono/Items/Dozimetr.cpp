@@ -11,6 +11,12 @@
 
 ADozimetr::ADozimetr()
 {
+	TutorialItem = EHronoTutorialItem::Dosimeter;
+	ItemName = NSLOCTEXT("HronoItems", "DosimeterName", "Dosimeter");
+	ItemDescription = NSLOCTEXT(
+		"HronoItems", "DosimeterDescription",
+		"Detects paranormal Hot Dots and beeps faster as the distance closes.");
+
 	static ConstructorHelpers::FObjectFinder<USoundBase> DefaultBeepSound(
 		TEXT("/Game/HorrorEngine/Audio/Elecronics/S_Beep_Dozimetr.S_Beep_Dozimetr"));
 	if (DefaultBeepSound.Succeeded())
