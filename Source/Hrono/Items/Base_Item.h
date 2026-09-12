@@ -7,6 +7,7 @@
 #include "Net/UnrealNetwork.h"
 #include "GameplayTagContainer.h"
 #include "HronoSharedTools.h"
+#include "UI/HronoTutorialTypes.h"
 
 #include "Base_Item.generated.h"
 
@@ -37,6 +38,10 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	EItemType ItemType = EItemType::None;
+
+	/** Optional explicit page in the equipment tutorial. None uses class/name detection. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Item|Tutorial")
+	EHronoTutorialItem TutorialItem = EHronoTutorialItem::None;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Item TAG")
 	FGameplayTag ItemTag;

@@ -29,6 +29,10 @@
 #include "Sound/SoundBase.h"
 #include "UI/HronoMenuSettingsSaveGame.h"
 #include "UI/HronoFpsWidget.h"
+#include "UI/HronoTutorialWidget.h"
+#include "Items/AxeItem.h"
+#include "Items/Dozimetr.h"
+#include "Items/RitualGoatSkull.h"
 
 void AHronoCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
@@ -77,6 +81,7 @@ void AHronoCharacter::OnRep_IsSafeInHidingWardrobe(bool bPreviousSafe)
 AHronoCharacter::AHronoCharacter()
 {
 	PrimaryActorTick.bCanEverTick = true;
+	TutorialGameStageText = NSLOCTEXT("HronoTutorial", "CharacterDefaultStage", "STAGE  •  INVESTIGATION");
 
 	// Set size for collision capsule
 	GetCapsuleComponent()->InitCapsuleSize(55.f, 96.0f);
@@ -644,6 +649,12 @@ void AHronoCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 	{
 		UE_LOG(LogHrono, Error, TEXT("'%s' Failed to find an Enhanced Input Component! This template is built to use the Enhanced Input system. If you intend to use the legacy system, then you will need to update this C++ file."), *GetNameSafe(this));
 	}
+
+	// Keep this as a direct key binding so the journal is always available and
+	// does not require modifying every existing Enhanced Input Mapping Context.
+	FInputKeyBinding& TutorialBinding = PlayerInputComponent->BindKey(
+		EKeys::Tab, IE_Pressed, this, &AHronoCharacter::ToggleTutorialMenu);
+	TutorialBinding.bExecuteWhenPaused = true;
 }
 
 void AHronoCharacter::DoStandUp()
@@ -714,6 +725,7 @@ void AHronoCharacter::BeginPlay()
 	RefreshTimelineVisibilityForLocalPlayer();
 	ApplySprintMovementSpeed();
 	LoadLocalPlayerSettings();
+	EnsureTutorialWidget();
 
 	// DEBUG: Print timeline
 	const char* TimelineStr = (CharacterTimeline == EItemTimeline::Future) ? "FUTURE" : "PAST";
@@ -730,6 +742,8 @@ void AHronoCharacter::PawnClientRestart()
 	RefreshHeldItemsInteractionPoint();
 	RefreshTimelineVisibilityForLocalPlayer();
 	LoadLocalPlayerSettings();
+	EnsureTutorialWidget();
+	HandleHeldItemTutorial(CurrentHeldItem);
 	UpdateRitualChairGuidance(0.0f, true);
 }
 
@@ -746,6 +760,13 @@ void AHronoCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	{
 		FpsCounterWidget->RemoveFromParent();
 		FpsCounterWidget = nullptr;
+	}
+
+	if (IsValid(TutorialWidget))
+	{
+		TutorialWidget->CloseMenu();
+		TutorialWidget->RemoveFromParent();
+		TutorialWidget = nullptr;
 	}
 
 	Super::EndPlay(EndPlayReason);
@@ -1688,6 +1709,10 @@ bool AHronoCharacter::TransferHeldItemTo(AHronoCharacter* TargetCharacter, ABase
 	ForceNetUpdate();
 	TargetCharacter->ForceNetUpdate();
 	Item->ForceNetUpdate();
+	if (TargetCharacter->IsLocallyControlled())
+	{
+		TargetCharacter->HandleHeldItemTutorial(Item);
+	}
 	return true;
 }
 
@@ -1865,6 +1890,115 @@ void AHronoCharacter::PickupItem(ABase_Item* Item)
 	{
 		CurrentHeldItem = Item;
 		ForceNetUpdate();
+		if (IsLocallyControlled())
+		{
+			HandleHeldItemTutorial(Item);
+		}
+	}
+}
+
+void AHronoCharacter::OnRep_CurrentHeldItem(ABase_Item* PreviousHeldItem)
+{
+	if (CurrentHeldItem != PreviousHeldItem)
+	{
+		HandleHeldItemTutorial(CurrentHeldItem);
+	}
+}
+
+void AHronoCharacter::EnsureTutorialWidget()
+{
+	if (!IsLocallyControlled() || IsValid(TutorialWidget))
+	{
+		return;
+	}
+
+	APlayerController* LocalController = Cast<APlayerController>(GetController());
+	if (!LocalController)
+	{
+		return;
+	}
+
+	TSubclassOf<UHronoTutorialWidget> WidgetClass = TutorialWidgetClass;
+	if (!WidgetClass)
+	{
+		WidgetClass = UHronoTutorialWidget::StaticClass();
+	}
+	TutorialWidget = CreateWidget<UHronoTutorialWidget>(LocalController, WidgetClass);
+	if (TutorialWidget)
+	{
+		// Keep the modal tutorial above every gameplay HUD layer so invisible HUD
+		// widgets cannot intercept its navigation buttons.
+		TutorialWidget->AddToPlayerScreen(100000);
+		TutorialWidget->SetGameStageText(TutorialGameStageText);
+		for (EHronoTutorialItem Item : TutorialPromptedItems)
+		{
+			TutorialWidget->SetItemDiscovered(Item);
+		}
+	}
+}
+
+void AHronoCharacter::ToggleTutorialMenu()
+{
+	if (!IsLocallyControlled())
+	{
+		return;
+	}
+	EnsureTutorialWidget();
+	if (TutorialWidget)
+	{
+		TutorialWidget->ToggleMenu();
+	}
+}
+
+void AHronoCharacter::HandleHeldItemTutorial(ABase_Item* Item)
+{
+	if (!IsLocallyControlled() || !IsValid(Item))
+	{
+		return;
+	}
+
+	const EHronoTutorialItem TutorialItem = ResolveTutorialItem(Item);
+	if (TutorialItem == EHronoTutorialItem::None || TutorialPromptedItems.Contains(TutorialItem))
+	{
+		return;
+	}
+
+	TutorialPromptedItems.Add(TutorialItem);
+	EnsureTutorialWidget();
+	if (TutorialWidget)
+	{
+		TutorialWidget->ShowPickupPrompt(TutorialItem);
+	}
+}
+
+EHronoTutorialItem AHronoCharacter::ResolveTutorialItem(const ABase_Item* Item) const
+{
+	if (!IsValid(Item))
+	{
+		return EHronoTutorialItem::None;
+	}
+	if (Item->TutorialItem != EHronoTutorialItem::None)
+	{
+		return Item->TutorialItem;
+	}
+	if (Item->IsA<ADozimetr>()) return EHronoTutorialItem::Dosimeter;
+	if (Item->IsA<AClock>()) return EHronoTutorialItem::Clock;
+	if (Item->IsA<ARitualGoatSkull>()) return EHronoTutorialItem::Skull;
+	if (Item->IsA<AAxeItem>()) return EHronoTutorialItem::Axe;
+
+	const FString SearchName = Item->GetClass()->GetName() + TEXT(" ")
+		+ Item->GetName() + TEXT(" ") + Item->ItemName.ToString();
+	return SearchName.Contains(TEXT("Monocle"), ESearchCase::IgnoreCase)
+		? EHronoTutorialItem::Monocle
+		: EHronoTutorialItem::None;
+}
+
+void AHronoCharacter::SetTutorialGameStageText(const FText& NewStageText)
+{
+	TutorialGameStageText = NewStageText;
+	if (TutorialWidget)
+	{
+		TutorialWidget->SetGameStageText(NewStageText);
 	}
 }
 void AHronoCharacter::OnMakeInteractImpulse(FHitResult HitResult)

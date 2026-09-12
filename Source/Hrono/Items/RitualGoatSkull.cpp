@@ -14,6 +14,8 @@ DEFINE_LOG_CATEGORY_STATIC(LogRitualSkull, Log, All);
 ARitualGoatSkull::ARitualGoatSkull()
 {
 	ItemTimeline = EItemTimeline::Both;
+	TutorialItem = EHronoTutorialItem::Skull;
+	ItemName = NSLOCTEXT("HronoItems", "RitualSkullName", "Ritual Skull");
 	ItemTags.AddTag(FGameplayTag::RequestGameplayTag(TEXT("Item.Ritual.GoatSkull"), false));
 
 	// Actor physics replication follows the root rigid body. This also prevents

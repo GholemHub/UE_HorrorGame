@@ -5,6 +5,7 @@
 #include "Logging/LogMacros.h"
 #include "HronoSharedTools.h"
 #include "HronoCollisionChannels.h"
+#include "UI/HronoTutorialTypes.h"
 #include "HronoCharacter.generated.h"
 
 
@@ -22,6 +23,7 @@ class UMaterialInterface;
 class UMaterialInstanceDynamic;
 class UPrimitiveComponent;
 class UHronoFpsWidget;
+class UHronoTutorialWidget;
 class AHronoCharacter;
 struct FInputActionValue;
 
@@ -194,6 +196,17 @@ public:
 
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Input|Settings")
 	bool bShowFpsCounter = false;
+
+	/** Optional Widget Blueprint child. If unset, the complete native tutorial UI is used. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Tutorial")
+	TSubclassOf<UHronoTutorialWidget> TutorialWidgetClass;
+
+	/** Current story/gameplay stage displayed in the tutorial journal. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tutorial")
+	FText TutorialGameStageText;
+
+	UFUNCTION(BlueprintCallable, Category = "Tutorial")
+	void SetTutorialGameStageText(const FText& NewStageText);
 
 	/** Called by the engine when the character lands after a fall. */
 	virtual void Landed(const FHitResult& Hit) override;
@@ -435,6 +448,16 @@ protected:
 	UPROPERTY(Transient)
 	TObjectPtr<UHronoFpsWidget> FpsCounterWidget;
 
+	UPROPERTY(Transient)
+	TObjectPtr<UHronoTutorialWidget> TutorialWidget;
+
+	TSet<EHronoTutorialItem> TutorialPromptedItems;
+
+	void EnsureTutorialWidget();
+	void ToggleTutorialMenu();
+	void HandleHeldItemTutorial(ABase_Item* Item);
+	EHronoTutorialItem ResolveTutorialItem(const ABase_Item* Item) const;
+
 	/** Authored OwnerNoSee values temporarily overridden for the local raster view. */
 	TMap<TWeakObjectPtr<UPrimitiveComponent>, bool> TimelinePrimitiveOwnerNoSeeStates;
 
@@ -538,8 +561,11 @@ protected:
 	void PickupItem(class ABase_Item* Item);
 
 	/** The only item this character may carry. Authoritative on the server. */
-	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Items")
+	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_CurrentHeldItem, Category = "Items")
 	TObjectPtr<class ABase_Item> CurrentHeldItem;
+
+	UFUNCTION()
+	void OnRep_CurrentHeldItem(ABase_Item* PreviousHeldItem);
 
 	UFUNCTION(BlueprintCallable, Category = "Items")
 	void DropCurrentItem();

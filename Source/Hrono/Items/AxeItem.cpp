@@ -7,6 +7,7 @@
 AAxeItem::AAxeItem()
 {
 	ItemType = EItemType::Tool;
+	TutorialItem = EHronoTutorialItem::Axe;
 	ItemName = NSLOCTEXT("HronoItems", "AxeName", "Axe");
 	ItemDescription = NSLOCTEXT(
 		"HronoItems",

@@ -53,6 +53,11 @@ public class Hrono : ModuleRules
 			"Hrono/Variant_Shooter/Weapons"
 		});
 
+		// Tutorial illustrations are loaded into transient UTexture2D objects at runtime.
+		// Stage the source PNGs so the same native widget works in packaged builds.
+		RuntimeDependencies.Add("$(ProjectDir)/Content/_Alex/Images/Tutorial/Runtime/Tutorial_Skull.png", StagedFileType.NonUFS);
+		RuntimeDependencies.Add("$(ProjectDir)/Content/_Alex/Images/Tutorial/Runtime/Tutorial_Axe.png", StagedFileType.NonUFS);
+
 		// Uncomment if you are using Slate UI
 		// PrivateDependencyModuleNames.AddRange(new string[] { "Slate", "SlateCore" });
 
