@@ -60,6 +60,11 @@ namespace
 	}
 }
 
+bool TableRitualGate::IsCursedImage(const ABase_Item& Item)
+{
+	return IsCursedImageClass(Item.GetClass());
+}
+
 void TableRitualGate::NotifySuccessfulPickup(
 	const ABase_Item& Item,
 	const AHronoCharacter& Character)
@@ -67,7 +72,7 @@ void TableRitualGate::NotifySuccessfulPickup(
 	UWorld* World = Item.GetWorld();
 	if (!IsValid(World)
 		|| World->GetNetMode() == NM_Client
-		|| !IsCursedImageClass(Item.GetClass())
+		|| !IsCursedImage(Item)
 		|| Item.OwningCharacter != &Character
 		|| !Item.bIsPickedUp)
 	{

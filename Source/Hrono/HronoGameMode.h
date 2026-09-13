@@ -26,12 +26,21 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Session Start")
 	bool AreAllRequiredPlayersPresent();
 
+	/**
+	 * Testing only. Permanently bypasses the player-count gate for this match and
+	 * releases every loaded entrance door trigger, regardless of player count.
+	 */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Session Start|Testing",
+		meta = (DisplayName = "Force Unlock Entrance Doors (Testing)"))
+	void ForceUnlockEntranceDoorsForTesting();
+
 protected:
 	virtual void StartPlay() override;
 	virtual void HandleStartingNewPlayer_Implementation(APlayerController* NewPlayer) override;
 
 private:
 	void TryUnlockSessionStartGates();
+	bool bForceSessionStartDoorsUnlockedForTesting = false;
 };
 
 

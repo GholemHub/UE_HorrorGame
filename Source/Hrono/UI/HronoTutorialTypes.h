@@ -13,5 +13,7 @@ enum class EHronoTutorialItem : uint8
 	Skull UMETA(DisplayName = "Skull"),
 	Axe UMETA(DisplayName = "Axe"),
 	// Appended to preserve serialized numeric values of the existing item entries.
-	Clock UMETA(DisplayName = "Clock")
+	Clock UMETA(DisplayName = "Clock"),
+	TableRitual UMETA(DisplayName = "Table Ritual"),
+	Mirror UMETA(DisplayName = "Mirror")
 };

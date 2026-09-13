@@ -9,6 +9,9 @@ class AHronoCharacter;
 /** Server-authoritative match gate for the table ritual. */
 namespace TableRitualGate
 {
+	/** True only for the cursed image that unlocks the table ritual. */
+	bool IsCursedImage(const ABase_Item& Item);
+
 	/** Permanently unlocks the current world when BP_CursedImage_Item reaches a hand. */
 	void NotifySuccessfulPickup(const ABase_Item& Item, const AHronoCharacter& Character);
 

@@ -854,6 +854,11 @@ void AHronoCharacter::UpdateRitualChairGuidance(float DeltaTime, bool bForceRefr
 	RitualGuidanceHighlightedChairs = MoveTemp(NewHighlightedChairs);
 }
 
+void AHronoCharacter::RefreshRitualChairGuidanceNow()
+{
+	UpdateRitualChairGuidance(0.0f, true);
+}
+
 void AHronoCharacter::ClearRitualChairGuidance()
 {
 	for (const TWeakObjectPtr<AChair>& HighlightedChair : RitualGuidanceHighlightedChairs)
@@ -993,14 +998,11 @@ FHitResult AHronoCharacter::PerformInteractTrace(bool bIsDrag)
 	}
 	if (bHit)
 	{
-		if (!bIsDrag) {
+		if (!bIsDrag)
+		{
 			OnEnyInteractTrace(HitResult);
 		}
-		else
-		{
-			OnMakeInteractImpulse(HitResult);
-		}
-		
+
 		/*DrawDebugSphere(
 			GetWorld(),
 			HitResult.ImpactPoint,
@@ -1977,6 +1979,10 @@ EHronoTutorialItem AHronoCharacter::ResolveTutorialItem(const ABase_Item* Item) 
 	{
 		return EHronoTutorialItem::None;
 	}
+	if (TableRitualGate::IsCursedImage(*Item))
+	{
+		return EHronoTutorialItem::TableRitual;
+	}
 	if (Item->TutorialItem != EHronoTutorialItem::None)
 	{
 		return Item->TutorialItem;
@@ -1999,22 +2005,6 @@ void AHronoCharacter::SetTutorialGameStageText(const FText& NewStageText)
 	if (TutorialWidget)
 	{
 		TutorialWidget->SetGameStageText(NewStageText);
-	}
-}
-void AHronoCharacter::OnMakeInteractImpulse(FHitResult HitResult)
-{
-	UPrimitiveComponent* HitComp = HitResult.GetComponent();
-
-	if (HitComp && HitComp->IsSimulatingPhysics())
-	{
-		FVector ImpulseDirection = GetControlRotation().Vector();
-		float ImpulseStrength = 300.f;
-
-		HitComp->AddImpulse(
-			ImpulseDirection * ImpulseStrength,
-			NAME_None,
-			true
-		);
 	}
 }
 void AHronoCharacter::Server_InteractWithEnvironment_Implementation(AActor* InteractableActor)

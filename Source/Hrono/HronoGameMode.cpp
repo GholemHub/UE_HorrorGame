@@ -23,7 +23,29 @@ void AHronoGameMode::HandleStartingNewPlayer_Implementation(APlayerController* N
 
 bool AHronoGameMode::AreAllRequiredPlayersPresent()
 {
-	return GetNumPlayers() >= FMath::Max(1, RequiredPlayersToStart);
+	return bForceSessionStartDoorsUnlockedForTesting
+		|| GetNumPlayers() >= FMath::Max(1, RequiredPlayersToStart);
+}
+
+void AHronoGameMode::ForceUnlockEntranceDoorsForTesting()
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	// Keep the bypass active for the rest of this match. This also makes any
+	// session-start gate streamed in later unlock itself during BeginPlay.
+	bForceSessionStartDoorsUnlockedForTesting = true;
+
+	for (TActorIterator<ADoorLockTrigger> It(GetWorld()); It; ++It)
+	{
+		ADoorLockTrigger* DoorLockTrigger = *It;
+		if (IsValid(DoorLockTrigger) && DoorLockTrigger->bLockUntilAllPlayersPresent)
+		{
+			DoorLockTrigger->PermanentlyUnlockTriggeredDoors();
+		}
+	}
 }
 
 void AHronoGameMode::TryUnlockSessionStartGates()
