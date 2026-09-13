@@ -108,6 +108,9 @@ protected:
 public:
 	AHronoCharacter();
 
+	/** Re-evaluates the local ritual-chair overlays immediately after replicated state changes. */
+	void RefreshRitualChairGuidanceNow();
+
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Dream")
 	bool bIsDreamCharacter = false;
 
@@ -681,7 +684,6 @@ public:
 		bool bLocalRitualPositionApplied = false;
 
 		void OnEnyInteractTrace(FHitResult HitResult);
-		void OnMakeInteractImpulse(FHitResult HitResult);
 		void LoadLocalPlayerSettings();
 };
 

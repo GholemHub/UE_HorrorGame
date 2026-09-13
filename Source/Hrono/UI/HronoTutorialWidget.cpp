@@ -12,6 +12,8 @@
 #include "Components/Image.h"
 #include "Components/Overlay.h"
 #include "Components/OverlaySlot.h"
+#include "Components/ScrollBox.h"
+#include "Components/ScrollBoxSlot.h"
 #include "Components/SizeBox.h"
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
@@ -29,7 +31,7 @@
 
 namespace HronoTutorial
 {
-	constexpr int32 TutorialCount = 5;
+	constexpr int32 TutorialCount = 6;
 	const FLinearColor Accent(0.36f, 0.78f, 0.82f, 1.0f);
 	const FLinearColor TextPrimary(0.91f, 0.93f, 0.92f, 1.0f);
 	const FLinearColor TextMuted(0.55f, 0.62f, 0.62f, 1.0f);
@@ -83,10 +85,10 @@ namespace HronoTutorial
 		virtual bool HandleMouseButtonUpEvent(
 			FSlateApplication& SlateApp, const FPointerEvent& MouseEvent) override
 		{
-			UHronoTutorialWidget* TutorialWidget = Widget.Get();
 			// A mouse-down handled by the modal must not leak its release into gameplay,
-			// including when the close button hid the menu on mouse-down.
-			const bool bHandle = bMouseDownConsumed || (TutorialWidget && TutorialWidget->IsMenuOpen());
+			// including when the close button hid the menu on mouse-down. Mouse events
+			// which started inside the scroll area must continue through normal Slate routing.
+			const bool bHandle = bMouseDownConsumed;
 			bMouseDownConsumed = false;
 			return bHandle;
 		}
@@ -96,7 +98,7 @@ namespace HronoTutorial
 			const FPointerEvent* InGestureEvent) override
 		{
 			UHronoTutorialWidget* TutorialWidget = Widget.Get();
-			return TutorialWidget && TutorialWidget->IsMenuOpen();
+			return TutorialWidget && TutorialWidget->HandleMenuMouseWheel(InWheelEvent);
 		}
 
 		virtual const TCHAR* GetDebugName() const override
@@ -144,13 +146,40 @@ namespace HronoTutorial
 				nullptr };
 		case EHronoTutorialItem::Skull:
 			return {
-				NSLOCTEXT("HronoTutorial", "SkullTitle", "RITUAL SKULL"),
-				NSLOCTEXT("HronoTutorial", "SkullSubtitle", "UNITE PAST AND FUTURE"),
+				NSLOCTEXT("HronoTutorial", "SkullTitle", "HOW TO PERFORM THE SKULL RITUAL"),
+				FText::GetEmpty(),
 				NSLOCTEXT("HronoTutorial", "SkullDescription",
-					"The ritual needs a matching pair of skulls: one from the Past and one from the Future. "
-					"Bring both skulls into the same cursed room and drop them to begin the ritual."),
-				NSLOCTEXT("HronoTutorial", "SkullControls", "DROP BOTH SKULLS IN THE SAME RITUAL ROOM"),
-				TEXT("Tutorial_Skull.png") };
+					"1. Each player must find a skull in their own timeline.\n"
+					"2. Bring both skulls to the room you believe is cursed.\n"
+					"3. Place the skulls together and begin the ritual.\n"
+					"4. If a key appears between the skulls, the ritual was successful and you selected the correct room.\n"
+					"5. If no key appears, the room is incorrect. Take the skulls and try again in another room."),
+				FText::GetEmpty(),
+				nullptr };
+		case EHronoTutorialItem::TableRitual:
+			return {
+				NSLOCTEXT("HronoTutorial", "TableRitualTitle", "HOW TO BANISH THE DEMON"),
+				FText::GetEmpty(),
+				NSLOCTEXT("HronoTutorial", "TableRitualDescription",
+					"1. Pick up the cursed image to see the ritual rools.\n"
+					"2. Sit at the table in front of the Ouija board.\n"
+					"3. Use the Ouija board to enter the demon’s name, one letter at a time.\n"
+					"4. Enter the correct name to complete the ritual and banish the demon.\n\n"
+					"Good luck"),
+				FText::GetEmpty(),
+				nullptr };
+		case EHronoTutorialItem::Mirror:
+			return {
+				NSLOCTEXT("HronoTutorial", "MirrorTitle", "HOW TO PASS ITEMS THROUGH A MIRROR"),
+				FText::GetEmpty(),
+				NSLOCTEXT("HronoTutorial", "MirrorDescription",
+					"1. Approach the mirror while holding the item you want to transfer.\n"
+					"2. Move the item close to the mirror’s surface.\n"
+					"3. Your partner must stand on the other side of the mirror.\n"
+					"4. The other player can pick up the item through the mirror and bring it into their timeline.\n\n"
+					"Use mirrors to exchange important items and help each other solve puzzles."),
+				FText::GetEmpty(),
+				nullptr };
 		case EHronoTutorialItem::Axe:
 			return {
 				NSLOCTEXT("HronoTutorial", "AxeTitle", "AXE"),
@@ -272,6 +301,24 @@ UHronoTutorialWidget::UHronoTutorialWidget(const FObjectInitializer& ObjectIniti
 	{
 		ClockWrongTexture = WrongClockImage.Object;
 	}
+	static ConstructorHelpers::FObjectFinder<UTexture2D> SkullTutorialImage(
+		TEXT("/Game/_Alex/Images/Tutorial/Skall_Correct.Skall_Correct"));
+	if (SkullTutorialImage.Succeeded())
+	{
+		SkullTutorialTexture = SkullTutorialImage.Object;
+	}
+	static ConstructorHelpers::FObjectFinder<UTexture2D> TableRitualImage(
+		TEXT("/Game/_Alex/Images/Tutorial/Table_Ritual.Table_Ritual"));
+	if (TableRitualImage.Succeeded())
+	{
+		TableRitualTexture = TableRitualImage.Object;
+	}
+	static ConstructorHelpers::FObjectFinder<UTexture2D> MirrorTutorialImage(
+		TEXT("/Game/_Alex/Images/Tutorial/Mirror_Transfer.Mirror_Transfer"));
+	if (MirrorTutorialImage.Succeeded())
+	{
+		MirrorTutorialTexture = MirrorTutorialImage.Object;
+	}
 }
 
 TSharedRef<SWidget> UHronoTutorialWidget::RebuildWidget()
@@ -354,6 +401,8 @@ bool UHronoTutorialWidget::HandleMenuMouseButtonDown(const FPointerEvent& MouseE
 	const bool bDosimeterHit = WasClicked(DosimeterButton);
 	const bool bClockHit = WasClicked(ClockButton);
 	const bool bSkullHit = WasClicked(SkullButton);
+	const bool bTableRitualHit = WasClicked(TableRitualButton);
+	const bool bMirrorHit = WasClicked(MirrorButton);
 	const bool bAxeHit = WasClicked(AxeButton);
 	const bool bCloseHit = WasClicked(CloseButton);
 
@@ -378,6 +427,16 @@ bool UHronoTutorialWidget::HandleMenuMouseButtonDown(const FPointerEvent& MouseE
 		SelectTutorial(EHronoTutorialItem::Skull);
 		NewFocus = SkullButton;
 	}
+	else if (bTableRitualHit)
+	{
+		SelectTutorial(EHronoTutorialItem::TableRitual);
+		NewFocus = TableRitualButton;
+	}
+	else if (bMirrorHit)
+	{
+		SelectTutorial(EHronoTutorialItem::Mirror);
+		NewFocus = MirrorButton;
+	}
 	else if (bAxeHit)
 	{
 		SelectTutorial(EHronoTutorialItem::Axe);
@@ -387,11 +446,54 @@ bool UHronoTutorialWidget::HandleMenuMouseButtonDown(const FPointerEvent& MouseE
 	{
 		CloseMenu();
 	}
+	else if ((DescriptionScroll
+			&& DescriptionScroll->GetCachedGeometry().IsUnderLocation(PointerPosition))
+		|| (NavigationScroll
+			&& NavigationScroll->GetCachedGeometry().IsUnderLocation(PointerPosition)))
+	{
+		// Let either ScrollBox receive clicks so its scrollbar can be dragged.
+		return false;
+	}
 
 	if (NewFocus)
 	{
 		NewFocus->SetUserFocus(GetOwningPlayer());
 	}
+	return true;
+}
+
+bool UHronoTutorialWidget::HandleMenuMouseWheel(const FPointerEvent& MouseEvent)
+{
+	if (!bMenuOpen)
+	{
+		return false;
+	}
+
+	const FVector2D PointerPosition = MouseEvent.GetScreenSpacePosition();
+	UScrollBox* TargetScroll = nullptr;
+	if (NavigationScroll
+		&& NavigationScroll->GetCachedGeometry().IsUnderLocation(PointerPosition))
+	{
+		TargetScroll = NavigationScroll;
+	}
+	else if (DescriptionScroll
+		&& DescriptionScroll->GetCachedGeometry().IsUnderLocation(PointerPosition))
+	{
+		TargetScroll = DescriptionScroll;
+	}
+
+	if (TargetScroll)
+	{
+		constexpr float ScrollStep = 72.0f;
+		const float NewOffset = FMath::Clamp(
+			TargetScroll->GetScrollOffset() - MouseEvent.GetWheelDelta() * ScrollStep,
+			0.0f,
+			TargetScroll->GetScrollOffsetOfEnd());
+		TargetScroll->SetScrollOffset(NewOffset);
+	}
+
+	// The tutorial is modal, so a wheel event outside its scrollable areas is
+	// still consumed instead of reaching paused gameplay or another HUD widget.
 	return true;
 }
 
@@ -428,8 +530,8 @@ void UHronoTutorialWidget::BuildWidgetTree()
 	}
 
 	USizeBox* MenuSize = WidgetTree->ConstructWidget<USizeBox>();
-	MenuSize->SetWidthOverride(1280.0f);
-	MenuSize->SetHeightOverride(780.0f);
+	MenuSize->SetWidthOverride(1200.0f);
+	MenuSize->SetHeightOverride(680.0f);
 	if (UBorderSlot* LayoutSlot = Cast<UBorderSlot>(MenuLayer->AddChild(MenuSize)))
 	{
 		LayoutSlot->SetHorizontalAlignment(HAlign_Center);
@@ -468,14 +570,35 @@ void UHronoTutorialWidget::BuildWidgetTree()
 	CollectionText = MakeText(WidgetTree, FText::GetEmpty(), 14, TextMuted);
 	if (UVerticalBoxSlot* LayoutSlot = NavigationBox->AddChildToVerticalBox(CollectionText))
 	{
-		LayoutSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 28.0f));
+		LayoutSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 18.0f));
 	}
 
-	MonocleButton = MakeNavigationButton(WidgetTree, NavigationBox, FText::GetEmpty(), TEXT("MonocleButton"));
-	DosimeterButton = MakeNavigationButton(WidgetTree, NavigationBox, FText::GetEmpty(), TEXT("DosimeterButton"));
-	ClockButton = MakeNavigationButton(WidgetTree, NavigationBox, FText::GetEmpty(), TEXT("ClockButton"));
-	SkullButton = MakeNavigationButton(WidgetTree, NavigationBox, FText::GetEmpty(), TEXT("SkullButton"));
-	AxeButton = MakeNavigationButton(WidgetTree, NavigationBox, FText::GetEmpty(), TEXT("AxeButton"));
+	NavigationScroll = WidgetTree->ConstructWidget<UScrollBox>(
+		UScrollBox::StaticClass(), TEXT("NavigationScroll"));
+	NavigationScroll->SetOrientation(Orient_Vertical);
+	NavigationScroll->SetScrollBarVisibility(ESlateVisibility::Visible);
+	NavigationScroll->SetAlwaysShowScrollbar(false);
+	NavigationScroll->SetAllowOverscroll(false);
+	if (UVerticalBoxSlot* LayoutSlot = NavigationBox->AddChildToVerticalBox(NavigationScroll))
+	{
+		LayoutSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+		LayoutSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 10.0f));
+	}
+	UVerticalBox* NavigationPages = WidgetTree->ConstructWidget<UVerticalBox>();
+	if (UScrollBoxSlot* LayoutSlot = Cast<UScrollBoxSlot>(NavigationScroll->AddChild(NavigationPages)))
+	{
+		LayoutSlot->SetPadding(FMargin(0.0f, 0.0f, 10.0f, 0.0f));
+		LayoutSlot->SetHorizontalAlignment(HAlign_Fill);
+	}
+
+	MonocleButton = MakeNavigationButton(WidgetTree, NavigationPages, FText::GetEmpty(), TEXT("MonocleButton"));
+	DosimeterButton = MakeNavigationButton(WidgetTree, NavigationPages, FText::GetEmpty(), TEXT("DosimeterButton"));
+	ClockButton = MakeNavigationButton(WidgetTree, NavigationPages, FText::GetEmpty(), TEXT("ClockButton"));
+	SkullButton = MakeNavigationButton(WidgetTree, NavigationPages, FText::GetEmpty(), TEXT("SkullButton"));
+	TableRitualButton = MakeNavigationButton(
+		WidgetTree, NavigationPages, FText::GetEmpty(), TEXT("TableRitualButton"));
+	MirrorButton = MakeNavigationButton(WidgetTree, NavigationPages, FText::GetEmpty(), TEXT("MirrorButton"));
+	AxeButton = MakeNavigationButton(WidgetTree, NavigationPages, FText::GetEmpty(), TEXT("AxeButton"));
 
 	UTextBlock* NavigationHint = MakeText(
 		WidgetTree,
@@ -483,9 +606,8 @@ void UHronoTutorialWidget::BuildWidgetTree()
 		14, TextMuted);
 	if (UVerticalBoxSlot* LayoutSlot = NavigationBox->AddChildToVerticalBox(NavigationHint))
 	{
-		LayoutSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
-		LayoutSlot->SetVerticalAlignment(VAlign_Bottom);
-		LayoutSlot->SetPadding(FMargin(0.0f, 20.0f, 0.0f, 18.0f));
+		LayoutSlot->SetSize(FSlateChildSize(ESlateSizeRule::Automatic));
+		LayoutSlot->SetPadding(FMargin(0.0f, 4.0f, 0.0f, 12.0f));
 	}
 
 	CloseButton = MakeNavigationButton(
@@ -493,7 +615,7 @@ void UHronoTutorialWidget::BuildWidgetTree()
 
 	UBorder* ContentBorder = WidgetTree->ConstructWidget<UBorder>();
 	ContentBorder->SetBrushColor(FLinearColor(0.012f, 0.012f, 0.012f, 0.97f));
-	ContentBorder->SetPadding(FMargin(42.0f, 30.0f));
+	ContentBorder->SetPadding(FMargin(34.0f, 24.0f));
 	if (UHorizontalBoxSlot* LayoutSlot = MenuColumns->AddChildToHorizontalBox(ContentBorder))
 	{
 		LayoutSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
@@ -512,15 +634,15 @@ void UHronoTutorialWidget::BuildWidgetTree()
 	{
 		LayoutSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 	}
-	ItemTitleText = MakeText(WidgetTree, FText::GetEmpty(), 36, TextPrimary);
+	ItemTitleText = MakeText(WidgetTree, FText::GetEmpty(), 32, TextPrimary);
 	Heading->AddChildToVerticalBox(ItemTitleText);
 	ItemSubtitleText = MakeText(WidgetTree, FText::GetEmpty(), 16, Accent);
 	Heading->AddChildToVerticalBox(ItemSubtitleText);
 	USizeBox* ImageSize = WidgetTree->ConstructWidget<USizeBox>();
-	ImageSize->SetHeightOverride(315.0f);
+	ImageSize->SetHeightOverride(270.0f);
 	if (UVerticalBoxSlot* LayoutSlot = Content->AddChildToVerticalBox(ImageSize))
 	{
-		LayoutSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 22.0f));
+		LayoutSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 16.0f));
 		LayoutSlot->SetHorizontalAlignment(HAlign_Fill);
 	}
 	UOverlay* ImageOverlay = WidgetTree->ConstructWidget<UOverlay>();
@@ -560,11 +682,25 @@ void UHronoTutorialWidget::BuildWidgetTree()
 		LayoutSlot->SetPadding(FMargin(5.0f, 0.0f, 0.0f, 0.0f));
 	}
 
-	ItemDescriptionText = MakeText(WidgetTree, FText::GetEmpty(), 18, TextPrimary);
-	if (UVerticalBoxSlot* LayoutSlot = Content->AddChildToVerticalBox(ItemDescriptionText))
+	DescriptionScroll = WidgetTree->ConstructWidget<UScrollBox>(
+		UScrollBox::StaticClass(), TEXT("DescriptionScroll"));
+	DescriptionScroll->SetOrientation(Orient_Vertical);
+	DescriptionScroll->SetScrollBarVisibility(ESlateVisibility::Visible);
+	DescriptionScroll->SetAlwaysShowScrollbar(false);
+	DescriptionScroll->SetAllowOverscroll(false);
+	DescriptionScroll->SetAnimateWheelScrolling(true);
+	DescriptionScroll->SetWheelScrollMultiplier(1.25f);
+	if (UVerticalBoxSlot* LayoutSlot = Content->AddChildToVerticalBox(DescriptionScroll))
 	{
-		LayoutSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 18.0f));
+		LayoutSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 12.0f));
 		LayoutSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+	}
+
+	ItemDescriptionText = MakeText(WidgetTree, FText::GetEmpty(), 17, TextPrimary);
+	if (UScrollBoxSlot* LayoutSlot = Cast<UScrollBoxSlot>(DescriptionScroll->AddChild(ItemDescriptionText)))
+	{
+		LayoutSlot->SetPadding(FMargin(0.0f, 0.0f, 12.0f, 8.0f));
+		LayoutSlot->SetHorizontalAlignment(HAlign_Fill);
 	}
 	ItemControlText = MakeText(WidgetTree, FText::GetEmpty(), 16, Accent);
 	Content->AddChildToVerticalBox(ItemControlText);
@@ -590,6 +726,11 @@ void UHronoTutorialWidget::BindButtons()
 	if (DosimeterButton) DosimeterButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleDosimeterClicked);
 	if (ClockButton) ClockButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleClockClicked);
 	if (SkullButton) SkullButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleSkullClicked);
+	if (TableRitualButton)
+	{
+		TableRitualButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleTableRitualClicked);
+	}
+	if (MirrorButton) MirrorButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleMirrorClicked);
 	if (AxeButton) AxeButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleAxeClicked);
 	if (CloseButton) CloseButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleCloseClicked);
 }
@@ -700,6 +841,8 @@ void UHronoTutorialWidget::OpenMenu(EHronoTutorialItem Item)
 		if (UButton* FocusButton = Item == EHronoTutorialItem::Dosimeter ? DosimeterButton
 			: Item == EHronoTutorialItem::Clock ? ClockButton
 			: Item == EHronoTutorialItem::Skull ? SkullButton
+			: Item == EHronoTutorialItem::TableRitual ? TableRitualButton
+			: Item == EHronoTutorialItem::Mirror ? MirrorButton
 			: Item == EHronoTutorialItem::Axe ? AxeButton
 			: MonocleButton)
 		{
@@ -778,6 +921,7 @@ void UHronoTutorialWidget::SelectTutorial(EHronoTutorialItem Item)
 	if (ItemSubtitleText) ItemSubtitleText->SetText(Page.Subtitle);
 	if (ItemDescriptionText) ItemDescriptionText->SetText(Page.Description);
 	if (ItemControlText) ItemControlText->SetText(Page.Controls);
+	if (DescriptionScroll) DescriptionScroll->ScrollToStart();
 
 	if (Item == EHronoTutorialItem::Monocle
 		|| Item == EHronoTutorialItem::Dosimeter
@@ -813,6 +957,34 @@ void UHronoTutorialWidget::SelectTutorial(EHronoTutorialItem Item)
 				CorrectTexture && WrongTexture
 					? ESlateVisibility::Collapsed
 					: ESlateVisibility::HitTestInvisible);
+		}
+	}
+	else if (Item == EHronoTutorialItem::Skull
+		|| Item == EHronoTutorialItem::TableRitual
+		|| Item == EHronoTutorialItem::Mirror)
+	{
+		UTexture2D* Texture = Item == EHronoTutorialItem::Skull
+			? SkullTutorialTexture.Get()
+			: Item == EHronoTutorialItem::TableRitual
+				? TableRitualTexture.Get()
+				: MirrorTutorialTexture.Get();
+		if (TutorialImage && Texture)
+		{
+			TutorialImage->SetBrushFromTexture(Texture, false);
+			TutorialImage->SetVisibility(ESlateVisibility::HitTestInvisible);
+		}
+		else if (TutorialImage)
+		{
+			TutorialImage->SetVisibility(ESlateVisibility::Collapsed);
+		}
+		if (SecondaryTutorialImage)
+		{
+			SecondaryTutorialImage->SetVisibility(ESlateVisibility::Collapsed);
+		}
+		if (MissingImageText)
+		{
+			MissingImageText->SetVisibility(
+				Texture ? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible);
 		}
 	}
 	else if (UTexture2D* Texture = LoadTutorialTexture(Item))
@@ -866,6 +1038,8 @@ void UHronoTutorialWidget::RefreshNavigation()
 	RefreshButton(DosimeterButton, EHronoTutorialItem::Dosimeter);
 	RefreshButton(ClockButton, EHronoTutorialItem::Clock);
 	RefreshButton(SkullButton, EHronoTutorialItem::Skull);
+	RefreshButton(TableRitualButton, EHronoTutorialItem::TableRitual);
+	RefreshButton(MirrorButton, EHronoTutorialItem::Mirror);
 	RefreshButton(AxeButton, EHronoTutorialItem::Axe);
 }
 
@@ -914,6 +1088,14 @@ void UHronoTutorialWidget::HandleClockClicked()
 void UHronoTutorialWidget::HandleSkullClicked()
 {
 	SelectTutorial(EHronoTutorialItem::Skull);
+}
+void UHronoTutorialWidget::HandleTableRitualClicked()
+{
+	SelectTutorial(EHronoTutorialItem::TableRitual);
+}
+void UHronoTutorialWidget::HandleMirrorClicked()
+{
+	SelectTutorial(EHronoTutorialItem::Mirror);
 }
 void UHronoTutorialWidget::HandleAxeClicked()
 {

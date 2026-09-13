@@ -93,7 +93,11 @@ protected:
 	virtual void BeginPlay() override;
 	virtual bool AllowsAimInteractionHighlight() const override { return false; }
 
-	UPROPERTY(Replicated, VisibleInstanceOnly, BlueprintReadOnly, Category = "Chair|Ritual")
+	UFUNCTION()
+	void OnRep_RitualGuidanceUnlocked();
+
+	UPROPERTY(ReplicatedUsing = OnRep_RitualGuidanceUnlocked, VisibleInstanceOnly, BlueprintReadOnly,
+		Category = "Chair|Ritual")
 	bool bRitualGuidanceUnlocked = false;
 
 };

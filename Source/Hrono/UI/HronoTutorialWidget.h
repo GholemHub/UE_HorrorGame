@@ -9,6 +9,7 @@ class UBackgroundBlur;
 class UBorder;
 class UButton;
 class UImage;
+class UScrollBox;
 class UTextBlock;
 class UTexture2D;
 class IInputProcessor;
@@ -33,6 +34,8 @@ public:
 	void CloseMenu();
 	/** Raw Slate fallback used while the modal is open; independent of UMG focus/hit routing. */
 	bool HandleMenuMouseButtonDown(const FPointerEvent& MouseEvent);
+	/** Routes wheel input directly to the tutorial scroll area under the cursor. */
+	bool HandleMenuMouseWheel(const FPointerEvent& MouseEvent);
 
 	UFUNCTION(BlueprintPure, Category = "Tutorial")
 	bool IsMenuOpen() const { return bMenuOpen; }
@@ -65,6 +68,10 @@ private:
 	UFUNCTION()
 	void HandleSkullClicked();
 	UFUNCTION()
+	void HandleTableRitualClicked();
+	UFUNCTION()
+	void HandleMirrorClicked();
+	UFUNCTION()
 	void HandleAxeClicked();
 	UFUNCTION()
 	void HandleCloseClicked();
@@ -88,6 +95,10 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UTextBlock> ItemDescriptionText;
 	UPROPERTY(Transient)
+	TObjectPtr<UScrollBox> DescriptionScroll;
+	UPROPERTY(Transient)
+	TObjectPtr<UScrollBox> NavigationScroll;
+	UPROPERTY(Transient)
 	TObjectPtr<UTextBlock> ItemControlText;
 	UPROPERTY(Transient)
 	TObjectPtr<UImage> TutorialImage;
@@ -104,6 +115,10 @@ private:
 	TObjectPtr<UButton> ClockButton;
 	UPROPERTY(Transient)
 	TObjectPtr<UButton> SkullButton;
+	UPROPERTY(Transient)
+	TObjectPtr<UButton> TableRitualButton;
+	UPROPERTY(Transient)
+	TObjectPtr<UButton> MirrorButton;
 	UPROPERTY(Transient)
 	TObjectPtr<UButton> AxeButton;
 	UPROPERTY(Transient)
@@ -125,6 +140,12 @@ private:
 	TObjectPtr<UTexture2D> ClockCorrectTexture;
 	UPROPERTY(EditDefaultsOnly, Category = "Tutorial|Clock")
 	TObjectPtr<UTexture2D> ClockWrongTexture;
+	UPROPERTY(EditDefaultsOnly, Category = "Tutorial|Skull")
+	TObjectPtr<UTexture2D> SkullTutorialTexture;
+	UPROPERTY(EditDefaultsOnly, Category = "Tutorial|TableRitual")
+	TObjectPtr<UTexture2D> TableRitualTexture;
+	UPROPERTY(EditDefaultsOnly, Category = "Tutorial|Mirror")
+	TObjectPtr<UTexture2D> MirrorTutorialTexture;
 
 	TSet<EHronoTutorialItem> DiscoveredItems;
 	TSharedPtr<IInputProcessor> MenuInputPreProcessor;

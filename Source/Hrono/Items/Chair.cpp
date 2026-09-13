@@ -42,8 +42,46 @@ void AChair::SetRitualGuidanceUnlocked(bool bUnlocked)
 		return;
 	}
 
+	if (bUnlocked)
+	{
+		// Ritual guidance must reach both timelines even when a placed Blueprint
+		// overrode replication defaults or the chair is outside normal relevancy.
+		SetReplicates(true);
+		bAlwaysRelevant = true;
+	}
+
 	bRitualGuidanceUnlocked = bUnlocked;
+	OnRep_RitualGuidanceUnlocked();
+	FlushNetDormancy();
 	ForceNetUpdate();
+}
+
+void AChair::OnRep_RitualGuidanceUnlocked()
+{
+	if (!bRitualGuidanceUnlocked)
+	{
+		SetInteractionContextHighlighted(false);
+	}
+
+	UWorld* World = GetWorld();
+	if (!IsValid(World))
+	{
+		return;
+	}
+
+	for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
+	{
+		APlayerController* PlayerController = It->Get();
+		if (!IsValid(PlayerController) || !PlayerController->IsLocalController())
+		{
+			continue;
+		}
+
+		if (AHronoCharacter* LocalCharacter = Cast<AHronoCharacter>(PlayerController->GetPawn()))
+		{
+			LocalCharacter->RefreshRitualChairGuidanceNow();
+		}
+	}
 }
 
 void AChair::NotifyCharacterSat(AHronoCharacter* Character)
