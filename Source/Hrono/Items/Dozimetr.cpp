@@ -176,6 +176,13 @@ void ADozimetr::HandleBeep()
 		{
 			UGameplayStatics::PlaySound2D(this, BeepSound);
 		}
+		if (NextInterval + KINDA_SMALL_NUMBER < FMath::Max(MaximumBeepInterval, 0.01f))
+		{
+			if (AHronoCharacter* Character = Cast<AHronoCharacter>(OwningCharacter))
+			{
+				Character->NotifyTutorialDosimeterFastBeep();
+			}
+		}
 	}
 
 	GetWorldTimerManager().SetTimer(

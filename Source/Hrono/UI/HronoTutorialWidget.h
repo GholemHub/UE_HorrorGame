@@ -29,6 +29,8 @@ public:
 	void ShowPickupPrompt(EHronoTutorialItem Item);
 	void SetItemDiscovered(EHronoTutorialItem Item, bool bDiscovered = true);
 	void SetGameStageText(const FText& NewStageText);
+	/** Updates the persistent objective centered along the bottom of the screen. */
+	void SetTodoText(const FText& NewTodoText);
 	void ToggleMenu();
 	void OpenMenu(EHronoTutorialItem Item = EHronoTutorialItem::None);
 	void CloseMenu();
@@ -54,6 +56,7 @@ private:
 	void BindButtons();
 	void SelectTutorial(EHronoTutorialItem Item);
 	void RefreshNavigation();
+	void RefreshLanguage();
 	void HidePickupPrompt();
 	UTexture2D* LoadTutorialTexture(EHronoTutorialItem Item);
 	void RegisterMenuInputPreProcessor();
@@ -75,6 +78,8 @@ private:
 	void HandleAxeClicked();
 	UFUNCTION()
 	void HandleCloseClicked();
+	UFUNCTION()
+	void HandleLanguageClicked();
 
 	UPROPERTY(Transient)
 	TObjectPtr<UBackgroundBlur> MenuBlur;
@@ -86,6 +91,14 @@ private:
 	TObjectPtr<UTextBlock> PickupPromptText;
 	UPROPERTY(Transient)
 	TObjectPtr<UTextBlock> StageText;
+	UPROPERTY(Transient)
+	TObjectPtr<UBorder> TodoBorder;
+	UPROPERTY(Transient)
+	TObjectPtr<UTextBlock> TodoText;
+	UPROPERTY(Transient)
+	TObjectPtr<UTextBlock> JournalTitleText;
+	UPROPERTY(Transient)
+	TObjectPtr<UTextBlock> NavigationHintText;
 	UPROPERTY(Transient)
 	TObjectPtr<UTextBlock> CollectionText;
 	UPROPERTY(Transient)
@@ -123,6 +136,8 @@ private:
 	TObjectPtr<UButton> AxeButton;
 	UPROPERTY(Transient)
 	TObjectPtr<UButton> CloseButton;
+	UPROPERTY(Transient)
+	TObjectPtr<UButton> LanguageButton;
 
 	UPROPERTY(Transient)
 	TMap<EHronoTutorialItem, TObjectPtr<UTexture2D>> LoadedTextures;
@@ -152,6 +167,9 @@ private:
 	EHronoTutorialItem SelectedItem = EHronoTutorialItem::Monocle;
 	EHronoTutorialItem PendingPromptItem = EHronoTutorialItem::None;
 	FTimerHandle PromptTimer;
+	FText CurrentStageText;
+	FText CurrentTodoText;
+	bool bPolishLanguage = false;
 	bool bMenuOpen = false;
 	bool bOwnsGamePause = false;
 	bool bPreviousMouseCursor = false;

@@ -144,3 +144,33 @@ bool TableRitualGate::IsRitualInProgress(const UObject* WorldContextObject)
 
 	return false;
 }
+
+bool TableRitualGate::AreAllPlayersSeatedAtRitualTable(const UObject* WorldContextObject)
+{
+	UWorld* World = WorldContextObject ? WorldContextObject->GetWorld() : nullptr;
+	if (!IsValid(World) || World->GetNetMode() == NM_Client)
+	{
+		return false;
+	}
+
+	int32 GameplayPlayerCount = 0;
+	for (TActorIterator<AHronoCharacter> It(World); It; ++It)
+	{
+		const AHronoCharacter* Character = *It;
+		if (!IsValid(Character) || !IsValid(Character->GetController()))
+		{
+			continue;
+		}
+
+		++GameplayPlayerCount;
+		const AChair* Chair = Character->GetCurrentChair();
+		if (!Character->IsSittingOnChair()
+			|| !IsValid(Chair)
+			|| !IsChairBesideTableRitualManager(*Chair))
+		{
+			return false;
+		}
+	}
+
+	return GameplayPlayerCount > 0;
+}

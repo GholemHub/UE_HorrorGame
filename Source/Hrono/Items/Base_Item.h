@@ -158,6 +158,9 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Item|Physics")
 	void EnableDroppedPhysics();
 
+	/** Keeps a server-spawned pickup attached to its actor root while it floats in the world. */
+	void EnableFloatingPickup();
+
 	UPROPERTY(EditAnywhere)
 	UStaticMesh* PastMesh;
 
@@ -220,6 +223,9 @@ public:
 	void OnRep_DroppedPhysicsEnabled();
 
 	UFUNCTION()
+	void OnRep_FloatingPickupEnabled();
+
+	UFUNCTION()
 	void OnRep_ForceInteractionHighlight();
 
 	/** Cosmetic hook for item-specific transfer effects. */
@@ -248,6 +254,7 @@ protected:
 	/** Applies mesh, gameplay tag, collision, and local visibility for ItemTimeline. */
 	void ApplyItemTimelineState();
 	void ApplyDroppedPhysicsState();
+	void ApplyFloatingPickupState();
 	/** Class/category policy for local aim highlighting. Forced highlights are handled separately. */
 	virtual bool AllowsAimInteractionHighlight() const;
 	void EnsureInteractionOverlayMaterial();
@@ -263,6 +270,9 @@ protected:
 
 	UPROPERTY(ReplicatedUsing = OnRep_DroppedPhysicsEnabled)
 	bool bDroppedPhysicsEnabled = false;
+
+	UPROPERTY(ReplicatedUsing = OnRep_FloatingPickupEnabled)
+	bool bFloatingPickupEnabled = false;
 
 	/** Original overlays are restored instead of being blindly cleared. Local cosmetic state only. */
 	TMap<TWeakObjectPtr<UMeshComponent>, TWeakObjectPtr<UMaterialInterface>> PreviousOverlayMaterials;

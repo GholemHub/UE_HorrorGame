@@ -16,6 +16,7 @@ class UInputAction;
 class UDrag_Component;
 class ADrag_Item;
 class ABase_Item;
+class APaintItem;
 class USpotLightComponent;
 class AChair;
 class USoundBase;
@@ -107,6 +108,10 @@ protected:
 
 public:
 	AHronoCharacter();
+
+	/** Current radio microphone state for Blueprint UI and gameplay logic. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voice|Radio")
+	bool MicroStatus = false;
 
 	/** Re-evaluates the local ritual-chair overlays immediately after replicated state changes. */
 	void RefreshRitualChairGuidanceNow();
@@ -210,6 +215,19 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Tutorial")
 	void SetTutorialGameStageText(const FText& NewStageText);
+
+	/** Applies this character's replicated progress to its owning player's tutorial HUD. */
+	void ApplyTutorialStep(EHronoTutorialStep NewStep);
+
+	/** Advances only this player's tutorial when CompletedStep is their active objective. */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Tutorial")
+	bool CompleteTutorialStep(EHronoTutorialStep CompletedStep);
+
+	UFUNCTION(BlueprintPure, Category = "Tutorial")
+	EHronoTutorialStep GetTutorialStep() const { return TutorialStep; }
+
+	/** Called by the locally held dosimeter when its beep interval starts accelerating. */
+	void NotifyTutorialDosimeterFastBeep();
 
 	/** Called by the engine when the character lands after a fall. */
 	virtual void Landed(const FHitResult& Hit) override;
@@ -460,6 +478,29 @@ protected:
 	void ToggleTutorialMenu();
 	void HandleHeldItemTutorial(ABase_Item* Item);
 	EHronoTutorialItem ResolveTutorialItem(const ABase_Item* Item) const;
+	void UpdateTutorialPaintingLook(float DeltaTime);
+
+	UFUNCTION(Server, Reliable)
+	void ServerNotifyTutorialPaintingFound(APaintItem* Painting);
+
+	UFUNCTION(Server, Reliable)
+	void ServerNotifyTutorialDosimeterFastBeep();
+
+	UFUNCTION()
+	void OnRep_TutorialStep();
+
+	UPROPERTY(ReplicatedUsing = OnRep_TutorialStep, VisibleInstanceOnly,
+		BlueprintReadOnly, Category = "Tutorial")
+	EHronoTutorialStep TutorialStep = EHronoTutorialStep::PickUpMonocle;
+
+	TWeakObjectPtr<APaintItem> TutorialObservedPainting;
+	float TutorialPaintingLookTime = 0.0f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tutorial", meta = (ClampMin = "100.0", Units = "cm"))
+	float TutorialPaintingLookDistance = 3000.0f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Tutorial", meta = (ClampMin = "0.0", Units = "s"))
+	float TutorialPaintingLookDuration = 0.35f;
 
 	/** Authored OwnerNoSee values temporarily overridden for the local raster view. */
 	TMap<TWeakObjectPtr<UPrimitiveComponent>, bool> TimelinePrimitiveOwnerNoSeeStates;
@@ -600,7 +641,8 @@ public:
 	UFUNCTION()
 	void StandUp();
 
-	void SitOnChair(AChair* Chair);
+	/** Seats a free chair or returns from the ritual point to this player's reserved chair. */
+	bool SitOnChair(AChair* Chair);
 
 	/** Server-only forced chair transfer used by ritual chair Blueprint actions. */
 	bool ForceSitOnChair(AChair* Chair);
@@ -621,6 +663,12 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Chair|Ritual")
 	AChair* GetReservedRitualChair() const { return ReservedRitualChair; }
+
+	UFUNCTION(BlueprintPure, Category = "Chair")
+	AChair* GetCurrentChair() const { return CurrentChair; }
+
+	UFUNCTION(BlueprintPure, Category = "Chair")
+	bool IsSittingOnChair() const { return bIsSitting; }
 
 	UPROPERTY(Replicated, VisibleInstanceOnly, BlueprintReadOnly, Category = "Chair|Ritual")
 	TObjectPtr<AChair> ReservedRitualChair;

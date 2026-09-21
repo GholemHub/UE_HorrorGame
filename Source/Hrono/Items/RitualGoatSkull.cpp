@@ -155,6 +155,29 @@ void ARitualGoatSkull::RestoreNormalGravity()
 	}
 }
 
+void ARitualGoatSkull::ReleaseFromFailedRitual()
+{
+	if (bDestroyedByRitual)
+	{
+		return;
+	}
+
+	// A player may already have picked up this skull while the failure effects
+	// are finishing. Never put a held item back into world physics.
+	if (!bIsPickedUp && OwningCharacter == nullptr && ItemMesh)
+	{
+		SetActorEnableCollision(true);
+		ItemMesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+		ConfigureDroppedCollision(ItemMesh);
+		ItemMesh->SetEnableGravity(true);
+		if (!ItemMesh->IsSimulatingPhysics())
+		{
+			ItemMesh->SetSimulatePhysics(true);
+		}
+	}
+	SetRitualLocked(false);
+}
+
 void ARitualGoatSkull::ExplodeFromRitual()
 {
 	if (!HasAuthority() || bDestroyedByRitual)

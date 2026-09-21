@@ -182,12 +182,22 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Keys")
 	TSubclassOf<ABase_Item> FutureKeyClass;
 
+	/** Horizontal offset from the broken skull; the Z value is ignored for old map instances. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Keys")
-	FVector KeySpawnOffset = FVector(0.0f, 0.0f, 20.0f);
+	FVector KeySpawnOffset = FVector::ZeroVector;
+
+	/** Height above the floor directly beneath the broken skull. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Keys",
+		meta = (ClampMin = "0.0", Units = "cm"))
+	float KeyHoverHeight = 5.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Keys",
+		meta = (ClampMin = "0.0", Units = "cm"))
+	float KeyHoverAmplitude = 3.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Keys",
 		meta = (ClampMin = "0.1", Units = "s"))
-	float KeyLandingTimeout = 5.0f;
+	float KeyHoverPeriod = 2.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cursed Room Ritual|Consequences",
 		meta = (ClampMin = "0.0"))
@@ -266,14 +276,6 @@ protected:
 	void OnRep_HouseLightMode();
 
 	UFUNCTION()
-	void HandleSpawnedKeyHit(
-		UPrimitiveComponent* HitComponent,
-		AActor* OtherActor,
-		UPrimitiveComponent* OtherComponent,
-		FVector NormalImpulse,
-		const FHitResult& Hit);
-
-	UFUNCTION()
 	void HandleFallingSkullHit(
 		UPrimitiveComponent* HitComponent,
 		AActor* OtherActor,
@@ -297,10 +299,11 @@ private:
 	void ApplyUpwardAcceleration(ARitualGoatSkull* Skull, float Acceleration) const;
 	void ApplyRandomImpulse(ARitualGoatSkull* Skull, int32 ImpulseIndex, int32 TimelineSalt) const;
 	ABase_Item* SpawnTimelineKey(TSubclassOf<ABase_Item> KeyClass, EItemTimeline Timeline, ARitualGoatSkull* SourceSkull);
+	void UpdateFloatingKeys();
 	void BeginSuccessfulSkullFall();
 	void BreakFallingSkull(ARitualGoatSkull* Skull);
 	void CompleteSuccessfulRitual();
-	void FinishSuccessfulRitualAfterKeysLand();
+	void ApplySuccessfulRitualConsequences();
 	void TriggerWrongRoomConsequences();
 	void UnlockActiveSkulls();
 	void CloseAndLockTestedRoomDoors();
@@ -322,14 +325,14 @@ private:
 	FTimerHandle StateTimerHandle;
 	FTimerHandle StageUpdateTimerHandle;
 	FTimerHandle HouseFlickerTimerHandle;
-	FTimerHandle KeyLandingTimeoutHandle;
+	FTimerHandle FloatingKeysTimerHandle;
 	ECursedRoomRitualState LastDispatchedState = ECursedRoomRitualState::Idle;
 	int32 LastDispatchedSequenceId = INDEX_NONE;
 	int32 LastAppliedImpulseIndex = INDEX_NONE;
 	bool bSuccessfulConsequencesApplied = false;
 	bool bLastHouseFlickerPulseOn = true;
 	TSet<TWeakObjectPtr<ARitualGoatSkull>> BrokenSkulls;
-	TSet<TWeakObjectPtr<ABase_Item>> LandedKeys;
+	TMap<TWeakObjectPtr<ABase_Item>, FVector> FloatingKeyOrigins;
 	TArray<TWeakObjectPtr<ADrag_Item>> LockedRoomDoors;
 	TMap<TWeakObjectPtr<ALight_Env>, bool> PreviousEnvironmentLightFlicker;
 	TMap<TWeakObjectPtr<ULightComponentBase>, bool> PreviousGenericLightVisibility;

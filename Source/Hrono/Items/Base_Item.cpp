@@ -189,6 +189,7 @@ void ABase_Item::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifeti
 	DOREPLIFETIME(ABase_Item, ItemTimeline);
 	DOREPLIFETIME(ABase_Item, MirrorTransferState);
 	DOREPLIFETIME(ABase_Item, bDroppedPhysicsEnabled);
+	DOREPLIFETIME(ABase_Item, bFloatingPickupEnabled);
 	DOREPLIFETIME(ABase_Item, bForceInteractionHighlight);
 }
 
@@ -246,8 +247,30 @@ void ABase_Item::EnableDroppedPhysics()
 	}
 
 	bDroppedPhysicsEnabled = true;
+	bFloatingPickupEnabled = false;
 	ApplyDroppedPhysicsState();
 	ForceNetUpdate();
+}
+
+void ABase_Item::EnableFloatingPickup()
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	bDroppedPhysicsEnabled = false;
+	bFloatingPickupEnabled = true;
+	ApplyFloatingPickupState();
+	ForceNetUpdate();
+}
+
+void ABase_Item::OnRep_FloatingPickupEnabled()
+{
+	if (bFloatingPickupEnabled && !IsValid(OwningCharacter) && !bIsPickedUp)
+	{
+		ApplyFloatingPickupState();
+	}
 }
 
 void ABase_Item::OnRep_DroppedPhysicsEnabled()
@@ -334,6 +357,7 @@ bool ABase_Item::AttachToCharacter()
 	if (HasAuthority())
 	{
 		bDroppedPhysicsEnabled = false;
+		bFloatingPickupEnabled = false;
 	}
 
 	TInlineComponentArray<UPrimitiveComponent*> PrimitiveComponents(this);
@@ -627,6 +651,7 @@ void ABase_Item::Drop()
 	SetOwner(nullptr);
 	OwningCharacter = nullptr;
 	bDroppedPhysicsEnabled = true;
+	bFloatingPickupEnabled = false;
 	UpdateMeshForLocalPlayer();
 	ForceNetUpdate();
 }
@@ -802,6 +827,7 @@ void ABase_Item::BeginPlay()
 	Super::BeginPlay();
 	EnsureInteractionOverlayMaterial();
 	ApplyItemTimelineState();
+	ApplyFloatingPickupState();
 
 	const AHronoCharacter* HeldBy = Cast<AHronoCharacter>(OwningCharacter);
 	SetHeldSceneCapturesEnabled(
@@ -866,5 +892,33 @@ void ABase_Item::ApplyItemTimelineState()
 	}
 
 	// Refresh visibility immediately after a timeline change instead of waiting for Tick.
+	UpdateMeshForLocalPlayer();
+}
+
+void ABase_Item::ApplyFloatingPickupState()
+{
+	if (!bFloatingPickupEnabled || IsValid(OwningCharacter) || bIsPickedUp)
+	{
+		return;
+	}
+
+	SetReplicateMovement(true);
+	SetActorEnableCollision(true);
+	SetActorHiddenInGame(false);
+	if (UStaticMeshComponent* Mesh = GetItemMesh())
+	{
+		Mesh->SetSimulatePhysics(false);
+		Mesh->SetEnableGravity(false);
+		if (Mesh != GetRootComponent())
+		{
+			if (Mesh->GetAttachParent() != GetRootComponent())
+			{
+				Mesh->AttachToComponent(GetRootComponent(), FAttachmentTransformRules::KeepRelativeTransform);
+			}
+			Mesh->SetRelativeTransform(ItemMeshRelativeTransform);
+		}
+		Mesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+		ConfigureDroppedCollision(Mesh);
+	}
 	UpdateMeshForLocalPlayer();
 }

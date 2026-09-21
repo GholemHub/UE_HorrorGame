@@ -26,4 +26,7 @@ namespace TableRitualGate
 
 	/** Server-authoritative: true while any table-ritual chair is marked as active. */
 	bool IsRitualInProgress(const UObject* WorldContextObject);
+
+	/** True when every connected gameplay character occupies a table-ritual chair. */
+	bool AreAllPlayersSeatedAtRitualTable(const UObject* WorldContextObject);
 }

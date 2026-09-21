@@ -178,7 +178,7 @@ protected:
 
 	/** Word that must be entered before the new success event is fired. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ouija|Word Puzzle")
-	FString RequiredWord;
+	FString RequiredWord = TEXT("leon");
 
 	/** Allows "RITUAL" and "ritual" to be treated as the same answer. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ouija|Word Puzzle")
