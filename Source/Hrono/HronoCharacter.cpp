@@ -32,7 +32,77 @@
 #include "UI/HronoTutorialWidget.h"
 #include "Items/AxeItem.h"
 #include "Items/Dozimetr.h"
+#include "Items/PaintItem.h"
 #include "Items/RitualGoatSkull.h"
+#include "Ritual/TableRitualGate.h"
+
+namespace
+{
+	FText GetTutorialStepText(EHronoTutorialStep Step)
+	{
+		switch (Step)
+		{
+		case EHronoTutorialStep::PickUpMonocle:
+			return FText::FromString(TEXT("1/10  •  Take the monocle from the gray box."));
+		case EHronoTutorialStep::FindPaintingAnomaly:
+			return FText::FromString(TEXT("2/10  •  View an anomalous painting through the monocle."));
+		case EHronoTutorialStep::InteractWithClock:
+			return FText::FromString(TEXT("3/10  •  Interact with any clock."));
+		case EHronoTutorialStep::DetectDosimeterAnomaly:
+			return FText::FromString(TEXT("4/10  •  Follow the dosimeter's faster beeps."));
+		case EHronoTutorialStep::StartCorrectRoomRitual:
+			return FText::FromString(TEXT("5/10  •  Bring the skulls to the most anomalous room."));
+		case EHronoTutorialStep::PickUpKey:
+			return FText::FromString(TEXT("6/10  •  Pick up the key."));
+		case EHronoTutorialStep::UnlockOfficeDoor:
+			return FText::FromString(TEXT("7/10  •  Unlock the office door."));
+		case EHronoTutorialStep::SeatAllPlayers:
+			return FText::FromString(TEXT("8/10  •  Sit in the kitchen ritual chairs."));
+		case EHronoTutorialStep::EnterDemonName:
+			return FText::FromString(TEXT("9/10  •  Enter the demon's name: LEON."));
+		case EHronoTutorialStep::UnitePlayerTimelines:
+			return FText::FromString(TEXT("10/10  •  Insert the runes into the mirror."));
+		case EHronoTutorialStep::Completed:
+		default:
+			return FText::FromString(TEXT("Tutorial complete."));
+		}
+	}
+
+	void CompleteSeatedPlayersTutorial(UWorld* World)
+	{
+		if (!IsValid(World) || !TableRitualGate::AreAllPlayersSeatedAtRitualTable(World))
+		{
+			return;
+		}
+
+		for (TActorIterator<AHronoCharacter> It(World); It; ++It)
+		{
+			if (AHronoCharacter* Character = *It;
+				IsValid(Character) && IsValid(Character->GetController()))
+			{
+				Character->CompleteTutorialStep(EHronoTutorialStep::SeatAllPlayers);
+			}
+		}
+	}
+
+	void DisablePlayerShadows(UPrimitiveComponent* Component)
+	{
+		if (!IsValid(Component))
+		{
+			return;
+		}
+
+		Component->SetCastShadow(false);
+		Component->SetCastHiddenShadow(false);
+		Component->SetCastContactShadow(false);
+
+		if (USkeletalMeshComponent* SkeletalMesh = Cast<USkeletalMeshComponent>(Component))
+		{
+			SkeletalMesh->SetCastCapsuleDirectShadow(false);
+			SkeletalMesh->SetCastCapsuleIndirectShadow(false);
+		}
+	}
+}
 
 void AHronoCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
@@ -51,6 +121,7 @@ void AHronoCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutL
 	DOREPLIFETIME(AHronoCharacter, bIsSafeInHidingWardrobe);
 	DOREPLIFETIME(AHronoCharacter, bTimelineMirrorRequested);
 	DOREPLIFETIME(AHronoCharacter, CurrentHeldItem);
+	DOREPLIFETIME_CONDITION(AHronoCharacter, TutorialStep, COND_OwnerOnly);
 }
 
 void AHronoCharacter::SetSafeInHidingWardrobe(bool bNewSafe)
@@ -93,6 +164,7 @@ AHronoCharacter::AHronoCharacter()
 	FirstPersonMesh->SetOnlyOwnerSee(true);
 	FirstPersonMesh->FirstPersonPrimitiveType = EFirstPersonPrimitiveType::FirstPerson;
 	FirstPersonMesh->SetCollisionProfileName(FName("NoCollision"));
+	DisablePlayerShadows(FirstPersonMesh);
 	GetCapsuleComponent()->SetCollisionResponseToChannel(COLLISION_CHANNEL_ITEM, ECR_Ignore);
 
 	// Mount the first-person camera on the upper chest so locomotion animation
@@ -108,7 +180,11 @@ AHronoCharacter::AHronoCharacter()
 
 	// configure the character comps
 	GetMesh()->SetOwnerNoSee(true);
-	GetMesh()->FirstPersonPrimitiveType = EFirstPersonPrimitiveType::WorldSpaceRepresentation;
+	// WorldSpaceRepresentation uses UE's combined first-person RT mask, which
+	// MegaLights traces even when CastShadow is disabled. Keep this as a regular
+	// primitive so reflection and shadow visibility can be controlled separately.
+	GetMesh()->SetFirstPersonPrimitiveType(EFirstPersonPrimitiveType::None);
+	DisablePlayerShadows(GetMesh());
 
 	GetCapsuleComponent()->SetCapsuleSize(34.0f, 96.0f);
 
@@ -360,6 +436,7 @@ void AHronoCharacter::RefreshTimelineVisibilityForLocalPlayer()
 		{
 			WorldCharacterMesh->SetOnlyOwnerSee(false);
 			WorldCharacterMesh->SetOwnerNoSee(true);
+			WorldCharacterMesh->SetFirstPersonPrimitiveType(EFirstPersonPrimitiveType::None);
 		}
 		if (USkeletalMeshComponent* ArmsMesh = OtherCharacter->GetFirstPersonMesh())
 		{
@@ -369,18 +446,33 @@ void AHronoCharacter::RefreshTimelineVisibilityForLocalPlayer()
 
 		TInlineComponentArray<UPrimitiveComponent*> RenderComponents(OtherCharacter);
 
-		// OwnerNoSee removes the local body from the raster camera. Explicitly
-		// removing it from ray tracing also removes the local Lumen reflection.
+		// Player shadows are disabled on every client. The local player does not
+		// need any RT representation because it is neither reflected nor shadowed.
 		if (OtherCharacter == LocalViewer)
 		{
 			for (UPrimitiveComponent* RenderComponent : RenderComponents)
 			{
+				DisablePlayerShadows(RenderComponent);
 				if (IsValid(RenderComponent))
 				{
 					RenderComponent->SetVisibleInRayTracing(false);
 				}
 			}
 			continue;
+		}
+
+		// Remote player shadows are also disabled. Hidden remote players retain
+		// only the RT representation required for their Lumen mirror reflection.
+		for (UPrimitiveComponent* RenderComponent : RenderComponents)
+		{
+			if (IsValid(RenderComponent))
+			{
+				if (RenderComponent->FirstPersonPrimitiveType == EFirstPersonPrimitiveType::WorldSpaceRepresentation)
+				{
+					RenderComponent->SetFirstPersonPrimitiveType(EFirstPersonPrimitiveType::None);
+				}
+				DisablePlayerShadows(RenderComponent);
+			}
 		}
 
 		const EItemTimeline OtherTimeline = OtherCharacter->CharacterTimeline;
@@ -413,10 +505,9 @@ void AHronoCharacter::RefreshTimelineVisibilityForLocalPlayer()
 				{
 					PrimitiveOwnerNoSeeStates.Add(ComponentKey, RenderComponent->bOwnerNoSee);
 				}
-
 				// Additional visibility ownership makes OwnerNoSee local to this
-				// viewer. UE 5.8 still keeps the primitive in the hardware RT scene,
-				// so it remains visible in the roughness-0 Lumen mirror.
+				// viewer. Keep the primitive in the hardware RT reflection mask; its
+				// shadow mask was disabled above because this is a remote player.
 				RenderComponent->SetOwnerNoSee(true);
 				UPrimitiveComponentUtilities::AddVisibilityOwner(RenderComponent, LocalViewer);
 				RenderComponent->SetVisibleInRayTracing(true);
@@ -450,7 +541,6 @@ void AHronoCharacter::RefreshTimelineVisibilityForLocalPlayer()
 				RenderComponent->SetOwnerNoSee(*PreviousOwnerNoSee);
 				PrimitiveOwnerNoSeeStates.Remove(ComponentKey);
 			}
-
 			// A same-timeline player may be visible directly, but must not appear
 			// in the Lumen mirror.
 			RenderComponent->SetVisibleInRayTracing(false);
@@ -686,6 +776,15 @@ void AHronoCharacter::BeginPlay()
 {
 	Super::BeginPlay();
 
+	// Blueprint-authored and dynamically inherited component defaults can
+	// override constructor values. Enforce the no-player-shadows rule on both
+	// server and clients after every character component has been created.
+	TInlineComponentArray<UPrimitiveComponent*> PlayerComponents(this);
+	for (UPrimitiveComponent* Component : PlayerComponents)
+	{
+		DisablePlayerShadows(Component);
+	}
+
 	// Server assigns timeline: its own local player = Future, remote players = Past.
 	// On a dedicated server (no local player), all characters default to Past
 	// unless overridden by GameMode logic.
@@ -799,7 +898,95 @@ void AHronoCharacter::Tick(float DeltaTime)
 	{
 		UpdateInteractionHighlight();
 		UpdateRitualChairGuidance(DeltaTime);
+		UpdateTutorialPaintingLook(DeltaTime);
 	}
+}
+
+void AHronoCharacter::UpdateTutorialPaintingLook(float DeltaTime)
+{
+	if (TutorialStep != EHronoTutorialStep::FindPaintingAnomaly
+		|| ResolveTutorialItem(CurrentHeldItem) != EHronoTutorialItem::Monocle
+		|| !IsValid(FirstPersonCameraComponent))
+	{
+		TutorialObservedPainting.Reset();
+		TutorialPaintingLookTime = 0.0f;
+		return;
+	}
+
+	const FVector TraceStart = FirstPersonCameraComponent->GetComponentLocation();
+	const FVector TraceEnd = TraceStart
+		+ FirstPersonCameraComponent->GetForwardVector() * TutorialPaintingLookDistance;
+	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(TutorialMonoclePainting), false, this);
+	QueryParams.AddIgnoredActor(CurrentHeldItem);
+	FHitResult Hit;
+	GetWorld()->LineTraceSingleByChannel(Hit, TraceStart, TraceEnd, ECC_Visibility, QueryParams);
+
+	APaintItem* Painting = Cast<APaintItem>(Hit.GetActor());
+	const bool bValidAnomaly = IsValid(Painting)
+		&& Painting->GetPaintAnomalyType() != EPaintAnomalyType::None
+		&& (Painting->ItemTimeline == EItemTimeline::Both
+			|| Painting->ItemTimeline == CharacterTimeline);
+	if (!bValidAnomaly)
+	{
+		TutorialObservedPainting.Reset();
+		TutorialPaintingLookTime = 0.0f;
+		return;
+	}
+
+	if (TutorialObservedPainting.Get() != Painting)
+	{
+		TutorialObservedPainting = Painting;
+		TutorialPaintingLookTime = 0.0f;
+	}
+	TutorialPaintingLookTime += DeltaTime;
+	if (TutorialPaintingLookTime >= TutorialPaintingLookDuration)
+	{
+		TutorialPaintingLookTime = 0.0f;
+		ServerNotifyTutorialPaintingFound(Painting);
+	}
+}
+
+void AHronoCharacter::ServerNotifyTutorialPaintingFound_Implementation(APaintItem* Painting)
+{
+	if (!IsValid(Painting)
+		|| Painting->GetPaintAnomalyType() == EPaintAnomalyType::None
+		|| ResolveTutorialItem(CurrentHeldItem) != EHronoTutorialItem::Monocle
+		|| (Painting->ItemTimeline != EItemTimeline::Both
+			&& Painting->ItemTimeline != CharacterTimeline)
+		|| FVector::DistSquared(Painting->GetActorLocation(), GetActorLocation())
+			> FMath::Square(TutorialPaintingLookDistance + 250.0f))
+	{
+		return;
+	}
+
+	CompleteTutorialStep(EHronoTutorialStep::FindPaintingAnomaly);
+}
+
+void AHronoCharacter::NotifyTutorialDosimeterFastBeep()
+{
+	if (TutorialStep != EHronoTutorialStep::DetectDosimeterAnomaly)
+	{
+		return;
+	}
+
+	if (HasAuthority())
+	{
+		ServerNotifyTutorialDosimeterFastBeep_Implementation();
+	}
+	else
+	{
+		ServerNotifyTutorialDosimeterFastBeep();
+	}
+}
+
+void AHronoCharacter::ServerNotifyTutorialDosimeterFastBeep_Implementation()
+{
+	if (!IsValid(Cast<ADozimetr>(CurrentHeldItem)))
+	{
+		return;
+	}
+
+	CompleteTutorialStep(EHronoTutorialStep::DetectDosimeterAnomaly);
 }
 
 void AHronoCharacter::UpdateRitualChairGuidance(float DeltaTime, bool bForceRefresh)
@@ -830,8 +1017,12 @@ void AHronoCharacter::UpdateRitualChairGuidance(float DeltaTime, bool bForceRefr
 			|| Chair->ItemTimeline == CharacterTimeline;
 		const bool bFreeChair = !Chair->bIsSit;
 		const bool bReservedForThisPlayer = !bIsSitting && Chair->GetSitter() == this;
+		const bool bCanSitHere = !IsValid(CurrentChair)
+			|| (bIsAtRitualPoint && Chair == ReservedRitualChair
+				&& CurrentChair == Chair && Chair->GetSitter() == this);
 		const bool bShouldHighlight = Chair->IsRitualGuidanceUnlocked()
 			&& !bIsSitting
+			&& bCanSitHere
 			&& bSameTimeline
 			&& !Chair->IsHidden()
 			&& (bFreeChair || bReservedForThisPlayer);
@@ -1121,8 +1312,6 @@ void AHronoCharacter::ServerPickupItem_Implementation(ABase_Item* Item)
 	PickupItem(Item);
 }
 
-#include "Ritual/TableRitualGate.h"
-
 void AHronoCharacter::OnRep_CurrentChair(AChair* PreviousChair)
 {
 	UpdateChairState(PreviousChair);
@@ -1224,19 +1413,29 @@ void AHronoCharacter::StandUp()
 	OnRep_CurrentChair(PreviousChair);
 }
 
-void AHronoCharacter::SitOnChair(AChair* Chair)
+bool AHronoCharacter::SitOnChair(AChair* Chair)
 {
 	if (!HasAuthority())
-		return;
+		return false;
 
 	if (!IsValid(Chair) || !TableRitualGate::CanUseChair(*Chair))
-		return;
+		return false;
+
+	// The victim still owns this chair while walking back from the bottle ritual.
+	// CurrentChair and the chair's occupied flag deliberately remain set during
+	// the teleport, so the ordinary free-chair path cannot handle the return.
+	if (bIsAtRitualPoint && !bIsSitting
+		&& CurrentChair == Chair && ReservedRitualChair == Chair
+		&& Chair->GetSitter() == this)
+	{
+		return ForceSitOnChair(Chair);
+	}
 
 	if (bIsSitting || CurrentChair)
-		return;
+		return false;
 
 	if (Chair->bIsSit)
-		return;
+		return false;
 
 	AChair* PreviousChair = CurrentChair;
 
@@ -1253,6 +1452,10 @@ void AHronoCharacter::SitOnChair(AChair* Chair)
 	// RepNotify is not called on the authority, so invoke it manually to keep the
 	// server (listen-server host) in sync with clients.
 	OnRep_CurrentChair(PreviousChair);
+	Chair->ForceNetUpdate();
+	ForceNetUpdate();
+	CompleteSeatedPlayersTutorial(GetWorld());
+	return true;
 }
 
 bool AHronoCharacter::ForceSitOnChair(AChair* Chair)
@@ -1306,6 +1509,7 @@ bool AHronoCharacter::ForceSitOnChair(AChair* Chair)
 	OnRep_CurrentChair(PreviousChair);
 	Chair->ForceNetUpdate();
 	ForceNetUpdate();
+	CompleteSeatedPlayersTutorial(GetWorld());
 	return true;
 }
 
@@ -1644,6 +1848,7 @@ void AHronoCharacter::ServerUnlockWithHeldKey_Implementation(ADrag_Item* Item)
 	Item->bNeedKeyActor = false;
 	Key->OnHeldStateChanged(false, this);
 	Key->Destroy();
+	CompleteTutorialStep(EHronoTutorialStep::UnlockOfficeDoor);
 	ForceNetUpdate();
 	Item->ForceNetUpdate();
 }
@@ -1865,6 +2070,7 @@ void AHronoCharacter::PickupItem(ABase_Item* Item)
 		if (AClock* Clock = Cast<AClock>(Item))
 		{
 			Clock->ResetClock(this);
+			CompleteTutorialStep(EHronoTutorialStep::InteractWithClock);
 		}
 		else
 		{
@@ -1872,7 +2078,14 @@ void AHronoCharacter::PickupItem(ABase_Item* Item)
 		}
 
 		UE_LOG(LogTemp, Log, TEXT("RESET"));
+		return;
+	}
 
+	// A chair is a world interaction, not an item carried in the player's hand.
+	// A returning ritual victim may still be holding an item when they sit down.
+	if (Cast<AChair>(Item))
+	{
+		Item->TryPickUp(this);
 		return;
 	}
 
@@ -1892,6 +2105,14 @@ void AHronoCharacter::PickupItem(ABase_Item* Item)
 	{
 		CurrentHeldItem = Item;
 		ForceNetUpdate();
+		if (ResolveTutorialItem(Item) == EHronoTutorialItem::Monocle)
+		{
+			CompleteTutorialStep(EHronoTutorialStep::PickUpMonocle);
+		}
+		else if (Item->ItemType == EItemType::Key)
+		{
+			CompleteTutorialStep(EHronoTutorialStep::PickUpKey);
+		}
 		if (IsLocallyControlled())
 		{
 			HandleHeldItemTutorial(Item);
@@ -1932,6 +2153,7 @@ void AHronoCharacter::EnsureTutorialWidget()
 		// widgets cannot intercept its navigation buttons.
 		TutorialWidget->AddToPlayerScreen(100000);
 		TutorialWidget->SetGameStageText(TutorialGameStageText);
+		ApplyTutorialStep(TutorialStep);
 		for (EHronoTutorialItem Item : TutorialPromptedItems)
 		{
 			TutorialWidget->SetItemDiscovered(Item);
@@ -2007,6 +2229,44 @@ void AHronoCharacter::SetTutorialGameStageText(const FText& NewStageText)
 		TutorialWidget->SetGameStageText(NewStageText);
 	}
 }
+
+void AHronoCharacter::ApplyTutorialStep(EHronoTutorialStep NewStep)
+{
+	if (!IsLocallyControlled())
+	{
+		return;
+	}
+
+	EnsureTutorialWidget();
+	if (TutorialWidget)
+	{
+		TutorialWidget->SetTodoText(GetTutorialStepText(NewStep));
+	}
+}
+
+bool AHronoCharacter::CompleteTutorialStep(EHronoTutorialStep CompletedStep)
+{
+	if (!HasAuthority()
+		|| TutorialStep == EHronoTutorialStep::Completed
+		|| CompletedStep != TutorialStep)
+	{
+		return false;
+	}
+
+	TutorialStep = static_cast<EHronoTutorialStep>(
+		FMath::Min(
+			static_cast<int32>(EHronoTutorialStep::Completed),
+			static_cast<int32>(TutorialStep) + 1));
+	OnRep_TutorialStep();
+	ForceNetUpdate();
+	return true;
+}
+
+void AHronoCharacter::OnRep_TutorialStep()
+{
+	ApplyTutorialStep(TutorialStep);
+}
+
 void AHronoCharacter::Server_InteractWithEnvironment_Implementation(AActor* InteractableActor)
 {
 	UE_LOG(LogTemp, Warning,

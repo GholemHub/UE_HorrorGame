@@ -10,6 +10,7 @@
 #include "Components/StaticMeshComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
 #include "Net/UnrealNetwork.h"
 
 namespace RunePentagramNames
@@ -351,6 +352,39 @@ void ARunePentagram::CheckPentagramCompletion(AHronoCharacter* PlayerWhoPlacedRu
 	// collision and same-timeline player visibility are updated together.
 	CompletingPlayer->SetPlayerTimeline(RequestedTimeline);
 	CompletingPlayerNewTimeline = CompletingPlayer->GetTimeline();
+
+	bool bAllPlayersShareTimeline = true;
+	int32 GameplayPlayerCount = 0;
+	EItemTimeline SharedTimeline = EItemTimeline::Both;
+	for (TActorIterator<AHronoCharacter> It(GetWorld()); It; ++It)
+	{
+		const AHronoCharacter* Character = *It;
+		if (!IsValid(Character) || !IsValid(Character->GetController()))
+		{
+			continue;
+		}
+
+		if (GameplayPlayerCount == 0)
+		{
+			SharedTimeline = Character->GetTimeline();
+		}
+		else if (Character->GetTimeline() != SharedTimeline)
+		{
+			bAllPlayersShareTimeline = false;
+		}
+		++GameplayPlayerCount;
+	}
+	if (bAllPlayersShareTimeline && GameplayPlayerCount > 0)
+	{
+		for (TActorIterator<AHronoCharacter> It(GetWorld()); It; ++It)
+		{
+			if (AHronoCharacter* Character = *It;
+				IsValid(Character) && IsValid(Character->GetController()))
+			{
+				Character->CompleteTutorialStep(EHronoTutorialStep::UnitePlayerTimelines);
+			}
+		}
+	}
 
 	bPentagramCompleted = true;
 	ForceNetUpdate();

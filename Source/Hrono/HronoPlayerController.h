@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/PlayerController.h"
+#include "TimerManager.h"
 #include "HronoPlayerController.generated.h"
 
 class UInputMappingContext;
@@ -23,6 +24,15 @@ public:
 
 	/** Constructor */
 	AHronoPlayerController();
+
+	/** Radio input and console diagnostics share the same local voice setup. */
+	UFUNCTION(Exec, BlueprintCallable, Category = "Voice|Radio")
+	void ToggleRadioTransmission();
+
+	UFUNCTION(Exec)
+	void HronoVoiceStatus();
+
+	virtual void SetPawn(APawn* InPawn) override;
 
 protected:
 
@@ -52,6 +62,21 @@ protected:
 	/** Input mapping context setup */
 	virtual void SetupInputComponent() override;
 
+	/** Always stop transmitting if the local controller is removed. */
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
 	/** Returns true if the player should use UMG touch controls */
 	bool ShouldUseTouchControls() const;
+
+	/** Validate the session and register the microphone owner before starting capture. */
+	bool PrepareRadioVoice();
+
+	/** Reapply the switch after Blueprint/session bootstrap and pawn replacement. */
+	void ApplyRadioTransmissionState();
+
+	/** Late client Blueprint voice setup can run after the first possession tick. */
+	FTimerHandle RadioBootstrapTimer;
+
+	/** The controller owns transmission state; pawn defaults may change on respawn. */
+	bool bRadioTransmissionEnabled = false;
 };

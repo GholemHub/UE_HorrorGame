@@ -74,6 +74,7 @@ public:
 	void SetRitualKinematic();
 	void SetRitualPhysics(bool bReverseGravity);
 	void RestoreNormalGravity();
+	void ReleaseFromFailedRitual();
 	void ExplodeFromRitual();
 	void StartRitualSound(bool bPlayStartSound);
 	void StopRitualSound(bool bPlayEndSound);

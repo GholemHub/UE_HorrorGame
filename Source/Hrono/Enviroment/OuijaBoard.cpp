@@ -8,6 +8,8 @@
 #include "Engine/World.h"
 #include "GameFramework/Controller.h"
 #include "GameFramework/Pawn.h"
+#include "HronoCharacter.h"
+#include "EngineUtils.h"
 #include "Net/UnrealNetwork.h"
 
 AOuijaBoard::AOuijaBoard()
@@ -346,6 +348,17 @@ FString AOuijaBoard::EnterTypedText()
 		OnRequiredWordAccepted.Broadcast(EnteredText);
 		BP_OnCorrectWordEntered(EnteredText);
 		ForceNetUpdate();
+	}
+	if (NormalizePuzzleWord(EnteredText).Equals(TEXT("leon"), ESearchCase::IgnoreCase))
+	{
+		for (TActorIterator<AHronoCharacter> It(GetWorld()); It; ++It)
+		{
+			if (AHronoCharacter* Character = *It;
+				IsValid(Character) && IsValid(Character->GetController()))
+			{
+				Character->CompleteTutorialStep(EHronoTutorialStep::EnterDemonName);
+			}
+		}
 	}
 
 	return EnteredText;

@@ -109,11 +109,10 @@ void AChair::Use_Implementation(AActor* Character)
 		return;
 	}
 
-    // bIsSit still reflects the state *before* this toggle, so play the sound
-    // matching the action the player is about to perform.
-    UGameplayStatics::PlaySoundAtLocation(this, bIsSit ? StandUpSound : SitSound, GetActorLocation());
-
-    Hrono->SitOnChair(this);
+	if (Hrono->SitOnChair(this))
+	{
+		UGameplayStatics::PlaySoundAtLocation(this, SitSound, GetActorLocation());
+	}
 }
 
 bool AChair::TryPickUp(AHronoCharacter* Character)

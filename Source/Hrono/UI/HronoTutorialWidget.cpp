@@ -1,4 +1,4 @@
-#include "UI/HronoTutorialWidget.h"
+ #include "UI/HronoTutorialWidget.h"
 
 #include "Blueprint/WidgetTree.h"
 #include "Brushes/SlateColorBrush.h"
@@ -25,9 +25,11 @@
 #include "ImageUtils.h"
 #include "InputCoreTypes.h"
 #include "Kismet/GameplayStatics.h"
+#include "Layout/WidgetPath.h"
 #include "Misc/Paths.h"
 #include "TimerManager.h"
 #include "UObject/ConstructorHelpers.h"
+#include "Widgets/SWindow.h"
 
 namespace HronoTutorial
 {
@@ -65,7 +67,8 @@ namespace HronoTutorial
 		virtual bool HandleKeyDownEvent(FSlateApplication& SlateApp, const FKeyEvent& InKeyEvent) override
 		{
 			UHronoTutorialWidget* TutorialWidget = Widget.Get();
-			if (TutorialWidget && TutorialWidget->IsMenuOpen()
+			const TSharedPtr<SWindow> MenuWindow = GetMenuWindow(SlateApp);
+			if (MenuWindow.IsValid() && MenuWindow == SlateApp.GetActiveTopLevelWindow()
 				&& (InKeyEvent.GetKey() == EKeys::Tab || InKeyEvent.GetKey() == EKeys::Escape))
 			{
 				TutorialWidget->CloseMenu();
@@ -78,7 +81,8 @@ namespace HronoTutorial
 			FSlateApplication& SlateApp, const FPointerEvent& MouseEvent) override
 		{
 			UHronoTutorialWidget* TutorialWidget = Widget.Get();
-			bMouseDownConsumed = TutorialWidget && TutorialWidget->HandleMenuMouseButtonDown(MouseEvent);
+			bMouseDownConsumed = IsPointerInMenuWindow(SlateApp, MouseEvent)
+				&& TutorialWidget->HandleMenuMouseButtonDown(MouseEvent);
 			return bMouseDownConsumed;
 		}
 
@@ -98,7 +102,8 @@ namespace HronoTutorial
 			const FPointerEvent* InGestureEvent) override
 		{
 			UHronoTutorialWidget* TutorialWidget = Widget.Get();
-			return TutorialWidget && TutorialWidget->HandleMenuMouseWheel(InWheelEvent);
+			return IsPointerInMenuWindow(SlateApp, InWheelEvent)
+				&& TutorialWidget->HandleMenuMouseWheel(InWheelEvent);
 		}
 
 		virtual const TCHAR* GetDebugName() const override
@@ -107,17 +112,117 @@ namespace HronoTutorial
 		}
 
 	private:
+		TSharedPtr<SWindow> GetMenuWindow(FSlateApplication& SlateApp) const
+		{
+			UHronoTutorialWidget* TutorialWidget = Widget.Get();
+			return TutorialWidget && TutorialWidget->IsMenuOpen()
+				? SlateApp.FindWidgetWindow(TutorialWidget->TakeWidget())
+				: nullptr;
+		}
+
+		bool IsPointerInMenuWindow(FSlateApplication& SlateApp, const FPointerEvent& MouseEvent) const
+		{
+			const TSharedPtr<SWindow> MenuWindow = GetMenuWindow(SlateApp);
+			if (!MenuWindow.IsValid())
+			{
+				return false;
+			}
+			const FWidgetPath PointerPath = SlateApp.LocateWindowUnderMouse(
+				MouseEvent.GetScreenSpacePosition(),
+				SlateApp.GetInteractiveTopLevelWindows(), true, MouseEvent.GetUserIndex());
+			return PointerPath.IsValid() && PointerPath.GetWindow() == MenuWindow.ToSharedRef();
+		}
+
 		TWeakObjectPtr<UHronoTutorialWidget> Widget;
 		bool bMouseDownConsumed = false;
 	};
 
-	FTutorialPage GetPage(EHronoTutorialItem Item)
+	FText LocalizedText(bool bPolish, const FText& English, const TCHAR* Polish)
 	{
+		return bPolish ? FText::FromString(Polish) : English;
+	}
+
+	FTutorialPage GetPage(EHronoTutorialItem Item, bool bPolish = false)
+	{
+		if (bPolish)
+		{
+			FTutorialPage Page = GetPage(Item);
+			switch (Item)
+			{
+			case EHronoTutorialItem::Dosimeter:
+				Page.Title = FText::FromString(TEXT("Dozymetr"));
+				Page.Description = FText::FromString(TEXT(
+					"Każdy gracz musi przeszukać ten sam pokój swoim dozymetrem. Podążajcie za rosnącymi odczytami "
+					"i coraz szybszym klikaniem, aż oba urządzenia wskażą to samo miejsce.\n\n"
+					"✓ POTWIERDZONY DOWÓD\n"
+					"Jeśli oba dozymetry silnie reagują w tym samym miejscu, dowód jest potwierdzony.\n\n"
+					"✗ TO NIE JEST DOWÓD\n"
+					"Jeśli reaguje tylko jeden dozymetr lub urządzenia wskazują różne miejsca, nie jest to dowód. Szukajcie dalej razem."));
+				break;
+			case EHronoTutorialItem::Clock:
+				Page.Title = FText::FromString(TEXT("Zegar"));
+				Page.Description = FText::FromString(TEXT(
+					"Każdy gracz musi zbadać zegar w tym samym pokoju we własnej linii czasu. Porównajcie zachowanie obu zegarów.\n\n"
+					"✓ POTWIERDZONY DOWÓD\n"
+					"Jeśli oba zegary zachowują się nietypowo — na przykład ich wskazówki szybko się obracają lub poruszają chaotycznie — dowód jest potwierdzony.\n\n"
+					"✗ TO NIE JEST DOWÓD\n"
+					"Jeśli tylko jeden zegar zachowuje się nietypowo, a drugi działa normalnie, nie jest to dowód. Sprawdźcie inną parę zegarów."));
+				break;
+			case EHronoTutorialItem::Skull:
+				Page.Title = FText::FromString(TEXT("Czaszka"));
+				Page.Description = FText::FromString(TEXT(
+					"1. Każdy gracz musi znaleźć czaszkę we własnej linii czasu.\n"
+					"2. Przynieście obie czaszki do pokoju, który uważacie za przeklęty.\n"
+					"3. Umieśćcie czaszki obok siebie i rozpocznijcie rytuał.\n"
+					"4. Jeśli między czaszkami pojawi się klucz, rytuał się powiódł i wybraliście właściwy pokój.\n"
+					"5. Jeśli klucz się nie pojawi, pokój jest niewłaściwy. Zabierzcie czaszki i spróbujcie ponownie w innym pokoju."));
+				break;
+			case EHronoTutorialItem::TableRitual:
+				Page.Title = FText::FromString(TEXT("Tablica Ouija"));
+				Page.Description = FText::FromString(TEXT(
+					"1. Podnieś przeklęty obraz, aby poznać zasady rytuału.\n"
+					"2. Usiądź przy stole przed tablicą Ouija.\n"
+					"3. Użyj tablicy Ouija, aby wpisać imię demona, litera po literze.\n"
+					"4. Wpisz poprawne imię, aby ukończyć rytuał i wypędzić demona.\n\n"
+					"Powodzenia!"));
+				break;
+			case EHronoTutorialItem::Mirror:
+				Page.Title = FText::FromString(TEXT("Lustro"));
+				Page.Description = FText::FromString(TEXT(
+					"1. Podejdź do lustra, trzymając przedmiot, który chcesz przekazać.\n"
+					"2. Zbliż przedmiot do powierzchni lustra.\n"
+					"3. Twój partner musi stanąć po drugiej stronie lustra.\n"
+					"4. Drugi gracz może podnieść przedmiot przez lustro i przenieść go do swojej linii czasu.\n\n"
+					"Używajcie luster, aby wymieniać ważne przedmioty i pomagać sobie w rozwiązywaniu zagadek."));
+				break;
+			case EHronoTutorialItem::Axe:
+				Page.Title = FText::FromString(TEXT("Siekiera"));
+				Page.Subtitle = FText::FromString(TEXT("ROZBIJ BARYKADĘ"));
+				Page.Description = FText::FromString(TEXT(
+					"Siekiera rozbija drewniane deski blokujące drzwi. Trzymaj siekierę, wyceluj w deskę i użyj interakcji. "
+					"Każde celne uderzenie uszkadza przeszkodę, aż przejście zostanie odblokowane."));
+				Page.Controls = FText::FromString(TEXT("WYCELUJ W DESKĘ  •  NACIŚNIJ PRZYCISK INTERAKCJI, ABY UDERZYĆ"));
+				break;
+			case EHronoTutorialItem::Monocle:
+			default:
+				Page.Title = FText::FromString(TEXT("Monokl"));
+				Page.Description = FText::FromString(TEXT(
+					"Każdy gracz musi użyć monokla, aby zbadać ten sam obraz we własnej linii czasu. "
+					"Utrzymuj obraz w polu widzenia monokla i powiedz partnerowi, co widzisz.\n\n"
+					"✓ POTWIERDZONY DOWÓD\n"
+					"Jeśli obaj gracze widzą tę samą anomalię — na przykład świecące białe oczy — dowód jest potwierdzony.\n\n"
+					"✗ TO NIE JEST DOWÓD\n"
+					"Jeśli tylko jeden gracz widzi anomalię, a drugi widzi zwykły obraz, nie jest to dowód. "
+					"Szukajcie dalej i wspólnie zbadajcie inny obraz."));
+				break;
+			}
+			return Page;
+		}
 		switch (Item)
 		{
 		case EHronoTutorialItem::Dosimeter:
 			return {
-				NSLOCTEXT("HronoTutorial", "DosimeterTitle", "HOW TO USE THE DOSIMETER"),
+				NSLOCTEXT("HronoTutorial", "DosimeterTitle", "Dosimetr"),
 				FText::GetEmpty(),
 				NSLOCTEXT("HronoTutorial", "DosimeterDescription",
 					"Each player must search the same room with their dosimeter. Follow the increasing readings "
@@ -131,7 +236,7 @@ namespace HronoTutorial
 				nullptr };
 		case EHronoTutorialItem::Clock:
 			return {
-				NSLOCTEXT("HronoTutorial", "ClockTitle", "HOW TO CHECK THE CLOCKS"),
+				NSLOCTEXT("HronoTutorial", "ClockTitle", "Clock"),
 				FText::GetEmpty(),
 				NSLOCTEXT("HronoTutorial", "ClockDescription",
 					"Each player must examine the clock in the same room within their own timeline. Compare how "
@@ -146,7 +251,7 @@ namespace HronoTutorial
 				nullptr };
 		case EHronoTutorialItem::Skull:
 			return {
-				NSLOCTEXT("HronoTutorial", "SkullTitle", "HOW TO PERFORM THE SKULL RITUAL"),
+				NSLOCTEXT("HronoTutorial", "SkullTitle", "Skull"),
 				FText::GetEmpty(),
 				NSLOCTEXT("HronoTutorial", "SkullDescription",
 					"1. Each player must find a skull in their own timeline.\n"
@@ -158,7 +263,7 @@ namespace HronoTutorial
 				nullptr };
 		case EHronoTutorialItem::TableRitual:
 			return {
-				NSLOCTEXT("HronoTutorial", "TableRitualTitle", "HOW TO BANISH THE DEMON"),
+				NSLOCTEXT("HronoTutorial", "TableRitualTitle", "Ouija Board"),
 				FText::GetEmpty(),
 				NSLOCTEXT("HronoTutorial", "TableRitualDescription",
 					"1. Pick up the cursed image to see the ritual rools.\n"
@@ -170,7 +275,7 @@ namespace HronoTutorial
 				nullptr };
 		case EHronoTutorialItem::Mirror:
 			return {
-				NSLOCTEXT("HronoTutorial", "MirrorTitle", "HOW TO PASS ITEMS THROUGH A MIRROR"),
+				NSLOCTEXT("HronoTutorial", "MirrorTitle", "Mirror"),
 				FText::GetEmpty(),
 				NSLOCTEXT("HronoTutorial", "MirrorDescription",
 					"1. Approach the mirror while holding the item you want to transfer.\n"
@@ -182,7 +287,7 @@ namespace HronoTutorial
 				nullptr };
 		case EHronoTutorialItem::Axe:
 			return {
-				NSLOCTEXT("HronoTutorial", "AxeTitle", "AXE"),
+				NSLOCTEXT("HronoTutorial", "AxeTitle", "Axe"),
 				NSLOCTEXT("HronoTutorial", "AxeSubtitle", "BREAK THE BARRICADE"),
 				NSLOCTEXT("HronoTutorial", "AxeDescription",
 					"The axe breaks wooden boards that barricade doors. Hold the axe, aim at a board, "
@@ -192,7 +297,7 @@ namespace HronoTutorial
 		case EHronoTutorialItem::Monocle:
 		default:
 			return {
-				NSLOCTEXT("HronoTutorial", "MonocleTitle", "HOW TO USE THE MONOCLE"),
+				NSLOCTEXT("HronoTutorial", "MonocleTitle", "Monocle"),
 				FText::GetEmpty(),
 				NSLOCTEXT("HronoTutorial", "MonocleDescription",
 					"Each player must use their monocle to examine the same painting in their own timeline. "
@@ -254,9 +359,9 @@ namespace HronoTutorial
 		return Button;
 	}
 
-	FText ItemName(EHronoTutorialItem Item)
+	FText ItemName(EHronoTutorialItem Item, bool bPolish)
 	{
-		return GetPage(Item).Title;
+		return GetPage(Item, bPolish).Title;
 	}
 }
 
@@ -336,7 +441,8 @@ void UHronoTutorialWidget::NativeConstruct()
 	BindButtons();
 	SetVisibility(ESlateVisibility::SelfHitTestInvisible);
 	SetGameStageText(NSLOCTEXT("HronoTutorial", "DefaultStage", "STAGE  •  INVESTIGATION"));
-	SelectTutorial(SelectedItem);
+	SetTodoText(CurrentTodoText);
+	RefreshLanguage();
 }
 
 void UHronoTutorialWidget::NativeDestruct()
@@ -405,6 +511,7 @@ bool UHronoTutorialWidget::HandleMenuMouseButtonDown(const FPointerEvent& MouseE
 	const bool bMirrorHit = WasClicked(MirrorButton);
 	const bool bAxeHit = WasClicked(AxeButton);
 	const bool bCloseHit = WasClicked(CloseButton);
+	const bool bLanguageHit = WasClicked(LanguageButton);
 
 	UButton* NewFocus = nullptr;
 	if (bMonocleHit)
@@ -441,6 +548,11 @@ bool UHronoTutorialWidget::HandleMenuMouseButtonDown(const FPointerEvent& MouseE
 	{
 		SelectTutorial(EHronoTutorialItem::Axe);
 		NewFocus = AxeButton;
+	}
+	else if (bLanguageHit)
+	{
+		HandleLanguageClicked();
+		NewFocus = LanguageButton;
 	}
 	else if (bCloseHit)
 	{
@@ -556,9 +668,9 @@ void UHronoTutorialWidget::BuildWidgetTree()
 	UVerticalBox* NavigationBox = WidgetTree->ConstructWidget<UVerticalBox>();
 	NavigationSize->AddChild(NavigationBox);
 
-	UTextBlock* JournalTitle = MakeText(
+	JournalTitleText = MakeText(
 		WidgetTree, NSLOCTEXT("HronoTutorial", "JournalTitle", "FIELD JOURNAL"), 28, Accent);
-	if (UVerticalBoxSlot* LayoutSlot = NavigationBox->AddChildToVerticalBox(JournalTitle))
+	if (UVerticalBoxSlot* LayoutSlot = NavigationBox->AddChildToVerticalBox(JournalTitleText))
 	{
 		LayoutSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 6.0f));
 	}
@@ -600,16 +712,18 @@ void UHronoTutorialWidget::BuildWidgetTree()
 	MirrorButton = MakeNavigationButton(WidgetTree, NavigationPages, FText::GetEmpty(), TEXT("MirrorButton"));
 	AxeButton = MakeNavigationButton(WidgetTree, NavigationPages, FText::GetEmpty(), TEXT("AxeButton"));
 
-	UTextBlock* NavigationHint = MakeText(
+	NavigationHintText = MakeText(
 		WidgetTree,
 		NSLOCTEXT("HronoTutorial", "NavigationHint", "Select any item to review its tutorial."),
 		14, TextMuted);
-	if (UVerticalBoxSlot* LayoutSlot = NavigationBox->AddChildToVerticalBox(NavigationHint))
+	if (UVerticalBoxSlot* LayoutSlot = NavigationBox->AddChildToVerticalBox(NavigationHintText))
 	{
 		LayoutSlot->SetSize(FSlateChildSize(ESlateSizeRule::Automatic));
 		LayoutSlot->SetPadding(FMargin(0.0f, 4.0f, 0.0f, 12.0f));
 	}
 
+	LanguageButton = MakeNavigationButton(
+		WidgetTree, NavigationBox, FText::FromString(TEXT("Polski")), TEXT("LanguageButton"));
 	CloseButton = MakeNavigationButton(
 		WidgetTree, NavigationBox, NSLOCTEXT("HronoTutorial", "Close", "CLOSE  [TAB / ESC]"), TEXT("CloseButton"));
 
@@ -718,6 +832,23 @@ void UHronoTutorialWidget::BuildWidgetTree()
 	PickupPromptText = MakeText(WidgetTree, FText::GetEmpty(), 19, TextPrimary);
 	PickupPromptText->SetJustification(ETextJustify::Center);
 	PickupPrompt->AddChild(PickupPromptText);
+
+	TodoBorder = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("TutorialTodo"));
+	TodoBorder->SetBrushColor(FLinearColor(0.01f, 0.012f, 0.014f, 0.88f));
+	TodoBorder->SetPadding(FMargin(22.4f, 10.4f));
+	TodoBorder->SetVisibility(ESlateVisibility::HitTestInvisible);
+	if (UOverlaySlot* LayoutSlot = Root->AddChildToOverlay(TodoBorder))
+	{
+		LayoutSlot->SetHorizontalAlignment(HAlign_Center);
+		LayoutSlot->SetVerticalAlignment(VAlign_Bottom);
+		LayoutSlot->SetPadding(FMargin(32.0f, 0.0f, 32.0f, 52.0f));
+	}
+
+	TodoText = MakeText(WidgetTree, FText::GetEmpty(), 16, TextPrimary);
+	TodoText->SetJustification(ETextJustify::Center);
+	TodoText->SetAutoWrapText(true);
+	TodoText->SetWrapTextAt(800.0f);
+	TodoBorder->AddChild(TodoText);
 }
 
 void UHronoTutorialWidget::BindButtons()
@@ -733,6 +864,7 @@ void UHronoTutorialWidget::BindButtons()
 	if (MirrorButton) MirrorButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleMirrorClicked);
 	if (AxeButton) AxeButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleAxeClicked);
 	if (CloseButton) CloseButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleCloseClicked);
+	if (LanguageButton) LanguageButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleLanguageClicked);
 }
 
 void UHronoTutorialWidget::ShowPickupPrompt(EHronoTutorialItem Item)
@@ -747,7 +879,8 @@ void UHronoTutorialWidget::ShowPickupPrompt(EHronoTutorialItem Item)
 	if (PickupPromptText)
 	{
 		PickupPromptText->SetText(
-			NSLOCTEXT("HronoTutorial", "PickupPrompt", "Press Tab to read more"));
+			HronoTutorial::LocalizedText(bPolishLanguage,
+				NSLOCTEXT("HronoTutorial", "PickupPrompt", "Press Tab to read more"), TEXT("Naciśnij Tab, aby dowiedzieć się więcej")));
 	}
 	if (PickupPrompt)
 	{
@@ -774,11 +907,29 @@ void UHronoTutorialWidget::SetItemDiscovered(EHronoTutorialItem Item, bool bDisc
 
 void UHronoTutorialWidget::SetGameStageText(const FText& NewStageText)
 {
+	CurrentStageText = NewStageText;
 	if (StageText)
 	{
-		StageText->SetText(NewStageText.IsEmpty()
-			? NSLOCTEXT("HronoTutorial", "DefaultStage", "STAGE  •  INVESTIGATION")
+		StageText->SetText(NewStageText.IsEmpty() || NewStageText.ToString() == TEXT("STAGE  •  INVESTIGATION")
+			? HronoTutorial::LocalizedText(bPolishLanguage,
+				NSLOCTEXT("HronoTutorial", "DefaultStage", "STAGE  •  INVESTIGATION"), TEXT("ETAP  •  ŚLEDZTWO"))
 			: NewStageText);
+	}
+}
+
+void UHronoTutorialWidget::SetTodoText(const FText& NewTodoText)
+{
+	CurrentTodoText = NewTodoText;
+	if (TodoText)
+	{
+		TodoText->SetText(NewTodoText);
+	}
+	if (TodoBorder)
+	{
+		TodoBorder->SetVisibility(
+			NewTodoText.IsEmpty() || bMenuOpen
+				? ESlateVisibility::Collapsed
+				: ESlateVisibility::HitTestInvisible);
 	}
 }
 
@@ -817,13 +968,19 @@ void UHronoTutorialWidget::OpenMenu(EHronoTutorialItem Item)
 	SetIsEnabled(true);
 	SetVisibility(ESlateVisibility::SelfHitTestInvisible);
 	bMenuOpen = true;
+	if (TodoBorder)
+	{
+		TodoBorder->SetVisibility(ESlateVisibility::Collapsed);
+	}
 	RegisterMenuInputPreProcessor();
 	if (APlayerController* Controller = GetOwningPlayer())
 	{
 		bPreviousMouseCursor = Controller->bShowMouseCursor;
 		bPreviousClickEvents = Controller->bEnableClickEvents;
 		bPreviousMouseOverEvents = Controller->bEnableMouseOverEvents;
-		if (!UGameplayStatics::IsGamePaused(this))
+		// Pausing a listen server also pauses the client's world. The journal is
+		// local UI in multiplayer; only standalone play may pause the game.
+		if (Controller->GetNetMode() == NM_Standalone && !UGameplayStatics::IsGamePaused(this))
 		{
 			bOwnsGamePause = Controller->SetPause(true);
 		}
@@ -867,6 +1024,10 @@ void UHronoTutorialWidget::CloseMenu()
 	}
 	UnregisterMenuInputPreProcessor();
 	bMenuOpen = false;
+	if (TodoBorder && !CurrentTodoText.IsEmpty())
+	{
+		TodoBorder->SetVisibility(ESlateVisibility::HitTestInvisible);
+	}
 	if (APlayerController* Controller = GetOwningPlayer())
 	{
 		if (bOwnsGamePause)
@@ -916,7 +1077,7 @@ void UHronoTutorialWidget::SelectTutorial(EHronoTutorialItem Item)
 		Item = EHronoTutorialItem::Monocle;
 	}
 	SelectedItem = Item;
-	const HronoTutorial::FTutorialPage Page = HronoTutorial::GetPage(Item);
+	const HronoTutorial::FTutorialPage Page = HronoTutorial::GetPage(Item, bPolishLanguage);
 	if (ItemTitleText) ItemTitleText->SetText(Page.Title);
 	if (ItemSubtitleText) ItemSubtitleText->SetText(Page.Subtitle);
 	if (ItemDescriptionText) ItemDescriptionText->SetText(Page.Description);
@@ -1003,7 +1164,8 @@ void UHronoTutorialWidget::SelectTutorial(EHronoTutorialItem Item)
 		if (SecondaryTutorialImage) SecondaryTutorialImage->SetVisibility(ESlateVisibility::Collapsed);
 		if (MissingImageText)
 		{
-			MissingImageText->SetText(NSLOCTEXT("HronoTutorial", "MissingImage", "FIELD ILLUSTRATION UNAVAILABLE"));
+			MissingImageText->SetText(HronoTutorial::LocalizedText(bPolishLanguage,
+				NSLOCTEXT("HronoTutorial", "MissingImage", "FIELD ILLUSTRATION UNAVAILABLE"), TEXT("ILUSTRACJA NIEDOSTĘPNA")));
 			MissingImageText->SetVisibility(ESlateVisibility::HitTestInvisible);
 		}
 	}
@@ -1015,7 +1177,8 @@ void UHronoTutorialWidget::RefreshNavigation()
 	if (CollectionText)
 	{
 		CollectionText->SetText(FText::Format(
-			NSLOCTEXT("HronoTutorial", "CollectionProgress", "EQUIPMENT FOUND  •  {0} / {1}"),
+			HronoTutorial::LocalizedText(bPolishLanguage,
+				NSLOCTEXT("HronoTutorial", "CollectionProgress", "EQUIPMENT FOUND  •  {0} / {1}"), TEXT("ZNALEZIONY EKWIPUNEK  •  {0} / {1}")),
 			FText::AsNumber(DiscoveredItems.Num()), FText::AsNumber(HronoTutorial::TutorialCount)));
 	}
 
@@ -1026,7 +1189,7 @@ void UHronoTutorialWidget::RefreshNavigation()
 		Button->SetVisibility(ESlateVisibility::Visible);
 		if (UTextBlock* Label = Cast<UTextBlock>(Button->GetContent()))
 		{
-			Label->SetText(HronoTutorial::ItemName(Item));
+			Label->SetText(HronoTutorial::ItemName(Item, bPolishLanguage));
 			Label->SetColorAndOpacity(FSlateColor(
 				Item == SelectedItem ? HronoTutorial::Accent : HronoTutorial::TextPrimary));
 		}
@@ -1041,6 +1204,41 @@ void UHronoTutorialWidget::RefreshNavigation()
 	RefreshButton(TableRitualButton, EHronoTutorialItem::TableRitual);
 	RefreshButton(MirrorButton, EHronoTutorialItem::Mirror);
 	RefreshButton(AxeButton, EHronoTutorialItem::Axe);
+}
+
+void UHronoTutorialWidget::RefreshLanguage()
+{
+	using namespace HronoTutorial;
+	if (JournalTitleText) JournalTitleText->SetText(LocalizedText(bPolishLanguage,
+		NSLOCTEXT("HronoTutorial", "JournalTitle", "FIELD JOURNAL"), TEXT("DZIENNIK TERENOWY")));
+	if (NavigationHintText) NavigationHintText->SetText(LocalizedText(bPolishLanguage,
+		NSLOCTEXT("HronoTutorial", "NavigationHint", "Select any item to review its tutorial."),
+		TEXT("Wybierz przedmiot, aby przeczytać instrukcję.")));
+	if (CloseButton)
+	{
+		if (UTextBlock* Label = Cast<UTextBlock>(CloseButton->GetContent()))
+			Label->SetText(LocalizedText(bPolishLanguage,
+				NSLOCTEXT("HronoTutorial", "Close", "CLOSE  [TAB / ESC]"), TEXT("ZAMKNIJ  [TAB / ESC]")));
+	}
+	if (LanguageButton)
+	{
+		if (UTextBlock* Label = Cast<UTextBlock>(LanguageButton->GetContent()))
+			Label->SetText(FText::FromString(bPolishLanguage ? TEXT("English") : TEXT("Polski")));
+	}
+	if (PickupPromptText) PickupPromptText->SetText(LocalizedText(bPolishLanguage,
+		NSLOCTEXT("HronoTutorial", "PickupPrompt", "Press Tab to read more"), TEXT("Naciśnij Tab, aby dowiedzieć się więcej")));
+	if (MissingImageText) MissingImageText->SetText(LocalizedText(bPolishLanguage,
+		NSLOCTEXT("HronoTutorial", "MissingImage", "FIELD ILLUSTRATION UNAVAILABLE"), TEXT("ILUSTRACJA NIEDOSTĘPNA")));
+	SetGameStageText(CurrentStageText);
+	const float ScrollOffset = DescriptionScroll ? DescriptionScroll->GetScrollOffset() : 0.0f;
+	SelectTutorial(SelectedItem);
+	if (DescriptionScroll) DescriptionScroll->SetScrollOffset(ScrollOffset);
+}
+
+void UHronoTutorialWidget::HandleLanguageClicked()
+{
+	bPolishLanguage = !bPolishLanguage;
+	RefreshLanguage();
 }
 
 void UHronoTutorialWidget::HidePickupPrompt()

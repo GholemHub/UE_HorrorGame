@@ -17,3 +17,20 @@ enum class EHronoTutorialItem : uint8
 	TableRitual UMETA(DisplayName = "Table Ritual"),
 	Mirror UMETA(DisplayName = "Mirror")
 };
+
+/** Ordered, server-authoritative objectives shown by the bottom-screen tutorial todo. */
+UENUM(BlueprintType)
+enum class EHronoTutorialStep : uint8
+{
+	PickUpMonocle UMETA(DisplayName = "Pick Up Monocle"),
+	FindPaintingAnomaly UMETA(DisplayName = "Find Painting Anomaly"),
+	InteractWithClock UMETA(DisplayName = "Interact With Clock"),
+	DetectDosimeterAnomaly UMETA(DisplayName = "Detect Dosimeter Anomaly"),
+	StartCorrectRoomRitual UMETA(DisplayName = "Start Correct Room Ritual"),
+	PickUpKey UMETA(DisplayName = "Pick Up Key"),
+	UnlockOfficeDoor UMETA(DisplayName = "Unlock Office Door"),
+	SeatAllPlayers UMETA(DisplayName = "Seat All Players"),
+	EnterDemonName UMETA(DisplayName = "Enter Demon Name"),
+	UnitePlayerTimelines UMETA(DisplayName = "Unite Player Timelines"),
+	Completed UMETA(DisplayName = "Completed")
+};
