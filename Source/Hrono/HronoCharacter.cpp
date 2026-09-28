@@ -1,6 +1,12 @@
 ﻿// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "HronoCharacter.h"
+#include "Audio/HronoAudioPolicy.h"
+#include "PhysicalMaterials/PhysicalMaterial.h"
+#include "Sound/SoundAttenuation.h"
+#include "UObject/ConstructorHelpers.h"
+#include "HronoPlayerController.h"
+#include "Items/HidingWardrobe.h"
 #include "HronoCollisionChannels.h"
 #include "EngineUtils.h"
 #include "Animation/AnimInstance.h"
@@ -25,6 +31,7 @@
 #include "Materials/MaterialInterface.h"
 #include "Engine/Engine.h"
 #include "Enviroment/PlayerVisibilityZone.h"
+#include "Enviroment/OuijaBoard.h"
 #include "Kismet/GameplayStatics.h"
 #include "Sound/SoundBase.h"
 #include "UI/HronoMenuSettingsSaveGame.h"
@@ -124,7 +131,73 @@ void AHronoCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutL
 	DOREPLIFETIME_CONDITION(AHronoCharacter, TutorialStep, COND_OwnerOnly);
 }
 
+void AHronoCharacter::NotifyVoiceReceiverReady()
+{
+	bVoiceReceiverConfigured = true;
+	if (AHronoPlayerController* RadioController = Cast<AHronoPlayerController>(GetController()))
+	{
+		RadioController->NotifyVoiceReceiverReady(this);
+	}
+}
+
 void AHronoCharacter::SetSafeInHidingWardrobe(bool bNewSafe)
+{
+	// Compatibility wrapper. Protection is derived from actual registered volumes.
+	RefreshWardrobeSafetySources();
+}
+
+void AHronoCharacter::UpdateWardrobeSafetySource(AHidingWardrobe* Source, bool bInside)
+{
+	if (!HasAuthority() || IsActorBeingDestroyed() || !Source) return;
+	if (bInside && IsValid(Source) && Source->IsCharacterInsideSafetyVolume(this))
+	{
+		WardrobeSafetySources.Add(Source);
+		Source->OnDestroyed.AddUniqueDynamic(this, &AHronoCharacter::OnWardrobeSafetySourceDestroyed);
+	}
+	else
+	{
+		WardrobeSafetySources.Remove(Source);
+		if (IsValid(Source)) Source->OnDestroyed.RemoveDynamic(this, &AHronoCharacter::OnWardrobeSafetySourceDestroyed);
+	}
+	RefreshWardrobeSafetySources();
+}
+
+void AHronoCharacter::OnWardrobeSafetySourceDestroyed(AActor* DestroyedActor)
+{
+	UpdateWardrobeSafetySource(Cast<AHidingWardrobe>(DestroyedActor), false);
+}
+
+void AHronoCharacter::RefreshWardrobeSafetySources()
+{
+	if (!HasAuthority() || IsActorBeingDestroyed() || bApplyingTimelineTransition) return;
+	if (bRefreshingWardrobeSafetySources)
+	{
+		bWardrobeSafetyRefreshPending = true;
+		return;
+	}
+	TGuardValue<bool> RefreshGuard(bRefreshingWardrobeSafetySources, true);
+	do
+	{
+		bWardrobeSafetyRefreshPending = false;
+		bool bAnySourceSafe = false;
+		for (auto It = WardrobeSafetySources.CreateIterator(); It; ++It)
+		{
+			AHidingWardrobe* Source = It->Get();
+			if (!IsValid(Source) || !Source->IsCharacterInsideSafetyVolume(this))
+			{
+				if (IsValid(Source)) Source->OnDestroyed.RemoveDynamic(this, &AHronoCharacter::OnWardrobeSafetySourceDestroyed);
+				It.RemoveCurrent();
+				continue;
+			}
+			bAnySourceSafe |= Source->CanProvideSafetyFor(this);
+		}
+		ApplyDerivedWardrobeSafety(bAnySourceSafe);
+		// Delegate callbacks can remove a source. Recompute after dispatch, not
+		// recursively while a prior notification is still being delivered.
+	} while (bWardrobeSafetyRefreshPending && !IsActorBeingDestroyed());
+}
+
+void AHronoCharacter::ApplyDerivedWardrobeSafety(bool bNewSafe)
 {
 	if (!HasAuthority() || bIsSafeInHidingWardrobe == bNewSafe)
 	{
@@ -152,6 +225,28 @@ void AHronoCharacter::OnRep_IsSafeInHidingWardrobe(bool bPreviousSafe)
 AHronoCharacter::AHronoCharacter()
 {
 	PrimaryActorTick.bCanEverTick = true;
+	static ConstructorHelpers::FObjectFinder<USoundBase> WoodStep(
+		TEXT("/Game/HorrorEngine/Audio/Footsteps/S_FT_Wood_Cue.S_FT_Wood_Cue"));
+	static ConstructorHelpers::FObjectFinder<USoundBase> WoodJump(
+		TEXT("/Game/HorrorEngine/Audio/Footsteps/S_FT_Wood_Jump_Cue.S_FT_Wood_Jump_Cue"));
+	static ConstructorHelpers::FObjectFinder<USoundBase> RockStep(
+		TEXT("/Game/HorrorEngine/Audio/Footsteps/S_FT_Rock_Cue.S_FT_Rock_Cue"));
+	static ConstructorHelpers::FObjectFinder<USoundBase> GrassStep(
+		TEXT("/Game/HorrorEngine/Audio/Footsteps/S_FT_Grass_Cue.S_FT_Grass_Cue"));
+	static ConstructorHelpers::FObjectFinder<USoundBase> MetalStep(
+		TEXT("/Game/HorrorEngine/Audio/Footsteps/S_FT_Metal_Cue.S_FT_Metal_Cue"));
+	static ConstructorHelpers::FObjectFinder<USoundBase> CarpetStep(
+		TEXT("/Game/HorrorEngine/Audio/Footsteps/S_FT_Carpet_Cue.S_FT_Carpet_Cue"));
+	static ConstructorHelpers::FObjectFinder<USoundAttenuation> GeneralAttenuation(
+		TEXT("/Game/HorrorEngine/Audio/_SoundSettings/ATT_General.ATT_General"));
+	NativeFootstepFallback = WoodStep.Object;
+	NativeJumpFallback = WoodJump.Object;
+	NativeSurfaceFootstepFallbacks.Add(SurfaceType1, WoodStep.Object);
+	NativeSurfaceFootstepFallbacks.Add(SurfaceType2, RockStep.Object);
+	NativeSurfaceFootstepFallbacks.Add(SurfaceType3, GrassStep.Object);
+	NativeSurfaceFootstepFallbacks.Add(SurfaceType4, MetalStep.Object);
+	NativeSurfaceFootstepFallbacks.Add(SurfaceType5, CarpetStep.Object);
+	MovementSoundAttenuation = GeneralAttenuation.Object;
 	TutorialGameStageText = NSLOCTEXT("HronoTutorial", "CharacterDefaultStage", "STAGE  •  INVESTIGATION");
 
 	// Set size for collision capsule
@@ -202,6 +297,12 @@ AHronoCharacter::AHronoCharacter()
 	PastInteractionPoint->SetupAttachment(InteractionPoint);
 	PastInteractionPoint->SetRelativeLocation(FVector(10.0f, -20.0f, -8.0f));
 
+	MonocleInteractionPoint = CreateDefaultSubobject<USceneComponent>(TEXT("MonocleInteractionPoint"));
+	MonocleInteractionPoint->SetupAttachment(GetFirstPersonCameraComponent());
+	// The former Future monocle root was 80 - 30 = 50 cm ahead of the camera.
+	// Keeping that depth avoids changing its apparent size; zero Y/Z centres it.
+	MonocleInteractionPoint->SetRelativeLocation(FVector(50.0f, 0.0f, 0.0f));
+
 	SpotLight = CreateDefaultSubobject<USpotLightComponent>(TEXT("SpotLight1"));
 	SpotLight->SetupAttachment(GetFirstPersonCameraComponent());
 
@@ -243,6 +344,15 @@ USceneComponent* AHronoCharacter::GetActiveInteractionPoint() const
 	return InteractionPoint;
 }
 
+USceneComponent* AHronoCharacter::GetHeldItemInteractionPoint(const ABase_Item* Item) const
+{
+	if (IsValid(Item) && Item->bUseCenteredInteractionPoint)
+	{
+		return MonocleInteractionPoint;
+	}
+	return GetActiveInteractionPoint();
+}
+
 void AHronoCharacter::OnRep_TimelineMirrorRequested()
 {
 	SetMirroredViewEnabled(bTimelineMirrorRequested);
@@ -250,47 +360,74 @@ void AHronoCharacter::OnRep_TimelineMirrorRequested()
 
 void AHronoCharacter::SwitchPlayerTimeline()
 {
-	const EItemTimeline RequestedTimeline = CharacterTimeline == EItemTimeline::Past
-		? EItemTimeline::Future
-		: EItemTimeline::Past;
-
-	if (HasAuthority())
-	{
-		ApplyPlayerTimelineOnAuthority(RequestedTimeline);
-		return;
-	}
-
-	// Send the concrete target rather than another "toggle" command. If the same
-	// death event runs on server and owning client, both requests now converge on
-	// one timeline instead of toggling there and immediately back again.
-	ServerSetPlayerTimeline(RequestedTimeline);
+	if (!HasAuthority()) return;
+	const EItemTimeline Target = CharacterTimeline == EItemTimeline::Past
+		? EItemTimeline::Future : EItemTimeline::Past;
+	TrySetPlayerTimelineOnAuthority(Target);
 }
 
 void AHronoCharacter::SetPlayerTimeline(EItemTimeline NewTimeline)
 {
-	if (NewTimeline == EItemTimeline::Both)
-	{
-		UE_LOG(LogTemp, Warning,
-			TEXT("[TimelineSwitch] %s rejected Both: player timeline must be Past or Future"),
-			*GetNameSafe(this));
-		return;
-	}
+	TrySetPlayerTimelineOnAuthority(NewTimeline);
+}
 
-	if (HasAuthority())
-	{
-		ApplyPlayerTimelineOnAuthority(NewTimeline);
-		return;
-	}
-
-	ServerSetPlayerTimeline(NewTimeline);
+bool AHronoCharacter::TrySetPlayerTimelineOnAuthority(EItemTimeline NewTimeline)
+{
+	if (!HasAuthority() || IsActorBeingDestroyed() || bApplyingTimelineTransition
+		|| (NewTimeline != EItemTimeline::Past && NewTimeline != EItemTimeline::Future)
+		|| (CharacterTimeline != EItemTimeline::Past && CharacterTimeline != EItemTimeline::Future)) return false;
+	// A different authoritative transition supersedes an unfinished death.
+	if (NewTimeline != CharacterTimeline) CancelDeathTimelineTransition();
+	const bool bApplied = ApplyPlayerTimelineOnAuthority(NewTimeline);
+	// Overlap notifications during collision changes register their sources but
+	// defer the aggregate/event until the transition guard has been released.
+	RefreshWardrobeSafetySources();
+	return bApplied && !IsActorBeingDestroyed() && CharacterTimeline == NewTimeline;
 }
 
 void AHronoCharacter::ServerSetPlayerTimeline_Implementation(EItemTimeline NewTimeline)
 {
-	if (NewTimeline != EItemTimeline::Both)
+	// Retained wire signature for older Blueprints/clients. A client's chosen
+	// timeline is not a gameplay authorization and can never mutate server state.
+	UE_LOG(LogTemp, Verbose, TEXT("[TimelineSwitch] Ignored legacy client request for %s"), *GetNameSafe(this));
+}
+
+bool AHronoCharacter::BeginDeathTimelineTransition(USkeletalMeshComponent* DeathMesh)
+{
+	if (IsActorBeingDestroyed()) return false;
+	if (!HasAuthority()) return true; // Presentation only; no server mutation/RPC.
+	if (bDeathTimelineTransitionPending || bApplyingTimelineTransition
+		|| (CharacterTimeline != EItemTimeline::Past && CharacterTimeline != EItemTimeline::Future)
+		|| (DeathMesh && (!IsValid(DeathMesh) || DeathMesh->GetOwner() != this))) return false;
+	DeathOriginalTimeline = CharacterTimeline;
+	DeathTargetTimeline = CharacterTimeline == EItemTimeline::Past ? EItemTimeline::Future : EItemTimeline::Past;
+	bDeathTimelineTransitionPending = true;
+	if (DeathMesh)
 	{
-		ApplyPlayerTimelineOnAuthority(NewTimeline);
+		DeathTransitionMesh = DeathMesh;
+		DeathMeshPreviousTickOption = static_cast<uint8>(DeathMesh->VisibilityBasedAnimTickOption);
+		// Montage completion must run even on a server that renders no character.
+		DeathMesh->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPose;
 	}
+	return true;
+}
+
+void AHronoCharacter::CancelDeathTimelineTransition()
+{
+	if (!HasAuthority()) return;
+	bDeathTimelineTransitionPending = false;
+	DeathTargetTimeline = EItemTimeline::Both;
+	if (USkeletalMeshComponent* DeathMesh = DeathTransitionMesh.Get())
+		DeathMesh->VisibilityBasedAnimTickOption = static_cast<EVisibilityBasedAnimTickOption>(DeathMeshPreviousTickOption);
+	DeathTransitionMesh.Reset();
+}
+
+bool AHronoCharacter::CompleteDeathTimelineTransition()
+{
+	if (!HasAuthority() || !bDeathTimelineTransitionPending || IsActorBeingDestroyed()) return false;
+	const EItemTimeline Target = DeathTargetTimeline;
+	CancelDeathTimelineTransition(); // Consume before any transition callbacks.
+	return TrySetPlayerTimelineOnAuthority(Target);
 }
 
 void AHronoCharacter::ClientApplyTimelineMirror_Implementation(EItemTimeline NewTimeline)
@@ -298,13 +435,14 @@ void AHronoCharacter::ClientApplyTimelineMirror_Implementation(EItemTimeline New
 	SetMirroredViewEnabled(NewTimeline == EItemTimeline::Past);
 }
 
-void AHronoCharacter::ApplyPlayerTimelineOnAuthority(EItemTimeline NewTimeline)
+bool AHronoCharacter::ApplyPlayerTimelineOnAuthority(EItemTimeline NewTimeline)
 {
-	if (!HasAuthority() || NewTimeline == EItemTimeline::Both)
+	if (!HasAuthority() || bApplyingTimelineTransition || (NewTimeline != EItemTimeline::Past && NewTimeline != EItemTimeline::Future))
 	{
-		return;
+		return false;
 	}
 
+	TGuardValue<bool> TransitionGuard(bApplyingTimelineTransition, true);
 	if (NewTimeline == CharacterTimeline)
 	{
 		// A duplicate client/server death notification may request the target that
@@ -317,21 +455,8 @@ void AHronoCharacter::ApplyPlayerTimelineOnAuthority(EItemTimeline NewTimeline)
 			TEXT("[TimelineSwitch] Duplicate target ignored for %s: already %s"),
 			*GetNameSafe(this),
 			*StaticEnum<EItemTimeline>()->GetNameStringByValue(static_cast<int64>(CharacterTimeline)));
-		return;
+		return true;
 	}
-
-	const double ServerTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
-	if (LastTimelineSwitchServerTime >= 0.0
-		&& ServerTime - LastTimelineSwitchServerTime < TimelineSwitchDuplicateGuardSeconds)
-	{
-		UE_LOG(LogTemp, Warning,
-			TEXT("[TimelineSwitch] Duplicate toggle blocked for %s: requested=%s after %.3fs"),
-			*GetNameSafe(this),
-			*StaticEnum<EItemTimeline>()->GetNameStringByValue(static_cast<int64>(NewTimeline)),
-			ServerTime - LastTimelineSwitchServerTime);
-		return;
-	}
-	LastTimelineSwitchServerTime = ServerTime;
 
 	const EItemTimeline PreviousTimeline = CharacterTimeline;
 	CharacterTimeline = NewTimeline;
@@ -358,6 +483,7 @@ void AHronoCharacter::ApplyPlayerTimelineOnAuthority(EItemTimeline NewTimeline)
 		bTimelineMirrorRequested ? TEXT("true") : TEXT("false"));
 
 	ForceNetUpdate();
+	return !IsActorBeingDestroyed() && CharacterTimeline == NewTimeline;
 }
 
 void AHronoCharacter::MoveCarriedItemsToTimeline(EItemTimeline NewTimeline)
@@ -420,6 +546,10 @@ void AHronoCharacter::RefreshTimelineVisibilityForLocalPlayer()
 		{
 			TimelineActor->UpdateVisibilityForLocalPlayer(ViewerTimeline);
 		}
+	}
+	for (TActorIterator<AOuijaBoard> It(World); It; ++It)
+	{
+		It->RefreshPastReadability(ViewerTimeline);
 	}
 
 	for (TActorIterator<AHronoCharacter> It(World); It; ++It)
@@ -848,6 +978,10 @@ void AHronoCharacter::PawnClientRestart()
 
 void AHronoCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	for (const TWeakObjectPtr<AHidingWardrobe>& Source : WardrobeSafetySources)
+		if (Source.IsValid()) Source->OnDestroyed.RemoveDynamic(this, &AHronoCharacter::OnWardrobeSafetySourceDestroyed);
+	WardrobeSafetySources.Empty();
+	CancelDeathTimelineTransition();
 	if (ABase_Item* HighlightedItem = HighlightedInteractionItem.Get())
 	{
 		HighlightedItem->SetInteractionHighlighted(false);
@@ -892,6 +1026,7 @@ void AHronoCharacter::Tick(float DeltaTime)
 	if (HasAuthority())
 	{
 		UpdateStamina(DeltaTime);
+		UpdateMovementAudio(DeltaTime);
 	}
 
 	if (IsLocallyControlled())
@@ -1062,59 +1197,59 @@ void AHronoCharacter::ClearRitualChairGuidance()
 	RitualGuidanceHighlightedChairs.Reset();
 }
 
+FHitResult AHronoCharacter::GetInteractionPresentationHit()
+{
+	UCameraComponent* Camera = GetFirstPersonCameraComponent();
+	UWorld* World = GetWorld();
+	if (!IsLocallyControlled() || !IsValid(Camera) || !IsValid(World)) return FHitResult();
+	const FVector Start = Camera->GetComponentLocation();
+	const FVector End = Start + Camera->GetForwardVector() * InteractTraceDistance;
+	if (PresentationTraceFrame == GFrameCounter && PresentationTraceStart.Equals(Start)
+		&& PresentationTraceEnd.Equals(End) && PresentationTraceTimeline == CharacterTimeline)
+	{
+		return CachedPresentationHit;
+	}
+	PresentationTraceFrame = GFrameCounter;
+	PresentationTraceStart = Start;
+	PresentationTraceEnd = End;
+	PresentationTraceTimeline = CharacterTimeline;
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(InteractionPresentation), false, this);
+	const ECollisionChannel TraceChannel = CharacterTimeline == EItemTimeline::Future
+		? ECC_GameTraceChannel3 : ECC_GameTraceChannel2;
+	World->LineTraceSingleByChannel(CachedPresentationHit, Start, End, TraceChannel, Params);
+	ABase_Item* PrimaryItem = Cast<ABase_Item>(CachedPresentationHit.GetActor());
+	if (!IsValid(PrimaryItem))
+	{
+		FHitResult VisibilityHit;
+		if (World->LineTraceSingleByChannel(VisibilityHit, Start, End, ECC_Visibility, Params)
+			&& (!CachedPresentationHit.bBlockingHit || VisibilityHit.Distance <= CachedPresentationHit.Distance + 1.0f))
+		{
+			CachedPresentationHit = VisibilityHit;
+		}
+	}
+	return CachedPresentationHit;
+}
+
+bool AHronoCharacter::IsFocusedItemUsable()
+{
+	ABase_Item* Item = Cast<ABase_Item>(GetInteractionPresentationHit().GetActor());
+	return IsValid(Item) && Item->UsableValid
+		&& Item->CanBePickedUp()
+		&& (Item->ItemTimeline == EItemTimeline::Both || Item->ItemTimeline == CharacterTimeline);
+}
+
 void AHronoCharacter::UpdateInteractionHighlight()
 {
 	ABase_Item* NewHighlightedItem = nullptr;
-	UCameraComponent* Camera = GetFirstPersonCameraComponent();
-	UWorld* World = GetWorld();
-	if (IsValid(Camera) && IsValid(World))
+	AActor* HitActor = GetInteractionPresentationHit().GetActor();
+	for (int32 Depth = 0; IsValid(HitActor) && Depth < 8; ++Depth)
 	{
-		const FVector Start = Camera->GetComponentLocation();
-		const FVector End = Start + Camera->GetForwardVector() * InteractTraceDistance;
-		FCollisionQueryParams Params(SCENE_QUERY_STAT(InteractionHighlight), false, this);
-		const ECollisionChannel TraceChannel = CharacterTimeline == EItemTimeline::Future
-			? ECC_GameTraceChannel3
-			: ECC_GameTraceChannel2;
-
-		auto ResolveItemFromHit = [this](const FHitResult& HitResult) -> ABase_Item*
+		if (ABase_Item* Item = Cast<ABase_Item>(HitActor))
 		{
-			AActor* HitActor = HitResult.GetActor();
-			for (int32 ParentDepth = 0; IsValid(HitActor) && ParentDepth < 8; ++ParentDepth)
-			{
-				if (ABase_Item* HitItem = Cast<ABase_Item>(HitActor))
-				{
-					return HitItem->CanHighlightFor(this) ? HitItem : nullptr;
-				}
-				HitActor = HitActor->GetAttachParentActor();
-			}
-			return nullptr;
-		};
-
-		FHitResult HitResult;
-		const bool bTimelineHit = World->LineTraceSingleByChannel(
-			HitResult, Start, End, TraceChannel, Params);
-		if (bTimelineHit)
-		{
-			NewHighlightedItem = ResolveItemFromHit(HitResult);
+			NewHighlightedItem = Item->CanHighlightFor(this) ? Item : nullptr;
+			break;
 		}
-		if (!IsValid(NewHighlightedItem))
-		{
-			// Item Blueprints sometimes override the custom timeline-channel response.
-			// Compare a Visibility hit with the primary hit so an item in front of a wall
-			// can still highlight, without allowing highlights through that wall.
-			FHitResult VisibilityHit;
-			if (World->LineTraceSingleByChannel(
-				VisibilityHit, Start, End, ECC_Visibility, Params))
-			{
-				ABase_Item* VisibilityItem = ResolveItemFromHit(VisibilityHit);
-				const bool bVisibilityIsNotBehindPrimaryHit = !bTimelineHit
-					|| VisibilityHit.Distance <= HitResult.Distance + 1.0f;
-				if (IsValid(VisibilityItem) && bVisibilityIsNotBehindPrimaryHit)
-				{
-					NewHighlightedItem = VisibilityItem;
-				}
-			}
-		}
+		HitActor = HitActor->GetAttachParentActor();
 	}
 
 	ABase_Item* PreviousItem = HighlightedInteractionItem.Get();
@@ -1246,6 +1381,10 @@ void AHronoCharacter::HandleInteraction(const FHitResult& HitResult)
 
 	if (auto Item = Cast<ABase_Item>(HitActor))
 	{
+		if (!Item->CanBePickedUp())
+		{
+			return;
+		}
 		UE_LOG(LogTemp, Warning, TEXT("Valid item found: %s"), *Item->GetName());
 		auto Draggable = Cast<ADrag_Item>(Item);
 		if (Draggable) return;
@@ -1292,7 +1431,6 @@ void AHronoCharacter::DoInteract()
 		{
 			GEngine->AddOnScreenDebugMessage(-1, 3.0f, FColor::Cyan, HitDebug);
 		}
-		UGameplayStatics::PlaySoundAtLocation(this, InteractSound, GetActorLocation());
 		HandleInteraction(HitResult);
 	}
 	else
@@ -1310,6 +1448,68 @@ void AHronoCharacter::ServerPickupItem_Implementation(ABase_Item* Item)
 	UE_LOG(LogTemp, Warning, TEXT("[Item] ServerPickupItem on %s"), *GetName());
 
 	PickupItem(Item);
+}
+
+bool AHronoCharacter::CanInteractWithActorOnServer(const AActor* Target,
+	const UPrimitiveComponent* TargetComponent, float ExtraDistance) const
+{
+	if (!HasAuthority() || IsActorBeingDestroyed() || !IsValid(Target) || Target == this
+		|| Target->IsActorBeingDestroyed() || Target->GetWorld() != GetWorld()
+		|| !Target->GetActorEnableCollision()
+		|| (CharacterTimeline != EItemTimeline::Past && CharacterTimeline != EItemTimeline::Future)
+		|| !FMath::IsFinite(InteractTraceDistance) || InteractTraceDistance <= 0.0f
+		|| !FMath::IsFinite(ExtraDistance) || ExtraDistance < 0.0f
+		|| (TargetComponent && TargetComponent->GetOwner() != Target))
+	{
+		return false;
+	}
+	if (const ABase_Item* Item = Cast<ABase_Item>(Target);
+		Item && Item->ItemTimeline != EItemTimeline::Both && Item->ItemTimeline != CharacterTimeline)
+	{
+		return false;
+	}
+
+	const FVector ViewLocation = FirstPersonCameraComponent
+		? FirstPersonCameraComponent->GetComponentLocation() : GetPawnViewLocation();
+	const ECollisionChannel Channel = CharacterTimeline == EItemTimeline::Past
+		? COLLISION_CHANNEL_PAWN_PAST : COLLISION_CHANNEL_PAWN_FUTURE;
+	const float MaximumDistance = InteractTraceDistance + ExtraDistance;
+	if (ViewLocation.ContainsNaN() || !FMath::IsFinite(MaximumDistance)) return false;
+
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(ServerInteraction), false, this);
+	if (IsValid(CurrentHeldItem) && CurrentHeldItem != Target)
+	{
+		Params.AddIgnoredActor(CurrentHeldItem);
+	}
+	TInlineComponentArray<UPrimitiveComponent*> Primitives;
+	Target->GetComponents(Primitives);
+	for (const UPrimitiveComponent* Primitive : Primitives)
+	{
+		if (!IsValid(Primitive) || !Primitive->IsRegistered()
+			|| (TargetComponent && Primitive != TargetComponent)
+			|| !Primitive->IsQueryCollisionEnabled()
+			|| Primitive->GetCollisionResponseToChannel(Channel) != ECR_Block)
+		{
+			continue;
+		}
+		FVector Point;
+		if (Primitive->GetClosestPointOnCollision(ViewLocation, Point) < 0.0f)
+		{
+			// Complex-only meshes may not support closest-point queries.
+			Point = Primitive->Bounds.GetBox().GetClosestPointTo(ViewLocation);
+		}
+		if (Point.ContainsNaN() || FVector::DistSquared(ViewLocation, Point) > FMath::Square(MaximumDistance))
+		{
+			continue;
+		}
+		FHitResult Obstruction;
+		if (!GetWorld()->LineTraceSingleByChannel(Obstruction, ViewLocation, Point, Channel, Params)
+			|| Obstruction.GetActor() == Target)
+		{
+			return true;
+		}
+	}
+	return false;
 }
 
 void AHronoCharacter::OnRep_CurrentChair(AChair* PreviousChair)
@@ -1767,41 +1967,58 @@ void AHronoCharacter::DoUnDrag()
 	CurrentDraggedComponent = nullptr;
 }
 
+// Resolve only authored drag panels. A component name is a selector, never permission.
+UDrag_Component* AHronoCharacter::GetAllowedDragPanel(ADrag_Item* Item, FName Name, bool bLinear) const
+{
+	if (!IsValid(Item) || Item->bUseAutomaticOpenClose || Item->bNeedKeyActor
+		|| Item->IsLockedByTrigger() || Item->IsDoorBlockedForTimeline(CharacterTimeline)) return nullptr;
+	const USceneComponent* Movement = bLinear
+		? Item->FindShelfMovementComponent(Name) : Item->FindDoorMovementComponent(Name);
+	if (!Movement) return nullptr;
+	TInlineComponentArray<UDrag_Component*> Panels;
+	Item->GetComponents(Panels);
+	for (UDrag_Component* Panel : Panels)
+	{
+		if (Panel->GetTargetMovementComponent() == Movement
+			&& (Panel->bIsShelf || Panel->bIsCupBoard) == bLinear
+			&& Panel->GetInteractionPrimitive()
+			&& CanInteractWithActorOnServer(Item, Panel->GetInteractionPrimitive(), 200.0f)) return Panel;
+	}
+	return nullptr;
+}
+
 void AHronoCharacter::Server_SetDoorRotation_Implementation(ADrag_Item* Door, FRotator NewRotation)
 {
-	if (!IsValid(Door)
-		|| NewRotation.ContainsNaN()
-		|| Door->bUseAutomaticOpenClose
-		|| Door->IsLockedByTrigger()
-		|| Door->IsDoorBlockedForTimeline(CharacterTimeline)
-		|| (Door->ItemTimeline != EItemTimeline::Both && Door->ItemTimeline != CharacterTimeline)
-		|| FVector::DistSquared(GetActorLocation(), Door->GetActorLocation())
-			> FMath::Square(InteractTraceDistance + 200.0f))
-	{
-		return;
-	}
+	Server_SetDoorPanelRotation_Implementation(Door, NAME_None, NewRotation);
+}
 
-	Door->ApplyDoorRotationFromServer(NAME_None, NewRotation);
+void AHronoCharacter::Server_CommitDragPanelPose_Implementation(ADrag_Item* Item,
+	FName ComponentName, bool bLinear, FVector Location, FRotator Rotation)
+{
+	if (!GetAllowedDragPanel(Item, ComponentName, bLinear)) return;
+	if (bLinear) Server_SetShelfPanelPosition_Implementation(Item, ComponentName, Location);
+	else Server_SetDoorPanelRotation_Implementation(Item, ComponentName, Rotation);
+	// Locked/out-of-range releases expire through the actor's bounded audio timeout.
+	if (IsValid(Item)) Item->FinishManualPanelMovement(ComponentName);
 }
 
 void AHronoCharacter::Server_SetDoorPanelRotation_Implementation(
-	ADrag_Item* Door,
-	FName DoorComponentName,
-	FRotator NewRotation)
+	ADrag_Item* Door, FName DoorComponentName, FRotator NewRotation)
 {
-	if (!IsValid(Door)
-		|| NewRotation.ContainsNaN()
-		|| Door->bUseAutomaticOpenClose
-		|| Door->IsLockedByTrigger()
-		|| Door->IsDoorBlockedForTimeline(CharacterTimeline)
-		|| (Door->ItemTimeline != EItemTimeline::Both && Door->ItemTimeline != CharacterTimeline)
-		|| FVector::DistSquared(GetActorLocation(), Door->GetActorLocation())
-			> FMath::Square(InteractTraceDistance + 200.0f))
+	if (NewRotation.ContainsNaN()) return;
+	UDrag_Component* Panel = GetAllowedDragPanel(Door, DoorComponentName, false);
+	if (!Panel) return;
+	float MinYaw = Door->ItemType == EItemType::DraggableInvertLeft ? 0.0f : -90.0f;
+	float MaxYaw = MinYaw + 90.0f;
+	if (Panel->bUseCustomDoorAngleLimits)
 	{
-		return;
+		MinYaw = FMath::Min(Panel->MinimumDoorYaw, Panel->MaximumDoorYaw);
+		MaxYaw = FMath::Max(Panel->MinimumDoorYaw, Panel->MaximumDoorYaw);
 	}
-
-	Door->ApplyDoorRotationFromServer(DoorComponentName, NewRotation);
+	if (!FMath::IsFinite(MinYaw) || !FMath::IsFinite(MaxYaw)) return;
+	FRotator Allowed = Panel->GetTargetMovementComponent()->GetRelativeRotation();
+	Allowed.Yaw = FMath::Clamp(NewRotation.Yaw, MinYaw, MaxYaw);
+	Door->ApplyDoorRotationFromServer(DoorComponentName, Allowed);
 }
 
 void AHronoCharacter::ServerDropCurrentItem_Implementation()
@@ -1820,9 +2037,12 @@ void AHronoCharacter::DropCurrentItem()
 
 	ABase_Item* ItemToDrop = CurrentHeldItem;
 
-	if (!ItemToDrop)
+	if (!IsValid(ItemToDrop) || ItemToDrop->OwningCharacter != this)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("[DropLog] DropCurrentItem aborted: no item is held"));
+		// A stale hand reference must never drop another player's item.
+		CurrentHeldItem = nullptr;
+		ForceNetUpdate();
+		UE_LOG(LogTemp, Log, TEXT("[Item] Drop ignored for %s: no valid owned item"), *GetName());
 		return;
 	}
 
@@ -1834,11 +2054,15 @@ void AHronoCharacter::DropCurrentItem()
 
 void AHronoCharacter::ServerUnlockWithHeldKey_Implementation(ADrag_Item* Item)
 {
-	if (!IsValid(Item)
+	if (!CanInteractWithActorOnServer(Item)
+		|| Item->IsLockedByTrigger()
+		|| Item->IsDoorBlockedForTimeline(CharacterTimeline)
+		|| !IsValid(CurrentHeldItem)
+		|| CurrentHeldItem->OwningCharacter != this
+		|| CurrentHeldItem->GetOwner() != this
+		|| !CurrentHeldItem->bIsPickedUp
 		|| !Item->bNeedKeyActor
-		|| !Item->CanUnlockWithItem(CurrentHeldItem)
-		|| FVector::DistSquared(GetActorLocation(), Item->GetActorLocation())
-			> FMath::Square(InteractTraceDistance + 200.0f))
+		|| !Item->CanUnlockWithItem(CurrentHeldItem))
 	{
 		return;
 	}
@@ -1870,10 +2094,14 @@ bool AHronoCharacter::ReleaseHeldItemForPlacement(ABase_Item* Item)
 		return false;
 	}
 
-	// Drop first so Base_Item clears attachment, ownership and held-state effects.
-	// The rune will immediately disable physics and move itself into its slot.
-	Item->Drop();
+	// Release the hand before item Blueprint callbacks can run. Placement has no
+	// intermediate dropped state, physics impulse, or drop sound.
 	CurrentHeldItem = nullptr;
+	if (!Item->ReleaseForPlacement(this))
+	{
+		CurrentHeldItem = Item;
+		return false;
+	}
 
 	ForceNetUpdate();
 	return true;
@@ -1888,7 +2116,7 @@ bool AHronoCharacter::TransferHeldItemTo(AHronoCharacter* TargetCharacter, ABase
 		|| CurrentHeldItem != Item
 		|| Item->OwningCharacter != this
 		|| IsValid(TargetCharacter->CurrentHeldItem)
-		|| !IsValid(TargetCharacter->GetActiveInteractionPoint()))
+		|| !IsValid(TargetCharacter->GetHeldItemInteractionPoint(Item)))
 	{
 		return false;
 	}
@@ -1925,42 +2153,19 @@ bool AHronoCharacter::TransferHeldItemTo(AHronoCharacter* TargetCharacter, ABase
 
 void AHronoCharacter::Server_SetShelfPosition_Implementation(ADrag_Item* Shelf, const FVector& NewPosition)
 {
-	if (!Shelf || Shelf->bUseAutomaticOpenClose)
-	{
-		return;
-	}
-
-	Shelf->ApplyShelfPositionFromServer(NAME_None, NewPosition);
+	Server_SetShelfPanelPosition_Implementation(Shelf, NAME_None, NewPosition);
 }
 
 bool AHronoCharacter::Server_SetShelfPosition_Validate(ADrag_Item* Shelf, const FVector& NewPosition)
 {
-	return Shelf != nullptr;
-
+	// Stale targets and invalid requests are rejected without disconnecting players.
+	return true;
 }
 
 void AHronoCharacter::Server_SetShelfPanelPosition_Implementation(
-	ADrag_Item* Shelf,
-	FName ShelfComponentName,
-	FVector NewPosition)
+	ADrag_Item* Shelf, FName ShelfComponentName, FVector NewPosition)
 {
-	if (!IsValid(Shelf)
-		|| NewPosition.ContainsNaN()
-		|| Shelf->bUseAutomaticOpenClose
-		|| (Shelf->ItemTimeline != EItemTimeline::Both
-			&& Shelf->ItemTimeline != CharacterTimeline)
-		|| FVector::DistSquared(GetActorLocation(), Shelf->GetActorLocation())
-			> FMath::Square(InteractTraceDistance + 200.0f)
-		|| !Shelf->FindShelfMovementComponent(ShelfComponentName))
-	{
-		UE_LOG(LogTemp, Warning,
-			TEXT("[ShelfReplication] Rejected drawer update Player=%s Shelf=%s Component=%s"),
-			*GetNameSafe(this),
-			*GetNameSafe(Shelf),
-			*ShelfComponentName.ToString());
-		return;
-	}
-
+	if (NewPosition.ContainsNaN() || !GetAllowedDragPanel(Shelf, ShelfComponentName, true)) return;
 	Shelf->ApplyShelfPositionFromServer(ShelfComponentName, NewPosition);
 }
 
@@ -1996,8 +2201,7 @@ void AHronoCharacter::OnEnyInteractTrace(FHitResult HitResult)
 		{
 			if (HasAuthority())
 			{
-				// Server can interact directly
-				IEnviroment_Interface::Execute_Interact(HitActor, this);
+				Server_InteractWithEnvironment_Implementation(HitActor);
 			}
 			else
 			{
@@ -2017,12 +2221,9 @@ void AHronoCharacter::PerformAutomaticDragItemInteraction(
 		|| !Item->ShouldUseAutomaticOpenClose(this)
 		|| InteractionComponentName.IsNone()
 		|| !Item->FindDragComponentForInteractionName(InteractionComponentName)
+		|| !CanInteractWithActorOnServer(Item, Item->FindDragComponentForInteractionName(InteractionComponentName)->GetInteractionPrimitive())
 		|| Item->IsLockedByTrigger()
-		|| Item->IsDoorBlockedForTimeline(CharacterTimeline)
-		|| (Item->ItemTimeline != EItemTimeline::Both
-			&& Item->ItemTimeline != CharacterTimeline)
-		|| FVector::DistSquared(GetActorLocation(), Item->GetActorLocation())
-			> FMath::Square(InteractTraceDistance + 200.0f))
+		|| Item->IsDoorBlockedForTimeline(CharacterTimeline))
 	{
 		return;
 	}
@@ -2059,8 +2260,12 @@ void AHronoCharacter::PickupItem(ABase_Item* Item)
 	{
 		return;
 	}
+	if (!IsValid(Item) || !Item->CanBePickedUp())
+	{
+		return;
+	}
 
-	if (!Item)
+	if (!CanInteractWithActorOnServer(Item))
 	{
 		return;
 	}
@@ -2100,10 +2305,22 @@ void AHronoCharacter::PickupItem(ABase_Item* Item)
 		return;
 	}
 
-	
-	if (Item->TryPickUp(this))
+	// Reserve before attachment/OnHeldStateChanged can re-enter gameplay code.
+	// A failed acquisition releases only this reservation, not a later transfer.
+	CurrentHeldItem = Item;
+	const bool bPickedUp = Item->TryPickUp(this);
+	if (!bPickedUp || !IsValid(Item) || Item->OwningCharacter != this || !Item->bIsPickedUp)
 	{
-		CurrentHeldItem = Item;
+		if (CurrentHeldItem == Item)
+		{
+			CurrentHeldItem = nullptr;
+			ForceNetUpdate();
+		}
+		return;
+	}
+
+	if (CurrentHeldItem == Item)
+	{
 		ForceNetUpdate();
 		if (ResolveTutorialItem(Item) == EHronoTutorialItem::Monocle)
 		{
@@ -2275,7 +2492,7 @@ void AHronoCharacter::Server_InteractWithEnvironment_Implementation(AActor* Inte
 		InteractableActor && InteractableActor->Implements<UEnviroment_Interface>(),
 		InteractableActor ? FVector::Distance(GetActorLocation(), InteractableActor->GetActorLocation()) : -1.0f);
 	// The server verifies the actor is valid and implements the interface, then interacts
-	if (InteractableActor && InteractableActor->Implements<UEnviroment_Interface>())
+	if (CanInteractWithActorOnServer(InteractableActor) && InteractableActor->Implements<UEnviroment_Interface>())
 	{
 		IEnviroment_Interface::Execute_Interact(InteractableActor, this);
 	}
@@ -2425,8 +2642,6 @@ void AHronoCharacter::DoJumpStart()
 	// pass Jump to the character
 	Jump();
 
-	// play the jump sound
-	UGameplayStatics::PlaySoundAtLocation(this, JumpSound, GetActorLocation());
 }
 
 void AHronoCharacter::DoJumpEnd()
@@ -2650,12 +2865,68 @@ void AHronoCharacter::Landed(const FHitResult& Hit)
 {
 	Super::Landed(Hit);
 
-	// play the landing sound
-	UGameplayStatics::PlaySoundAtLocation(this, LandSound, GetActorLocation());
+	if (HasAuthority()) MulticastMovementSound(2, CharacterTimeline, SurfaceType_Default);
 }
 
 void AHronoCharacter::PlayFootstepSound()
 {
-	// called from an animation notify while walking/running
-	UGameplayStatics::PlaySoundAtLocation(this, FootstepSound, GetActorLocation());
+	// Legacy animation notifies are ignored when native cadence owns footsteps.
+	if (bUseMovementFootsteps || !HasAuthority() || !GetCharacterMovement()->IsMovingOnGround()
+		|| GetVelocity().SizeSquared2D() < 100.0f || bIsSitting || bDeathTimelineTransitionPending) return;
+	const double Now = GetWorld()->GetTimeSeconds();
+	if (Now - LastFootstepTime < 0.12) return;
+	LastFootstepTime = Now;
+	MulticastMovementSound(0, CharacterTimeline, SurfaceType_Default);
+}
+
+void AHronoCharacter::OnJumped_Implementation()
+{
+	Super::OnJumped_Implementation();
+	if (HasAuthority()) MulticastMovementSound(1, CharacterTimeline, SurfaceType_Default);
+}
+
+void AHronoCharacter::UpdateMovementAudio(float DeltaSeconds)
+{
+	const UCharacterMovementComponent* Movement = GetCharacterMovement();
+	if (!bUseMovementFootsteps || !IsValid(Controller) || !Movement->IsMovingOnGround()
+		|| bIsSitting || bDeathTimelineTransitionPending || GetVelocity().SizeSquared2D() < 100.0f)
+	{
+		AccumulatedFootstepDistance = 0.0f;
+		return;
+	}
+	AccumulatedFootstepDistance += GetVelocity().Size2D() * FMath::Clamp(DeltaSeconds, 0.0f, 0.1f);
+	const float StepLength = FMath::Max(30.0f, FootstepDistance);
+	if (AccumulatedFootstepDistance < StepLength) return;
+	const double Now = GetWorld()->GetTimeSeconds();
+	if (Now - LastFootstepTime < 0.12) return;
+	AccumulatedFootstepDistance = FMath::Fmod(AccumulatedFootstepDistance, StepLength);
+	LastFootstepTime = Now;
+	FHitResult Ground;
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(FootstepSurface), false, this);
+	Params.bReturnPhysicalMaterial = true;
+	const FVector Start = GetActorLocation();
+	GetWorld()->LineTraceSingleByChannel(Ground, Start,
+		Start - FVector(0, 0, GetCapsuleComponent()->GetScaledCapsuleHalfHeight() + 30.0f), ECC_Visibility, Params);
+	const uint8 Surface = static_cast<uint8>(UPhysicalMaterial::DetermineSurfaceType(Ground.PhysMaterial.Get()));
+	MulticastMovementSound(0, CharacterTimeline, Surface);
+}
+
+void AHronoCharacter::MulticastMovementSound_Implementation(uint8 Event,
+	EItemTimeline EventTimeline, uint8 Surface)
+{
+	if (!HronoAudioPolicy::CanHear(this, EventTimeline)) return;
+	USoundBase* Sound = Event == 1 ? JumpSound.Get() : Event == 2 ? LandSound.Get() : FootstepSound.Get();
+	if (!IsValid(Sound)) Sound = Event == 0 ? NativeFootstepFallback.Get() : NativeJumpFallback.Get();
+	if (Event == 0)
+	{
+		const auto SurfaceKey = static_cast<EPhysicalSurface>(Surface);
+		const TObjectPtr<USoundBase>* Variant = SurfaceFootstepSounds.Find(SurfaceKey);
+		if (!Variant || !IsValid(*Variant)) Variant = NativeSurfaceFootstepFallbacks.Find(SurfaceKey);
+		if (Variant)
+		{
+			if (IsValid(*Variant)) Sound = Variant->Get();
+		}
+	}
+	if (IsValid(Sound)) UGameplayStatics::PlaySoundAtLocation(this, Sound,
+		GetActorLocation(), 1.0f, 1.0f, 0.0f, MovementSoundAttenuation);
 }

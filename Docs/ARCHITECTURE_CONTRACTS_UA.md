@@ -1,0 +1,34 @@
+# DIVIDED — чинні контракти систем (2026-09-28)
+
+Це короткий покажчик для C++/Blueprint-змін. Він описує поточну реалізацію, а не обіцянку, що всі сценарії вже перевірено на двох ПК. Повний перелік ризиків і ручних сценаріїв: [технічний аудит](TECHNICAL_AUDIT_UA_2026-09-26.md).
+
+## Виконання та джерела правди
+
+`Hrono.uproject` → `Source/Hrono` → `/Game/FirstPerson/Blueprints/BP_FirstPersonGameMode` → `/Game/_Alex/HE_CharacterHrono1`. Меню `/Game/HorrorEngine/Maps/MenuLevel`; основна карта `/Game/_Alex/DemoMap1`. Режим — один local player на процес, listen-server плюс один remote client. `HronoSessionPolicy::MaxPlayers=2`, `Protocol=6`; після зміни мережевого gameplay стану старий і новий білди не мають входити в одну сесію. Процес Steam create/search/join і admission описано в [L07](L07_Sessions_UA.md).
+
+| Система | Авторитетний власник | Реплікований стан / мережевий вхід | Локальне представлення та cleanup |
+| --- | --- | --- | --- |
+| Предмет у руці | `AHronoCharacter` + `ABase_Item` на сервері | Один owner, `World/Held/Placed`, server pickup/drop/transfer; другий pickup відхиляється | `OnRep` відновлює стан; pickup/drop звук — окремий короткий multicast, без відтворення для late join. [N01](PickupOwnership_Test_UA.md), [N03/N04](N03_N04_Physics_Placement_UA.md) |
+| Передача через дзеркало | `ATimelineTransferItem` на сервері | Preview починається лише коли власник утримуваного предмета стоїть біля скінченної площини дзеркала (типово до 150 см), на правильному боці, а предмет перетинає transfer volume. Близькість повторно перевіряється під час preview і для обох гравців перед передачею. | `bTransferVFXActive` відтворює поточний preview; при виході власника із зони preview скасовується. [Сценарій перевірки](MirrorTransferProximity_UA.md) |
+| Взаємодія | `AHronoCharacter` server mutators | Сервер повторно перевіряє hit/distance/timeline/lock; client focus — підказка, не дозвіл | Native presentation trace ділиться з активним `HE_CharacterHrono1::TraceUsable`; кеш лише в межах кадру. [N02/N05](N02_N05_Server_Interaction_UA.md) |
+| Двері та шухляди | `ADrag_Item` / `UDrag_Component` | Обмежений pose stream під час drag; reliable final pose; сервер перевіряє компонент, вісь, межі та lock | Реплікований стан manual loop, multicast коротких open/close; loop припиняється при відпусканні/втраті стану. Для різних панелей одного актора враховуються окремі терміни активності. |
+| Timeline, смерть, схованка | `AHronoCharacter`, `AHidingWardrobe`, ritual authority | Client request сам не встановлює timeline; transition має begin/complete/cancel; safety прив'язана до чинного джерела | Ефекти й visibility лише для local view; схованка/утримуваний предмет відновлюються після зміни стану. [L01](L01_Wardrobe_Safety_UA.md), [L02](N02_L02_Timeline_Authority_UA.md) |
+| Ритуал | `ARunePentagram`, `ARune_Item`, `ACursedRoomRitual`, `URitualCandleComponent` | Сервер перевіряє RuneId, справжній slot/target і progression; completed state відновлюється. Свічки реплікують поточні запалені/приховані частини, а не старі команди `Delay`/`SetVisibility`. | Одноразові аудіоподії відділені від replicated snapshot; для пляшки late join не запускає історичний spin start. [Свічки](RitualCandlesReplication_UA.md) |
+| Звук і голос | `UHronoAudioSettingsSubsystem`, `AHronoPlayerController` | Gameplay звуки мультикастяться з timeline контекстом; transmission має один owner у controller | `HronoAudioPolicy::CanHear` визначає локального слухача; UI volume mix живе в GameInstance; керовані loops зупиняються при заміні та знищенні owner. [A01/A02](A01_A02_Audio_Voice_UA.md) |
+| Сутності й дзеркала | `AScareDirector`, `ATimelineEntityActor`, `UMirrorOptimizationSubsystem` | Director має cache + register/unregister для entities; visibility — local | Вибір nearest кожні 0,2 с змінює лише потрібні стани. Mirror subsystem звіряє actor Tick та шукає лише клас BP_Mirror; сам `SceneCapture` може мати окрему вартість. |
+
+Для читабельності під Past-постпроцесом годинники й дошка Уїджі використовують [локальні render-only копії](PastReadableActors_UA.md). Серверні mesh/collision, розташування літер і replicated transforms залишаються авторитетними; сервер дзеркалить лише X координату Past-прицілу при виборі літери.
+
+`APaintItem` є world-only картиною: сервер ніколи не переводить її до Held-state, а локальний pickup focus не пропонує взяти її. Візуальні аномалії та tutorial observation продовжують працювати незалежно від pickup.
+
+## Інваріанти для рев’ю RPC
+
+1. На сервері `Character.CurrentHeldItem == Item` узгоджений з `Item.OwningCharacter` і Held-state. Зміна власника не створює автоматично звук; short event генерується лише при прийнятій дії.
+2. Drag pose від клієнта — запит. Сервер на кожному commit перевіряє предмет, його частину, близькість, timeline, замок та допустимі межі. Reliable final pose закриває випадок відпускання між двома unreliable updates.
+3. Реплікований bool/enum — snapshot для late join. One-shot ситу, відкриття, pickup, jump, spin start не відтворюється через initial `OnRep`. Керований loop, навпаки, має стартувати з актуального стану й зупинятися при EndPlay/travel.
+4. Локальні highlight, UI, Master/Music/SFX та чутність не повинні міняти авторитетний gameplay стан. Server-side trace залишається незалежним від кешу UI.
+5. `nullptr` у Blueprint audio slot може бути optional лише якщо є перевірений fallback або свідоме рішення. Живі assets і реальні pin connections перевіряються командлетом; список відсутніх старих references не ігнорується.
+
+## Як безпечно продовжувати структурування
+
+Спершу перенести дрібний контракт із поведінковим тестом, потім прибрати legacy path. Найближчі кандидати: один world registry для ритуальних учасників/HotDots; явний data contract замість точних BP names у `TableRitualGate`; окремий interaction result з причиною відмови для UI; компонент власності предметів замість розростання `AHronoCharacter`. Перенесення класів і видалення thin parents потребує reference map Blueprint/map/cook. Поки це план архітектури, а не зроблена міграція.

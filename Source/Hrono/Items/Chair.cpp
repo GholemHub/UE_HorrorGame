@@ -1,4 +1,5 @@
 #include "Chair.h"
+#include "Audio/HronoAudioPolicy.h"
 // Fill out your copyright notice in the Description page of Project Settings.
 #include "HronoCharacter.h"
 #include "Ritual/TableRitualGate.h"
@@ -6,6 +7,7 @@
 #include "Components/StaticMeshComponent.h"
 #include "Kismet/GameplayStatics.h"
 #include "Sound/SoundBase.h"
+#include "UObject/ConstructorHelpers.h"
 
 #include "Items/Chair.h"
 
@@ -13,6 +15,9 @@ AChair::AChair()
 {
 	ItemType = EItemType::Chair;
 	bUseInteractionHighlight = false;
+	static ConstructorHelpers::FObjectFinder<USoundBase> SeatCreak(
+		TEXT("/Game/HorrorEngine/Audio/Interactions/S_Creak_06.S_Creak_06"));
+	NativeSeatFallback = SeatCreak.Object;
 
 	SitPoint = CreateDefaultSubobject<USceneComponent>(TEXT("SitPoint"));
 	StandUpPoint = CreateDefaultSubobject<USceneComponent>(TEXT("StandUpPoint"));
@@ -89,6 +94,24 @@ void AChair::NotifyCharacterSat(AHronoCharacter* Character)
 	OnCharacterSat.Broadcast(Character);
 }
 
+void AChair::SetSitter(AHronoCharacter* Character)
+{
+	if (!HasAuthority() || CurrentSitter == Character) return;
+	CurrentSitter = Character;
+	MulticastSeatSound(IsValid(Character), ItemTimeline);
+	ForceNetUpdate();
+}
+
+void AChair::MulticastSeatSound_Implementation(bool bSeated, EItemTimeline EventTimeline)
+{
+	if (HronoAudioPolicy::CanHear(this, EventTimeline))
+	{
+		USoundBase* Sound = bSeated ? SitSound.Get() : StandUpSound.Get();
+		if (!IsValid(Sound)) Sound = NativeSeatFallback.Get();
+		if (IsValid(Sound)) UGameplayStatics::PlaySoundAtLocation(this, Sound, GetActorLocation());
+	}
+}
+
 void AChair::Use_Implementation(AActor* Character)
 {
 	if (!HasAuthority())
@@ -109,10 +132,7 @@ void AChair::Use_Implementation(AActor* Character)
 		return;
 	}
 
-	if (Hrono->SitOnChair(this))
-	{
-		UGameplayStatics::PlaySoundAtLocation(this, SitSound, GetActorLocation());
-	}
+    Hrono->SitOnChair(this);
 }
 
 bool AChair::TryPickUp(AHronoCharacter* Character)
@@ -157,10 +177,6 @@ bool AChair::OnBacktToRitualTable(AHronoCharacter* SelectedCharacter)
 		return false;
 	}
 
-	UGameplayStatics::PlaySoundAtLocation(
-		this,
-		SitSound,
-		GetActorLocation());
 	return true;
 }
 

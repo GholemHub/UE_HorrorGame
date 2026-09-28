@@ -222,6 +222,7 @@ void ATimelineEntityActor::RefreshVisualRepresentation()
 
 void ATimelineEntityActor::SetDirectorVisibility(bool bVisible)
 {
+	if (bIsManagedByDirector && bDirectorAllowsVisibility == bVisible) return;
 	bIsManagedByDirector = true;
 	bDirectorAllowsVisibility = bVisible;
 	RefreshVisibilityForLocalPlayer();
@@ -229,6 +230,7 @@ void ATimelineEntityActor::SetDirectorVisibility(bool bVisible)
 
 void ATimelineEntityActor::ClearDirectorVisibilityControl()
 {
+	if (!bIsManagedByDirector) return;
 	bIsManagedByDirector = false;
 	bDirectorAllowsVisibility = true;
 	RefreshVisibilityForLocalPlayer();
@@ -382,15 +384,17 @@ void ATimelineEntityActor::ApplyVisualComponentState(bool bActorVisible)
 	{
 		StaticMesh->SetVisibility(bUseStaticMesh, true);
 		StaticMesh->SetHiddenInGame(!bUseStaticMesh, true);
-		StaticMesh->MarkRenderStateDirty();
 	}
 
 	if (IsValid(SkeletalMesh))
 	{
 		SkeletalMesh->SetVisibility(bUseSkeletalMesh, true);
 		SkeletalMesh->SetHiddenInGame(!bUseSkeletalMesh, true);
-		SkeletalMesh->SetComponentTickEnabled(bUseSkeletalMesh && bActorVisible);
-		SkeletalMesh->MarkRenderStateDirty();
+		const bool bShouldTick = bUseSkeletalMesh && bActorVisible;
+		if (SkeletalMesh->IsComponentTickEnabled() != bShouldTick)
+		{
+			SkeletalMesh->SetComponentTickEnabled(bShouldTick);
+		}
 	}
 }
 

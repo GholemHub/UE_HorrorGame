@@ -170,6 +170,7 @@ bool ARitualBottle::SpinBottle(AHronoCharacter* FirstVictim, AHronoCharacter* Se
 	SpinState.SelectedVictimIndex = bChooseFirst ? 0 : 1;
 
 	LastCompletedSequence = INDEX_NONE;
+	MulticastSpinStartAudio();
 	HandleSpinStarted();
 	ForceNetUpdate();
 
@@ -220,6 +221,9 @@ void ARitualBottle::ClearSelectedVictim()
 
 void ARitualBottle::OnRep_SpinState()
 {
+	if (!HasActorBegunPlay()) return; // BeginPlay applies the initial snapshot once.
+	const bool bInitialSnapshot = !bReceivedSpinSnapshot;
+	bReceivedSpinSnapshot = true;
 	if (!IsValid(SpinState.SelectedVictim))
 	{
 		if (!SpinState.bIsSpinning && FMath::IsNearlyZero(SpinState.TotalSpinDegrees))
@@ -229,16 +233,26 @@ void ARitualBottle::OnRep_SpinState()
 		return;
 	}
 
-	HandleSpinStarted();
 	if (SpinState.bIsSpinning)
 	{
+		HandleSpinStarted();
 		ApplySpinAtTime(GetSynchronizedWorldTime());
 	}
 	else
 	{
 		ApplyFinalRotation();
-		HandleSpinCompleted();
+		if (bInitialSnapshot)
+		{
+			LastStartedSequence = LastCompletedSequence = SpinState.SequenceId;
+		}
+		else HandleSpinCompleted();
 	}
+}
+
+void ARitualBottle::MulticastSpinStartAudio_Implementation()
+{
+	// Existing Blueprint supplies host audio; remote clients receive only the new event.
+	PlayRitualChairStartAudioForRemoteClient(this, GetActorLocation());
 }
 
 double ARitualBottle::GetSynchronizedWorldTime() const
@@ -293,7 +307,6 @@ void ARitualBottle::HandleSpinStarted()
 	}
 
 	LastStartedSequence = SpinState.SequenceId;
-	PlayRitualChairStartAudioForRemoteClient(this, GetActorLocation());
 	OnSpinStarted.Broadcast(this);
 	BP_OnBottleSpinStarted();
 }

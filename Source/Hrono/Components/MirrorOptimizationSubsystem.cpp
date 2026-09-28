@@ -7,6 +7,7 @@
 #include "GameFramework/PlayerController.h"
 #include "HAL/IConsoleManager.h"
 #include "Kismet/GameplayStatics.h"
+#include "UObject/UObjectGlobals.h"
 
 namespace MirrorOptimization
 {
@@ -40,21 +41,11 @@ namespace MirrorOptimization
 		1,
 		TEXT("Use a visibility trace to suspend BP_Mirror when level geometry occludes it."));
 
-	static bool IsBPProjectMirror(const AActor* Actor)
+	static UClass* FindProjectMirrorClass()
 	{
-		if (!IsValid(Actor))
-		{
-			return false;
-		}
-
-		// Target only /Game/_Alex/BP_Mirror. Other decorative mirror assets and
-		// similarly named gameplay actors are intentionally left untouched.
-		const UClass* ActorClass = Actor->GetClass();
-		return IsValid(ActorClass)
-			&& (ActorClass->GetName().Equals(TEXT("BP_Mirror_C"), ESearchCase::CaseSensitive)
-				|| ActorClass->GetPathName().Equals(
-					TEXT("/Game/_Alex/BP_Mirror.BP_Mirror_C"),
-					ESearchCase::CaseSensitive));
+		// The map loads this class for placed mirrors. Resolve on each discovery
+		// so mirrors introduced by later level streaming are also found.
+		return FindObject<UClass>(nullptr, TEXT("/Game/_Alex/BP_Mirror.BP_Mirror_C"));
 	}
 }
 
@@ -113,7 +104,10 @@ void UMirrorOptimizationSubsystem::Tick(float DeltaTime)
 			&& (!bCullingEnabled
 				|| (IsValid(CameraManager)
 					&& ShouldTickMirror(MirrorActor, Iterator.Value(), PlayerController, CameraManager)));
-		MirrorActor->SetActorTickEnabled(bShouldTick);
+		if (MirrorActor->IsActorTickEnabled() != bShouldTick)
+		{
+			MirrorActor->SetActorTickEnabled(bShouldTick);
+		}
 	}
 }
 
@@ -130,11 +124,13 @@ void UMirrorOptimizationSubsystem::RefreshMirrorActors()
 		return;
 	}
 
-	for (TActorIterator<AActor> ActorIterator(World); ActorIterator; ++ActorIterator)
+	UClass* MirrorClass = MirrorOptimization::FindProjectMirrorClass();
+	if (!IsValid(MirrorClass)) return;
+	for (TActorIterator<AActor> ActorIterator(World, MirrorClass); ActorIterator; ++ActorIterator)
 	{
 		AActor* Actor = *ActorIterator;
 		const TWeakObjectPtr<AActor> ActorKey(Actor);
-		if (!MirrorOptimization::IsBPProjectMirror(Actor) || MirrorActors.Contains(ActorKey))
+		if (MirrorActors.Contains(ActorKey))
 		{
 			continue;
 		}

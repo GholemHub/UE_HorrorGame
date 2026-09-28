@@ -203,8 +203,11 @@ protected:
 
 	UFUNCTION()
 	void OnRep_SpinState();
+	UFUNCTION(NetMulticast, Unreliable)
+	void MulticastSpinStartAudio();
 
 private:
+	bool bReceivedSpinSnapshot = false;
 	double GetSynchronizedWorldTime() const;
 	void ApplySpinAtTime(double CurrentServerTime);
 	void ApplyFinalRotation();

@@ -106,6 +106,10 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Wardrobe|Hiding")
 	bool CanPlayerHide(const AHronoCharacter* Player) const;
 
+	/** Physical overlap registration is independent of timeline and door state. */
+	bool IsCharacterInsideSafetyVolume(const AHronoCharacter* Player) const;
+	bool CanProvideSafetyFor(const AHronoCharacter* Player) const;
+
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Wardrobe|Hiding")
 	bool TryEnterWardrobe(AHronoCharacter* Player);
 
@@ -114,6 +118,7 @@ public:
 
 protected:
 	virtual void BeginPlay() override;
+	virtual void ApplyItemTimelineState() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void CancelNativeAnimationForAutomaticInteraction(
 		USceneComponent* MovementComponent) override;
@@ -152,6 +157,7 @@ private:
 	void RefreshWardrobeSafety();
 	void ClearWardrobeSafety();
 
+	bool bRefreshingWardrobeSafety = false;
 	bool bRightDoorAnimationActive = false;
 	float RightDoorAnimationElapsed = 0.0f;
 	float ActiveRightDoorAnimationDuration = 1.0f;
@@ -162,4 +168,5 @@ private:
 	ECollisionEnabled::Type HiddenPlayerCapsuleCollisionBeforeHiding = ECollisionEnabled::QueryAndPhysics;
 	ECollisionResponse HiddenPlayerDoorPastResponseBeforeHiding = ECR_Block;
 	ECollisionResponse HiddenPlayerDoorFutureResponseBeforeHiding = ECR_Block;
+	EItemTimeline HiddenPlayerTimelineBeforeHiding = EItemTimeline::Both;
 };

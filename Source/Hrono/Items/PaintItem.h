@@ -32,6 +32,7 @@ class HRONO_API APaintItem : public ABase_Item
 
 public:
 	APaintItem();
+	virtual bool CanBePickedUp() const override { return false; }
 
 	virtual void Tick(float DeltaSeconds) override;
 	virtual void GetLifetimeReplicatedProps(

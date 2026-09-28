@@ -128,10 +128,26 @@ public:
 	/** Stops the looping move sound. */
 	UFUNCTION(BlueprintCallable, Category = "Audio")
 	void StopMoveSound();
+	void FinishManualPanelMovement(FName ComponentName);
+	virtual void UpdateVisibilityForLocalPlayer(EItemTimeline ViewerTimeline) override;
 
 protected:
 	// Called when the game starts or when spawned
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	void MarkManualPanelMovement(FName ComponentName, bool bLinear);
+	void ExpireManualPanelMovement();
+	UFUNCTION()
+	void OnRep_ManualMovementAudio();
+	UPROPERTY(ReplicatedUsing=OnRep_ManualMovementAudio)
+	bool bManualMovementAudioActive = false;
+	UPROPERTY(ReplicatedUsing=OnRep_ManualMovementAudio)
+	bool bManualMovementIsLinear = false;
+	TMap<FName, double> ManualPanelSoundExpiry;
+	FTimerHandle ManualMovementAudioTimer;
+	bool bMoveSoundRequested = false;
+	UFUNCTION(NetMulticast, Unreliable)
+	void MulticastPanelStateSound(bool bLinear, bool bOpen, EItemTimeline EventTimeline);
 	virtual bool AllowsAimInteractionHighlight() const override { return false; }
 
 

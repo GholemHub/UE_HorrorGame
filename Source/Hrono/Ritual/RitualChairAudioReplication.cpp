@@ -3,6 +3,7 @@
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/Actor.h"
+#include "Items/Chair.h"
 #include "Kismet/GameplayStatics.h"
 #include "Sound/SoundBase.h"
 
@@ -10,19 +11,16 @@ namespace RitualChairAudio
 {
 	const TCHAR* CreakSoundPath =
 		TEXT("/Game/HorrorEngine/Audio/Interactions/S_Creak_06.S_Creak_06");
-	const FName RitualChairClassName(TEXT("BP_RitualChair_C"));
 
 	AActor* FindClosestRitualChair(UWorld* World, const FVector& RitualOrigin)
 	{
 		AActor* ClosestChair = nullptr;
 		double ClosestDistanceSquared = TNumericLimits<double>::Max();
 
-		for (TActorIterator<AActor> It(World); It; ++It)
+		for (TActorIterator<AChair> It(World); It; ++It)
 		{
-			AActor* Candidate = *It;
-			if (!IsValid(Candidate)
-				|| !IsValid(Candidate->GetClass())
-				|| Candidate->GetClass()->GetFName() != RitualChairClassName)
+			AChair* Candidate = *It;
+			if (!IsValid(Candidate) || !Candidate->IsRitualGuidanceUnlocked())
 			{
 				continue;
 			}

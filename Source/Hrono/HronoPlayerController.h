@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/PlayerController.h"
 #include "TimerManager.h"
+#include "Interfaces/VoiceInterface.h"
 #include "HronoPlayerController.generated.h"
 
 class UInputMappingContext;
@@ -28,6 +29,18 @@ public:
 	/** Radio input and console diagnostics share the same local voice setup. */
 	UFUNCTION(Exec, BlueprintCallable, Category = "Voice|Radio")
 	void ToggleRadioTransmission();
+
+	UFUNCTION(Exec, BlueprintCallable, Category = "Voice|Radio")
+	void SetRadioTransmissionEnabled(bool bEnabled);
+
+	UFUNCTION(BlueprintPure, Category = "Voice|Radio")
+	bool IsRadioTransmissionRequested() const { return bRadioTransmissionEnabled; }
+	UFUNCTION(BlueprintPure, Category = "Voice|Radio")
+	bool IsRadioTransmissionActive() const { return bRadioTransmissionActive; }
+
+	/** Inherited StartTalking/StopTalking and ToggleSpeaking console calls use the same owner. */
+	virtual void ToggleSpeaking(bool bSpeaking) override;
+	void NotifyVoiceReceiverReady(APawn* ReadyPawn);
 
 	UFUNCTION(Exec)
 	void HronoVoiceStatus();
@@ -69,14 +82,20 @@ protected:
 	bool ShouldUseTouchControls() const;
 
 	/** Validate the session and register the microphone owner before starting capture. */
-	bool PrepareRadioVoice();
+	virtual bool PrepareRadioVoice();
+	virtual void ApplyRadioCapture(bool bEnabled);
 
 	/** Reapply the switch after Blueprint/session bootstrap and pawn replacement. */
 	void ApplyRadioTransmissionState();
 
-	/** Late client Blueprint voice setup can run after the first possession tick. */
-	FTimerHandle RadioBootstrapTimer;
+	/** Poll actual session readiness/loss, rather than treating a delay as initialization. */
+	FTimerHandle RadioReadinessTimer;
 
 	/** The controller owns transmission state; pawn defaults may change on respawn. */
 	bool bRadioTransmissionEnabled = false;
+	bool bRadioTransmissionActive = false;
+	bool bVoiceReceiverReady = false;
+	TWeakPtr<IOnlineVoice, ESPMode::ThreadSafe> RegisteredRadioVoice;
+	int32 RegisteredRadioUser = INDEX_NONE;
+	void ResetRadioRegistration();
 };

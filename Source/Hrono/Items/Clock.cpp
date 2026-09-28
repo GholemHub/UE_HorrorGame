@@ -2,6 +2,7 @@
 
 #include "Components/ClockSecondHandSoundComponent.h"
 #include "Components/SceneComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "Enviroment/Room.h"
 #include "GameFramework/GameStateBase.h"
 #include "HronoCharacter.h"
@@ -9,6 +10,7 @@
 #include "Kismet/GameplayStatics.h"
 #include "Net/UnrealNetwork.h"
 #include "Sound/SoundBase.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogClock, Log, All);
 
@@ -58,6 +60,11 @@ AClock::AClock()
 	SecondHandSoundComponent = CreateDefaultSubobject<UClockSecondHandSoundComponent>(
 		TEXT("SecondHandSound"));
 	SecondHandSoundComponent->SetupAttachment(DefaultSceneRoot);
+	PastMirrorVisualRoot = CreateDefaultSubobject<USceneComponent>(TEXT("PastMirrorVisualRoot"));
+	PastMirrorVisualRoot->SetupAttachment(DefaultSceneRoot);
+	PastMirrorVisualRoot->SetMobility(EComponentMobility::Movable);
+	PastMirrorVisualRoot->SetRelativeScale3D(FVector(-1.0f, 1.0f, 1.0f));
+	PastMirrorVisualRoot->SetVisibility(false);
 	if (SecondHandTickSoundAsset.Succeeded())
 	{
 		SecondHandSoundComponent->TickSound = SecondHandTickSoundAsset.Object;
@@ -107,6 +114,7 @@ void AClock::BeginPlay()
 	LastAudibleSecond = FMath::FloorToInt(GetCurrentClockTime());
 	UpdateClockVisual();
 	UpdateSecondHandSoundAttachment();
+	UpdateMeshForLocalPlayer();
 }
 
 void AClock::Tick(float DeltaSeconds)
@@ -115,6 +123,117 @@ void AClock::Tick(float DeltaSeconds)
 	// running alongside the native implementation.
 	(void)DeltaSeconds;
 	UpdateClockVisual();
+	if (bPastMirrorVisualActive && bPastMirrorNeedsSync)
+	{
+		SyncPastMirrorVisuals();
+		bPastMirrorNeedsSync = false;
+	}
+}
+
+void AClock::UpdateVisibilityForLocalPlayer(EItemTimeline ViewerTimeline)
+{
+	Super::UpdateVisibilityForLocalPlayer(ViewerTimeline);
+	const bool bVisibleToViewer = ItemTimeline == EItemTimeline::Both || ItemTimeline == ViewerTimeline;
+	const bool bMirrorForPast = bVisibleToViewer && ViewerTimeline == EItemTimeline::Past;
+	if (bMirrorForPast)
+	{
+		EnsurePastMirrorVisuals();
+		SyncPastMirrorVisuals();
+		bPastMirrorNeedsSync = false;
+	}
+	SetPastMirrorVisualsVisible(bMirrorForPast);
+	bPastMirrorVisualActive = bMirrorForPast;
+}
+
+void AClock::EnsurePastMirrorVisuals()
+{
+	if (!PastMirrorSources.IsEmpty() || !PastMirrorVisualRoot || !DefaultSceneRoot)
+	{
+		return;
+	}
+
+	TInlineComponentArray<UStaticMeshComponent*> Meshes(this);
+	for (UStaticMeshComponent* Source : Meshes)
+	{
+		if (!IsValid(Source) || Source->GetAttachParent() == PastMirrorVisualRoot)
+		{
+			continue;
+		}
+
+		const FName CloneName(*FString::Printf(TEXT("PastMirror_%s"), *Source->GetName()));
+		UStaticMeshComponent* Clone = NewObject<UStaticMeshComponent>(this, CloneName, RF_Transient);
+		AddInstanceComponent(Clone);
+		Clone->SetMobility(EComponentMobility::Movable);
+		Clone->SetupAttachment(PastMirrorVisualRoot);
+		Clone->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Clone->SetGenerateOverlapEvents(false);
+		Clone->SetCanEverAffectNavigation(false);
+		Clone->SetCastShadow(Source->CastShadow);
+		Clone->SetVisibility(false);
+		Clone->RegisterComponent();
+		PastMirrorSources.Add(Source);
+		PastMirrorMeshes.Add(Clone);
+	}
+}
+
+void AClock::SyncPastMirrorVisuals()
+{
+	if (!DefaultSceneRoot)
+	{
+		return;
+	}
+
+	for (int32 Index = 0; Index < PastMirrorMeshes.Num(); ++Index)
+	{
+		UStaticMeshComponent* Source = PastMirrorSources[Index].Get();
+		UStaticMeshComponent* Clone = PastMirrorMeshes[Index];
+		if (!IsValid(Source) || !IsValid(Clone))
+		{
+			continue;
+		}
+
+		const FTransform RelativeToRoot = Source->GetComponentTransform().GetRelativeTransform(
+			DefaultSceneRoot->GetComponentTransform());
+		if (!Clone->GetRelativeTransform().Equals(RelativeToRoot))
+		{
+			Clone->SetRelativeTransform(RelativeToRoot);
+		}
+		if (Clone->GetStaticMesh() != Source->GetStaticMesh())
+		{
+			Clone->SetStaticMesh(Source->GetStaticMesh());
+		}
+		for (int32 Slot = 0; Slot < Source->GetNumMaterials(); ++Slot)
+		{
+			if (Clone->GetMaterial(Slot) != Source->GetMaterial(Slot))
+			{
+				Clone->SetMaterial(Slot, Source->GetMaterial(Slot));
+			}
+		}
+		if (Clone->GetOverlayMaterial() != Source->GetOverlayMaterial())
+		{
+			Clone->SetOverlayMaterial(Source->GetOverlayMaterial());
+		}
+	}
+}
+
+void AClock::SetPastMirrorVisualsVisible(bool bVisible)
+{
+	if (PastMirrorVisualRoot)
+	{
+		PastMirrorVisualRoot->SetVisibility(bVisible);
+	}
+	for (int32 Index = 0; Index < PastMirrorMeshes.Num(); ++Index)
+	{
+		if (UStaticMeshComponent* Source = PastMirrorSources[Index].Get())
+		{
+			Source->SetVisibility(!bVisible && (ItemTimeline == EItemTimeline::Both
+				|| ItemTimeline == CurrentCachedTimeline));
+		}
+		if (UStaticMeshComponent* Clone = PastMirrorMeshes[Index])
+		{
+			Clone->SetVisibility(bVisible);
+		}
+	}
 }
 
 void AClock::Use_Implementation(AActor* Character)
@@ -565,11 +684,26 @@ void AClock::ResolveClockHands()
 
 void AClock::UpdateClockVisual()
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(Hrono_ClockPresentation);
 	ResolveClockHands();
 	TimeNow = GetCurrentClockTime();
-	ApplyHandRotations(TimeNow);
-
 	const int32 CurrentWholeSecond = FMath::FloorToInt(TimeNow);
+	if (bSmoothHandMovement || bLastVisualWasSmooth
+		|| LastVisualSecond != CurrentWholeSecond
+		|| !LastVisualOffset.Equals(HandRotationOffset)
+		|| LastHourHand.Get() != HourHandComponent.Get()
+		|| LastMinuteHand.Get() != MinuteHandComponent.Get()
+		|| LastSecondHand.Get() != SecondHandComponent.Get())
+	{
+		ApplyHandRotations(TimeNow);
+		bPastMirrorNeedsSync = true;
+		LastVisualSecond = CurrentWholeSecond;
+		LastVisualOffset = HandRotationOffset;
+		LastHourHand = HourHandComponent;
+		LastMinuteHand = MinuteHandComponent;
+		LastSecondHand = SecondHandComponent;
+		bLastVisualWasSmooth = bSmoothHandMovement;
+	}
 	if (!IsAudibleForLocalPlayer())
 	{
 		if (SecondHandSoundComponent && SecondHandSoundComponent->IsPlaying())
@@ -612,7 +746,10 @@ void AClock::ApplyHandRotations(float SecondsSinceMidnight)
 		{
 			FRotator Rotation = HandRotationOffset;
 			Rotation.Pitch += Pitch;
-			Hand->SetRelativeRotation(Rotation);
+			if (!Hand->GetRelativeRotation().Equals(Rotation))
+			{
+				Hand->SetRelativeRotation(Rotation);
+			}
 		}
 	};
 

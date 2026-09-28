@@ -2,6 +2,7 @@
 
 
 #include "Items/Base_Item.h"
+#include "Audio/HronoAudioPolicy.h"
 #include "Net/UnrealNetwork.h"
 #include "GameplayTagsManager.h"
 #include "HronoCharacter.h"
@@ -12,18 +13,27 @@
 #include "Components/SceneCaptureComponent2D.h"
 #include "Components/SceneComponent.h"
 #include "Components/HeldItemInertiaComponent.h"
+#include "Engine/StaticMesh.h"
 #include "Engine/World.h"
+#include "HAL/IConsoleManager.h"
 #include "Kismet/GameplayStatics.h"
 #include "Materials/MaterialInterface.h"
 #include "Sound/SoundBase.h"
 #include "UObject/ConstructorHelpers.h"
+
+namespace
+{
+TAutoConsoleVariable<int32> CVarHeldTransformLogging(
+	TEXT("hrono.Debug.HeldTransform"), 0,
+	TEXT("Log detailed held-item transforms during pickup; 0 by default."));
+}
 
 // Sets default values
 ABase_Item::ABase_Item()
 {
 
 	bReplicates = true;
-	SetReplicateMovement(true); // CRITICAL: Allows the drop fall/position to replicate!
+	SetReplicateMovement(true);
 
 	PrimaryActorTick.bCanEverTick = true;
 	PrimaryActorTick.bStartWithTickEnabled = false;
@@ -166,6 +176,7 @@ void ABase_Item::EnsureInteractionOverlayMaterial()
 bool ABase_Item::CanHighlightFor(const AHronoCharacter* Viewer) const
 {
 	return IsValid(Viewer)
+		&& CanBePickedUp()
 		&& bAllowInteractionOverlay
 		&& AllowsAimInteractionHighlight()
 		&& IsValid(InteractionOverlayMaterial)
@@ -241,53 +252,38 @@ void ABase_Item::OnRep_ItemTimeline()
 
 void ABase_Item::EnableDroppedPhysics()
 {
-	if (!HasAuthority())
+	if (!HasAuthority() || IsPlacementLocked() || IsValid(OwningCharacter) || bIsPickedUp)
 	{
 		return;
 	}
 
 	bDroppedPhysicsEnabled = true;
 	bFloatingPickupEnabled = false;
-	ApplyDroppedPhysicsState();
+	ApplyWorldItemState();
 	ForceNetUpdate();
 }
 
 void ABase_Item::EnableFloatingPickup()
 {
-	if (!HasAuthority())
+	if (!HasAuthority() || IsPlacementLocked() || IsValid(OwningCharacter) || bIsPickedUp)
 	{
 		return;
 	}
 
 	bDroppedPhysicsEnabled = false;
 	bFloatingPickupEnabled = true;
-	ApplyFloatingPickupState();
+	ApplyWorldItemState();
 	ForceNetUpdate();
 }
 
 void ABase_Item::OnRep_FloatingPickupEnabled()
 {
-	if (bFloatingPickupEnabled && !IsValid(OwningCharacter) && !bIsPickedUp)
-	{
-		ApplyFloatingPickupState();
-	}
+	ApplyWorldItemState();
 }
 
 void ABase_Item::OnRep_DroppedPhysicsEnabled()
 {
-	// OwningCharacter and this flag can arrive in either RepNotify order. A ritual
-	// key starts with dropped physics enabled, so never let an older/parallel
-	// physics notification detach its mesh again after the held attachment won.
-	if (IsValid(OwningCharacter) || bIsPickedUp)
-	{
-		return;
-	}
-
-	if (bDroppedPhysicsEnabled)
-	{
-		ApplyDroppedPhysicsState();
-		UpdateMeshForLocalPlayer();
-	}
+	ApplyWorldItemState();
 }
 
 void ABase_Item::UpdateMeshForLocalPlayer()
@@ -329,28 +325,41 @@ void ABase_Item::UpdateVisibilityForLocalPlayer(EItemTimeline ViewerTimeline)
 
 bool ABase_Item::TryPickUp(AHronoCharacter* Character)
 {
-	
-	if (ItemTimeline != EItemTimeline::Both && ItemTimeline != Character->GetTimeline())
+	if (!HasAuthority() || !CanBePickedUp() || !IsValid(Character)
+		|| IsActorBeingDestroyed() || IsPlacementLocked())
 	{
 		return false;
 	}
 
-
-	// Only allow pickup on authority
-	if (!HasAuthority())
+	// Pickup never transfers an occupied item. Server RPCs are processed serially,
+	// so the first accepted request claims it before a competing request can run.
+	if (bIsPickedUp || OwningCharacter != nullptr)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("[Item] %s Pickup attempted on non-authority, ignoring"), *GetName());
+		UE_LOG(LogTemp, Log, TEXT("[Item] Pickup rejected for %s: %s is already held or reserved by %s"),
+			*GetNameSafe(Character), *GetName(), *GetNameSafe(OwningCharacter));
 		return false;
 	}
 
-	// Call pickup logic (NOT the base destroy behavior)
+	// PickupItem reserves this hand before attachment can invoke Blueprint events.
+	// Also reject direct native calls when another item already occupies the hand.
+	if ((IsValid(Character->GetHeldItem()) && Character->GetHeldItem() != this)
+		|| (ItemTimeline != EItemTimeline::Both && ItemTimeline != Character->GetTimeline()))
+	{
+		return false;
+	}
+
 	OnPickedUp(Character);
 
-	return bIsPickedUp;
+	return bIsPickedUp && OwningCharacter == Character;
 }
 
 bool ABase_Item::AttachToCharacter()
 {
+	if (IsPlacementLocked())
+	{
+		ApplyWorldItemState();
+		return false;
+	}
 	bInteractionHovered = false;
 	SetHeldSceneCapturesEnabled(false);
 
@@ -384,27 +393,9 @@ bool ABase_Item::AttachToCharacter()
 	// machine. Dropped movement replication is restored in DetachFromCharacter.
 	SetReplicateMovement(false);
 
-	if (USceneComponent* Root = GetRootComponent())
-	{
-		Root->SetMobility(EComponentMobility::Movable);
-
-		// A non-root primitive is detached by Unreal when physics simulation starts.
-		// Reattach and reset it before moving the actor root. KeepWorldTransform would
-		// preserve the offset accumulated while the dropped mesh was falling, causing
-		// the second pickup to appear far behind the character.
-		if (IsValid(ItemMesh) && ItemMesh != Root)
-		{
-			if (ItemMesh->GetAttachParent() != Root)
-			{
-				ItemMesh->AttachToComponent(Root, FAttachmentTransformRules::KeepRelativeTransform);
-			}
-
-			// Physics detaches a non-root mesh and changes its relative transform to
-			// world space. Restore the Blueprint-authored mesh transform so HoldOffset
-			// is the only transform that controls how the held item is positioned.
-			ItemMesh->SetRelativeTransform(ItemMeshRelativeTransform);
-		}
-	}
+	// Chaos detaches a simulated child mesh and leaves its relative transform in
+	// world space. Restore the authored pose before applying the held offset.
+	RestoreItemMeshAttachment();
 
 	if (!RefreshHeldAttachmentPoint())
 	{
@@ -413,6 +404,7 @@ bool ABase_Item::AttachToCharacter()
 	}
 
 	bIsPickedUp = true;
+	RefreshItemTickEnabled(bTemporaryItemTickActive);
 	RefreshInteractionHighlight();
 	UpdateMeshForLocalPlayer();
 	if (HasAuthority())
@@ -431,7 +423,7 @@ bool ABase_Item::AttachToCharacter()
 bool ABase_Item::RefreshHeldAttachmentPoint()
 {
 	AHronoCharacter* Player = Cast<AHronoCharacter>(OwningCharacter);
-	USceneComponent* TargetPoint = Player ? Player->GetActiveInteractionPoint() : nullptr;
+	USceneComponent* TargetPoint = Player ? Player->GetHeldItemInteractionPoint(this) : nullptr;
 	if (!IsValid(Player) || !IsValid(TargetPoint))
 	{
 		UE_LOG(LogTemp, Error,
@@ -457,8 +449,9 @@ bool ABase_Item::RefreshHeldAttachmentPoint()
 	// cannot inherit a different scale from the character or change after drop.
 	if (USceneComponent* Root = GetRootComponent())
 	{
-		FVector HoldLocation = HoldOffset.GetLocation();
-		if (Player->GetTimeline() == EItemTimeline::Past)
+		FVector HoldLocation = bUseCenteredInteractionPoint
+			? FVector::ZeroVector : HoldOffset.GetLocation();
+		if (!bUseCenteredInteractionPoint && Player->GetTimeline() == EItemTimeline::Past)
 		{
 			// The past view is mirrored, so mirror the held item's longitudinal
 			// location offset as well (for example, Future X=-10 becomes Past X=+10).
@@ -471,22 +464,24 @@ bool ABase_Item::RefreshHeldAttachmentPoint()
 
 		if (IsValid(HeldItemInertia))
 		{
-			HeldItemInertia->BeginHeld(Player, Root->GetRelativeTransform());
+			if (bUseCenteredInteractionPoint) HeldItemInertia->EndHeld(false);
+			else HeldItemInertia->BeginHeld(Player, Root->GetRelativeTransform());
 		}
 	}
 	LogHeldTransformState(TEXT("AfterHoldPose"));
 
 	UE_LOG(LogTemp, Log,
-		TEXT("[Item] Attached %s to timeline point %s"), *GetName(), *GetNameSafe(TargetPoint));
+		TEXT("[Item] Attached %s to held point %s"), *GetName(), *GetNameSafe(TargetPoint));
 	return true;
 }
 
 void ABase_Item::LogHeldTransformState(const TCHAR* Context) const
 {
 #if !UE_BUILD_SHIPPING
+	if (CVarHeldTransformLogging.GetValueOnGameThread() == 0) return;
 	const AHronoCharacter* Player = Cast<AHronoCharacter>(OwningCharacter);
 	const USceneComponent* Root = GetRootComponent();
-	const USceneComponent* Anchor = Player ? Player->GetActiveInteractionPoint() : nullptr;
+	const USceneComponent* Anchor = Player ? Player->GetHeldItemInteractionPoint(this) : nullptr;
 	const USceneComponent* FuturePoint = Player ? Player->InteractionPoint.Get() : nullptr;
 	const USceneComponent* PastPoint = Player ? Player->PastInteractionPoint.Get() : nullptr;
 	const UCameraComponent* Camera = Player ? Player->GetFirstPersonCameraComponent() : nullptr;
@@ -557,7 +552,7 @@ void ABase_Item::OnPickedUp(AHronoCharacter* Character)
 		OwningCharacter = nullptr;
 		return;
 	}
-	UGameplayStatics::PlaySoundAtLocation(this, PickupSound, GetActorLocation());
+	MulticastItemSound(true, ItemTimeline, GetActorLocation());
 	UE_LOG(LogTemp, Warning, TEXT("PickUp"));
 	auto Dozimetr = Cast<ADozimetr>(this);
 	if (Dozimetr) {
@@ -567,134 +562,121 @@ void ABase_Item::OnPickedUp(AHronoCharacter* Character)
 }
 
 
+void ABase_Item::MulticastItemSound_Implementation(bool bPickup,
+	EItemTimeline EventTimeline, FVector_NetQuantize Location)
+{
+	if (HronoAudioPolicy::CanHear(this, EventTimeline))
+	{
+		UGameplayStatics::PlaySoundAtLocation(this, bPickup ? PickupSound : DropSound, Location);
+	}
+}
+
 void ABase_Item::OnRep_OwningCharacter(AHronoCharacter* PreviousOwningCharacter)
 {
-	if (OwningCharacter)
+	if (IsValid(OwningCharacter) && !IsPlacementLocked())
 	{
 		if (IsValid(PreviousOwningCharacter) && PreviousOwningCharacter != OwningCharacter)
 		{
 			OnHeldStateChanged(false, PreviousOwningCharacter);
 		}
-
-		// Clients run attachment logic here
 		AttachToCharacter();
-		UGameplayStatics::PlaySoundAtLocation(this, PickupSound, GetActorLocation());
-		UE_LOG(LogTemp, Warning, TEXT("[Item] %s OnRep: Attaching to %s"), *GetName(), *OwningCharacter->GetName());
+		return;
 	}
-	else
+
+	if (IsValid(HeldItemInertia))
 	{
-		if (IsValid(HeldItemInertia))
-		{
-			HeldItemInertia->EndHeld(false);
-		}
-		SetReplicateMovement(true);
-
-		// OwningCharacter was cleared — item was dropped on client side
-		DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
-
-		// Ensure it becomes visible again on clients
-		SetActorHiddenInGame(false);
-
-		UGameplayStatics::PlaySoundAtLocation(this, DropSound, GetActorLocation());
-
-		// FIX 1: Turn actor-level collision back on! 
-		// Changing the mesh component collision alone will fail if the actor itself is disabled.
-		SetActorEnableCollision(true);
-
-		if (UStaticMeshComponent* Mesh = GetItemMesh())
-		{
-			// Re-enable collision so clients can see/re-interact with it
-			Mesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
-			ConfigureDroppedCollision(Mesh);
-
-			// FIX 2: Clients MUST simulate physics if the server is simulating physics!
-			// Unreal's built-in network movement code uses the server's physics simulation 
-			// to drive and smoothly interpolate the client's simulated body.
-			Mesh->SetSimulatePhysics(true);
-		}
-
-		bIsPickedUp = false;
-		UpdateMeshForLocalPlayer();
-		OnHeldStateChanged(false, PreviousOwningCharacter);
-		SetHeldSceneCapturesEnabled(false);
+		HeldItemInertia->EndHeld(false);
 	}
+	bIsPickedUp = false;
+	SetReplicateMovement(true);
+
+	// Attachment replication may already have attached the rune to its slot.
+	// Only remove the old hand attachment; never detach a placed rune's parent.
+	if (!IsPlacementLocked() && IsValid(PreviousOwningCharacter)
+		&& GetAttachParentActor() == PreviousOwningCharacter)
+	{
+		DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+	}
+	SetActorHiddenInGame(false);
+	ApplyWorldItemState();
+	OnHeldStateChanged(false, PreviousOwningCharacter);
+	SetHeldSceneCapturesEnabled(false);
 }
 
 void ABase_Item::Drop()
 {
-	if (!bIsPickedUp || !OwningCharacter)
+	if (!HasAuthority() || !bIsPickedUp || !IsValid(OwningCharacter) || IsPlacementLocked())
 	{
-		UE_LOG(LogTemp, Warning, TEXT("[Item] %s Cannot drop - not currently picked up"), *GetName());
 		return;
 	}
 
-	if (!HasAuthority())
-	{
-		UE_LOG(LogTemp, Warning, TEXT("[Item] %s Drop attempted on non-authority, ignoring"), *GetName());
-		return;
-	}
-
-	UE_LOG(LogTemp, Warning, TEXT("[Item] %s Dropped by %s"), *GetName(), *OwningCharacter->GetName());
-
+	AHronoCharacter* PreviousOwner = OwningCharacter;
 	DetachFromCharacter();
-
-	UGameplayStatics::PlaySoundAtLocation(this, DropSound, GetActorLocation());
-
 	bIsPickedUp = false;
-
-	auto Dozimetr = Cast<ADozimetr>(this);
-	if (Dozimetr) {
-		Dozimetr->Off();
-	}
-
-	// Clear both native ownership and your replication variable
 	SetOwner(nullptr);
 	OwningCharacter = nullptr;
 	bDroppedPhysicsEnabled = true;
 	bFloatingPickupEnabled = false;
-	UpdateMeshForLocalPlayer();
+	ApplyWorldItemState();
+
+	if (ADozimetr* Dozimetr = Cast<ADozimetr>(this))
+	{
+		Dozimetr->Off();
+	}
+	MulticastItemSound(false, ItemTimeline, GetActorLocation());
+	OnHeldStateChanged(false, PreviousOwner);
+	// Blueprint callbacks may reactivate a capture. The native dropped state wins.
+	SetHeldSceneCapturesEnabled(false);
 	ForceNetUpdate();
+}
+
+bool ABase_Item::ReleaseForPlacement(AHronoCharacter* Character)
+{
+	if (!HasAuthority() || !IsValid(Character) || OwningCharacter != Character || !bIsPickedUp)
+	{
+		return false;
+	}
+
+	DetachFromCharacter();
+	bIsPickedUp = false;
+	OwningCharacter = nullptr;
+	SetOwner(nullptr);
+	bDroppedPhysicsEnabled = false;
+	bFloatingPickupEnabled = false;
+	ApplyWorldItemState();
+	if (ADozimetr* Dozimetr = Cast<ADozimetr>(this))
+	{
+		Dozimetr->Off();
+	}
+	OnHeldStateChanged(false, Character);
+	SetHeldSceneCapturesEnabled(false);
+	ForceNetUpdate();
+	return true;
 }
 
 void ABase_Item::DetachFromCharacter()
 {
-	UE_LOG(LogTemp, Warning, TEXT("[Item] %s Detaching from character"), *GetName());
-
-	AHronoCharacter* PreviousOwningCharacter = OwningCharacter;
 	if (IsValid(HeldItemInertia))
 	{
 		HeldItemInertia->EndHeld(false);
 	}
 	SetReplicateMovement(true);
-
-	// Detach from parent
 	DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
-
-	// Ensure it's visible in the world after being dropped
 	SetActorHiddenInGame(false);
-
-	// Re-enable physics and collision on the Server
-	if (UStaticMeshComponent* Mesh = GetItemMesh())
-	{
-		Mesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
-		ConfigureDroppedCollision(Mesh);
-		Mesh->SetSimulatePhysics(true); // Server simulates the actual physical drop
-		UE_LOG(LogTemp, Warning, TEXT("[Item] %s Re-enabled physics on Server"), *GetName());
-	}
-	SetActorEnableCollision(true);
-	OnHeldStateChanged(false, PreviousOwningCharacter);
 	SetHeldSceneCapturesEnabled(false);
-
 }
 
 void ABase_Item::SetHeldSceneCapturesEnabled(bool bEnabled)
 {
-	if (!bOnlyRunSceneCaptureWhileLocallyHeld)
+	if (!bOnlyRunSceneCaptureWhileLocallyHeld && !bUseCenteredInteractionPoint)
 	{
 		return;
 	}
 
-	const bool bShouldCapture = bEnabled && GetNetMode() != NM_DedicatedServer;
+	const AHronoCharacter* HeldBy = Cast<AHronoCharacter>(OwningCharacter);
+	const bool bShouldCapture = bEnabled && bIsPickedUp && IsValid(HeldBy)
+		&& HeldBy->IsLocallyControlled() && !IsPlacementLocked()
+		&& GetNetMode() != NM_DedicatedServer;
 	TInlineComponentArray<USceneCaptureComponent2D*> SceneCaptures(this);
 	for (USceneCaptureComponent2D* SceneCapture : SceneCaptures)
 	{
@@ -717,6 +699,45 @@ void ABase_Item::SetHeldSceneCapturesEnabled(bool bEnabled)
 		{
 			SceneCapture->Deactivate();
 		}
+	}
+	SetSceneCaptureDisplayMaterialEnabled(bShouldCapture);
+}
+
+void ABase_Item::CacheSceneCaptureDisplayMaterial()
+{
+	if (bSceneCaptureDisplayMaterialCached || SceneCaptureDisplayMaterialIndex == INDEX_NONE
+		|| !IsValid(ItemMesh) || !IsValid(ItemMesh->GetStaticMesh())
+		|| GetNetMode() == NM_DedicatedServer)
+	{
+		return;
+	}
+	bSceneCaptureDisplayMaterialCached = true;
+	if (SceneCaptureDisplayMaterialIndex < 0
+		|| SceneCaptureDisplayMaterialIndex >= ItemMesh->GetNumMaterials())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Item] Invalid capture material slot %d on %s"),
+			SceneCaptureDisplayMaterialIndex, *GetName());
+		return;
+	}
+	UMaterialInterface* ActiveMaterial = ItemMesh->GetMaterial(SceneCaptureDisplayMaterialIndex);
+	UMaterialInterface* DormantMaterial = ItemMesh->GetStaticMesh()->GetMaterial(SceneCaptureDisplayMaterialIndex);
+	if (IsValid(ActiveMaterial) && IsValid(DormantMaterial) && ActiveMaterial != DormantMaterial)
+	{
+		ActiveSceneCaptureDisplayMaterial = ActiveMaterial;
+	}
+}
+
+void ABase_Item::SetSceneCaptureDisplayMaterialEnabled(bool bEnabled)
+{
+	CacheSceneCaptureDisplayMaterial();
+	if (!IsValid(ActiveSceneCaptureDisplayMaterial) || !IsValid(ItemMesh)
+		|| !IsValid(ItemMesh->GetStaticMesh())) return;
+	UMaterialInterface* DesiredMaterial = bEnabled
+		? ActiveSceneCaptureDisplayMaterial.Get()
+		: ItemMesh->GetStaticMesh()->GetMaterial(SceneCaptureDisplayMaterialIndex);
+	if (IsValid(DesiredMaterial) && ItemMesh->GetMaterial(SceneCaptureDisplayMaterialIndex) != DesiredMaterial)
+	{
+		ItemMesh->SetMaterial(SceneCaptureDisplayMaterialIndex, DesiredMaterial);
 	}
 }
 
@@ -749,30 +770,145 @@ void ABase_Item::ApplyDroppedPhysicsState()
 {
 	// Physics simulation detaches a non-root mesh. A held item must always remain
 	// controlled by AttachToCharacter even if replication callbacks are reordered.
-	if (!bDroppedPhysicsEnabled || IsValid(OwningCharacter) || bIsPickedUp)
+	if (!bDroppedPhysicsEnabled || IsPlacementLocked() || IsValid(OwningCharacter) || bIsPickedUp)
 	{
 		return;
 	}
 
 	SetReplicateMovement(true);
+	DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
 	SetActorEnableCollision(true);
 	if (UStaticMeshComponent* Mesh = GetItemMesh())
 	{
 		Mesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 		ConfigureDroppedCollision(Mesh);
 		Mesh->SetEnableGravity(true);
-		Mesh->SetSimulatePhysics(true);
-		Mesh->WakeAllRigidBodies();
+		// FRepMovement replicates the root, not a detached child rigid body.
+		// Only the server simulates child meshes; clients render them attached to
+		// the replicated root. Mesh-root items retain Unreal's physics replication.
+		const bool bSimulate = HasAuthority() || Mesh == GetRootComponent();
+		Mesh->SetSimulatePhysics(bSimulate);
+		if (!bSimulate)
+		{
+			RestoreItemMeshAttachment();
+		}
 	}
 	UpdateMeshForLocalPlayer();
 }
 
+void ABase_Item::RestoreItemMeshAttachment()
+{
+	if (IsValid(ItemMesh) && IsValid(GetRootComponent()) && ItemMesh != GetRootComponent())
+	{
+		if (ItemMesh->GetAttachParent() != GetRootComponent())
+		{
+			ItemMesh->AttachToComponent(GetRootComponent(), FAttachmentTransformRules::KeepRelativeTransform);
+		}
+		ItemMesh->SetRelativeTransform(ItemMeshRelativeTransform);
+	}
+}
 
+void ABase_Item::ApplyWorldItemState()
+{
+	if (IsPlacementLocked())
+	{
+		if (HasAuthority())
+		{
+			bDroppedPhysicsEnabled = false;
+			bFloatingPickupEnabled = false;
+		}
+		bIsPickedUp = false;
+		SetReplicateMovement(true); // Replicate the slot attachment, including to late joiners.
+		SetActorHiddenInGame(false);
+		SetActorEnableCollision(false);
+		if (IsValid(HeldItemInertia))
+		{
+			HeldItemInertia->EndHeld(false);
+		}
+		TInlineComponentArray<UPrimitiveComponent*> Primitives(this);
+		for (UPrimitiveComponent* Primitive : Primitives)
+		{
+			Primitive->SetSimulatePhysics(false);
+			Primitive->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		}
+		RestoreItemMeshAttachment();
+		SetHeldSceneCapturesEnabled(false);
+	}
+	else if (IsValid(OwningCharacter) || bIsPickedUp)
+	{
+		return; // The owner callback applies the held pose and its cosmetic event once.
+	}
+	else if (bFloatingPickupEnabled)
+	{
+		ApplyFloatingPickupState();
+	}
+	else if (bDroppedPhysicsEnabled)
+	{
+		ApplyDroppedPhysicsState();
+	}
+	RefreshItemTickEnabled(bTemporaryItemTickActive);
+}
 
+bool ABase_Item::NeedsDroppedPhysicsTracking() const
+{
+	return HasAuthority() && bDroppedPhysicsEnabled && !bFloatingPickupEnabled
+		&& !IsPlacementLocked() && !IsValid(OwningCharacter) && !bIsPickedUp
+		&& IsValid(ItemMesh) && ItemMesh != GetRootComponent();
+}
+
+void ABase_Item::SyncDroppedPhysicsTransform()
+{
+	if (!NeedsDroppedPhysicsTracking() || !ItemMesh->IsSimulatingPhysics())
+	{
+		return;
+	}
+	// Physics detached the child mesh. Derive the actor pose that reproduces the
+	// authored mesh offset on clients, without moving the server's rigid body.
+	const FTransform MeshWorld = ItemMesh->GetComponentTransform();
+	const FQuat RootRotation = MeshWorld.GetRotation() * ItemMeshRelativeTransform.GetRotation().Inverse();
+	const FVector RootScale = GetActorScale3D();
+	const FVector RootLocation = MeshWorld.GetLocation()
+		- RootRotation.RotateVector(RootScale * ItemMeshRelativeTransform.GetLocation());
+	const FTransform RootWorld(RootRotation, RootLocation, RootScale);
+	if (!GetActorTransform().Equals(RootWorld))
+	{
+		SetActorTransform(RootWorld, false, nullptr, ETeleportType::TeleportPhysics);
+	}
+}
+
+void ABase_Item::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+	SyncDroppedPhysicsTransform();
+}
+
+void ABase_Item::GatherCurrentMovement()
+{
+	// Also refresh immediately before a network sample (e.g. initial relevance).
+	SyncDroppedPhysicsTransform();
+	Super::GatherCurrentMovement();
+}
+
+void ABase_Item::OnRep_ReplicatedMovement()
+{
+	// An old physics sample must not start root-body simulation after pickup or
+	// placement. These states receive their pose from the hand/slot attachment.
+	if (!IsPlacementLocked() && !IsValid(OwningCharacter))
+	{
+		Super::OnRep_ReplicatedMovement();
+	}
+}
+
+void ABase_Item::OnRep_AttachmentReplication()
+{
+	Super::OnRep_AttachmentReplication();
+	ApplyWorldItemState();
+}
 
 void ABase_Item::PostInitializeComponents()
 {
 	Super::PostInitializeComponents();
+	AuthoredTickGroup = PrimaryActorTick.TickGroup;
 	EnsureMovableComponentHierarchy();
 
 	// Cache the Blueprint-authored mesh pose before initial replicated properties
@@ -786,6 +922,7 @@ void ABase_Item::PostInitializeComponents()
 
 	// Blueprint-created captures are already registered by this point, but the
 	// world has not started ticking yet. Disable them before the first game frame.
+	CacheSceneCaptureDisplayMaterial();
 	SetHeldSceneCapturesEnabled(false);
 }
 
@@ -827,7 +964,7 @@ void ABase_Item::BeginPlay()
 	Super::BeginPlay();
 	EnsureInteractionOverlayMaterial();
 	ApplyItemTimelineState();
-	ApplyFloatingPickupState();
+	ApplyWorldItemState();
 
 	const AHronoCharacter* HeldBy = Cast<AHronoCharacter>(OwningCharacter);
 	SetHeldSceneCapturesEnabled(
@@ -845,8 +982,12 @@ bool ABase_Item::HasBlueprintTickImplementation() const
 
 void ABase_Item::RefreshItemTickEnabled(bool bTemporaryNativeActivity)
 {
+	bTemporaryItemTickActive = bTemporaryNativeActivity;
+	const bool bTrackDroppedPhysics = NeedsDroppedPhysicsTracking();
+	SetTickGroup(bTrackDroppedPhysics ? TG_PostPhysics : AuthoredTickGroup);
 	SetActorTickEnabled(
-		bTemporaryNativeActivity
+		bTrackDroppedPhysics
+		|| bTemporaryNativeActivity
 		|| RequiresContinuousItemTick()
 		|| HasBlueprintTickImplementation());
 }
@@ -897,7 +1038,7 @@ void ABase_Item::ApplyItemTimelineState()
 
 void ABase_Item::ApplyFloatingPickupState()
 {
-	if (!bFloatingPickupEnabled || IsValid(OwningCharacter) || bIsPickedUp)
+	if (!bFloatingPickupEnabled || IsPlacementLocked() || IsValid(OwningCharacter) || bIsPickedUp)
 	{
 		return;
 	}
@@ -909,14 +1050,7 @@ void ABase_Item::ApplyFloatingPickupState()
 	{
 		Mesh->SetSimulatePhysics(false);
 		Mesh->SetEnableGravity(false);
-		if (Mesh != GetRootComponent())
-		{
-			if (Mesh->GetAttachParent() != GetRootComponent())
-			{
-				Mesh->AttachToComponent(GetRootComponent(), FAttachmentTransformRules::KeepRelativeTransform);
-			}
-			Mesh->SetRelativeTransform(ItemMeshRelativeTransform);
-		}
+		RestoreItemMeshAttachment();
 		Mesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 		ConfigureDroppedCollision(Mesh);
 	}

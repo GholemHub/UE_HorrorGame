@@ -106,6 +106,8 @@ public:
 	virtual void OnRep_OwningCharacter(AHronoCharacter* PreviousOwningCharacter) override;
 
 protected:
+	virtual bool IsPlacementLocked() const override { return bPlacedInPentagram; }
+
 	UFUNCTION(Server, Reliable)
 	void ServerPlaceRuneInPentagram(
 		AActor* Pentagram,

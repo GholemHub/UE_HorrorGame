@@ -1,12 +1,15 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "HronoGameMode.h"
+#include "Sessions/HronoGameSession.h"
+#include "Sessions/HronoSessionPolicy.h"
 
 #include "EngineUtils.h"
 #include "Enviroment/DoorLockTrigger.h"
 
 AHronoGameMode::AHronoGameMode()
 {
+	GameSessionClass = AHronoGameSession::StaticClass();
 }
 
 void AHronoGameMode::StartPlay()
@@ -24,7 +27,7 @@ void AHronoGameMode::HandleStartingNewPlayer_Implementation(APlayerController* N
 bool AHronoGameMode::AreAllRequiredPlayersPresent()
 {
 	return bForceSessionStartDoorsUnlockedForTesting
-		|| GetNumPlayers() >= FMath::Max(1, RequiredPlayersToStart);
+		|| GetNumPlayers() >= FMath::Clamp(RequiredPlayersToStart, 1, HronoSessionPolicy::MaxPlayers);
 }
 
 void AHronoGameMode::ForceUnlockEntranceDoorsForTesting()

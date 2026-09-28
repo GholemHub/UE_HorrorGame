@@ -61,7 +61,7 @@ public:
 	/** Authority-only state used by TableRitualGate and replicated to every client. */
 	void SetRitualGuidanceUnlocked(bool bUnlocked);
 
-	void SetSitter(AHronoCharacter* Character) { CurrentSitter = Character; }
+	void SetSitter(AHronoCharacter* Character);
 
 	/** Played when a character sits down on this chair. Assign any sound in Blueprint. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio")
@@ -70,6 +70,8 @@ public:
 	/** Played when a character stands up from this chair. Assign any sound in Blueprint. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio")
 	TObjectPtr<USoundBase> StandUpSound;
+	UPROPERTY(VisibleDefaultsOnly, Category="Audio")
+	TObjectPtr<USoundBase> NativeSeatFallback;
 
 	/** Where the character is placed while sitting on this chair */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Chair")
@@ -91,6 +93,8 @@ public:
 
 protected:
 	virtual void BeginPlay() override;
+	UFUNCTION(NetMulticast, Unreliable)
+	void MulticastSeatSound(bool bSeated, EItemTimeline EventTimeline);
 	virtual bool AllowsAimInteractionHighlight() const override { return false; }
 
 	UFUNCTION()

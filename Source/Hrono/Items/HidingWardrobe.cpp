@@ -84,6 +84,13 @@ void AHidingWardrobe::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutL
 	DOREPLIFETIME(AHidingWardrobe, HiddenPlayer);
 }
 
+void AHidingWardrobe::ApplyItemTimelineState()
+{
+	Super::ApplyItemTimelineState();
+	ConfigureRightDoorCollision();
+	RefreshWardrobeSafety();
+}
+
 void AHidingWardrobe::BeginPlay()
 {
 	Super::BeginPlay();
@@ -159,7 +166,7 @@ void AHidingWardrobe::Tick(float DeltaTime)
 	// Door transforms may be changed by dragging, native animation, or Blueprint.
 	// Check the live transforms every server tick while somebody is inside so safety
 	// cannot remain stale until an animation or interaction finishes.
-	if (HasAuthority() && CharactersInsideSafetyVolume.Num() > 0)
+	if (HasAuthority() && (CharactersInsideSafetyVolume.Num() > 0 || IsValid(HiddenPlayer)))
 	{
 		RefreshWardrobeSafety();
 	}
@@ -179,7 +186,7 @@ void AHidingWardrobe::CancelNativeAnimationForAutomaticInteraction(
 bool AHidingWardrobe::RequiresAdditionalActiveTick() const
 {
 	return bRightDoorAnimationActive
-		|| (HasAuthority() && CharactersInsideSafetyVolume.Num() > 0);
+		|| (HasAuthority() && (CharactersInsideSafetyVolume.Num() > 0 || IsValid(HiddenPlayer)));
 }
 
 USceneComponent* AHidingWardrobe::GetPrimaryDoorMovementComponent() const
@@ -464,89 +471,69 @@ void AHidingWardrobe::OnRep_HiddenPlayer(AHronoCharacter* PreviousPlayer)
 	}
 }
 
-void AHidingWardrobe::HandleSafetyVolumeBeginOverlap(
-	UPrimitiveComponent* OverlappedComponent,
-	AActor* OtherActor,
-	UPrimitiveComponent* OtherComponent,
-	int32 OtherBodyIndex,
-	bool bFromSweep,
-	const FHitResult& SweepResult)
+bool AHidingWardrobe::IsCharacterInsideSafetyVolume(const AHronoCharacter* Player) const
 {
-	if (!HasAuthority())
-	{
-		return;
-	}
+	return HasAuthority() && !IsActorBeingDestroyed() && IsValid(Player)
+		&& Player->HasAuthority() && !Player->IsActorBeingDestroyed() && Player->GetWorld() == GetWorld()
+		&& GetActorEnableCollision() && Player->GetActorEnableCollision()
+		&& IsValid(SafetyVolume) && SafetyVolume->IsQueryCollisionEnabled()
+		&& SafetyVolume->GetGenerateOverlapEvents() && IsValid(Player->GetCapsuleComponent())
+		&& Player->GetCapsuleComponent()->IsQueryCollisionEnabled()
+		&& SafetyVolume->IsOverlappingComponent(Player->GetCapsuleComponent());
+}
 
+bool AHidingWardrobe::CanProvideSafetyFor(const AHronoCharacter* Player) const
+{
+	return bAllowHiding && IsCharacterInsideSafetyVolume(Player)
+		&& (Player->GetTimeline() == EItemTimeline::Past || Player->GetTimeline() == EItemTimeline::Future)
+		&& (ItemTimeline == EItemTimeline::Both || ItemTimeline == Player->GetTimeline())
+		&& AreDoorsClosedForSafety();
+}
+
+void AHidingWardrobe::HandleSafetyVolumeBeginOverlap(
+	UPrimitiveComponent* OverlappedComponent, AActor* OtherActor,
+	UPrimitiveComponent* OtherComponent, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult)
+{
 	AHronoCharacter* Player = Cast<AHronoCharacter>(OtherActor);
-	if (!IsValid(Player) || OtherComponent != Player->GetCapsuleComponent())
-	{
-		return;
-	}
-
+	if (!HasAuthority() || !IsValid(Player) || OtherComponent != Player->GetCapsuleComponent()) return;
+	// Keep even an unsafe/other-timeline overlap registered, so a timeline or
+	// door change can grant safety without requiring the player to re-enter.
 	CharactersInsideSafetyVolume.Add(Player);
+	Player->UpdateWardrobeSafetySource(this, true);
 	RefreshActiveTickState();
-	const bool bDoorsSafe = AreDoorsClosedForSafety();
-	Player->SetSafeInHidingWardrobe(bDoorsSafe);
-	UE_LOG(LogTemp, Log,
-		TEXT("[WardrobeSafetyVolume] %s entered %s. DoorsSafe=%s"),
-		*GetNameSafe(Player),
-		*GetNameSafe(this),
-		bDoorsSafe ? TEXT("true") : TEXT("false"));
 }
 
 void AHidingWardrobe::HandleSafetyVolumeEndOverlap(
-	UPrimitiveComponent* OverlappedComponent,
-	AActor* OtherActor,
-	UPrimitiveComponent* OtherComponent,
-	int32 OtherBodyIndex)
+	UPrimitiveComponent* OverlappedComponent, AActor* OtherActor,
+	UPrimitiveComponent* OtherComponent, int32 OtherBodyIndex)
 {
-	if (!HasAuthority())
-	{
-		return;
-	}
-
 	AHronoCharacter* Player = Cast<AHronoCharacter>(OtherActor);
-	if (!IsValid(Player) || OtherComponent != Player->GetCapsuleComponent())
-	{
-		return;
-	}
-
+	if (!HasAuthority() || !IsValid(Player) || OtherComponent != Player->GetCapsuleComponent()) return;
 	CharactersInsideSafetyVolume.Remove(Player);
+	Player->UpdateWardrobeSafetySource(this, false);
 	RefreshActiveTickState();
-	Player->SetSafeInHidingWardrobe(false);
-	UE_LOG(LogTemp, Log,
-		TEXT("[WardrobeSafetyVolume] %s exited %s. Safe=false"),
-		*GetNameSafe(Player),
-		*GetNameSafe(this));
 }
 
 void AHidingWardrobe::RefreshWardrobeSafety()
 {
-	if (!HasAuthority())
+	if (!HasAuthority() || bRefreshingWardrobeSafety) return;
+	TGuardValue<bool> RefreshGuard(bRefreshingWardrobeSafety, true);
+	// An occupant must not remain movement-locked in a disabled or different-
+	// timeline wardrobe that its interaction trace can no longer reach.
+	if (IsValid(HiddenPlayer) && (!bAllowHiding
+		|| (ItemTimeline != EItemTimeline::Both && ItemTimeline != HiddenPlayer->GetTimeline())))
+		ExitWardrobe(HiddenPlayer);
+
+	// Overlap/notification callbacks may alter this set during safety dispatch.
+	const auto Players = CharactersInsideSafetyVolume.Array();
+	for (const TWeakObjectPtr<AHronoCharacter>& PlayerPtr : Players)
 	{
-		return;
+		AHronoCharacter* Player = PlayerPtr.Get();
+		const bool bStillInside = IsCharacterInsideSafetyVolume(Player);
+		if (!bStillInside) CharactersInsideSafetyVolume.Remove(PlayerPtr);
+		if (IsValid(Player)) Player->UpdateWardrobeSafetySource(this, bStillInside);
 	}
-
-	const bool bDoorsSafe = AreDoorsClosedForSafety();
-
-	for (auto Iterator = CharactersInsideSafetyVolume.CreateIterator(); Iterator; ++Iterator)
-	{
-		AHronoCharacter* Player = Iterator->Get();
-		const bool bStillInside = IsValid(Player)
-			&& SafetyVolume
-			&& SafetyVolume->IsOverlappingComponent(Player->GetCapsuleComponent());
-		if (!bStillInside)
-		{
-			if (IsValid(Player))
-			{
-				Player->SetSafeInHidingWardrobe(false);
-			}
-			Iterator.RemoveCurrent();
-			continue;
-		}
-
-		Player->SetSafeInHidingWardrobe(bDoorsSafe);
-	}
+	RefreshActiveTickState();
 }
 
 bool AHidingWardrobe::AreDoorsClosedForSafety() const
@@ -567,15 +554,16 @@ bool AHidingWardrobe::AreDoorsClosedForSafety() const
 
 void AHidingWardrobe::ClearWardrobeSafety()
 {
-	for (const TWeakObjectPtr<AHronoCharacter>& PlayerPtr : CharactersInsideSafetyVolume)
+	const auto Players = CharactersInsideSafetyVolume.Array();
+	CharactersInsideSafetyVolume.Empty();
+	for (const TWeakObjectPtr<AHronoCharacter>& PlayerPtr : Players)
 	{
 		if (AHronoCharacter* Player = PlayerPtr.Get())
 		{
-			Player->SetSafeInHidingWardrobe(false);
+			Player->UpdateWardrobeSafetySource(this, false);
 		}
 	}
 
-	CharactersInsideSafetyVolume.Empty();
 	RefreshActiveTickState();
 }
 
@@ -591,6 +579,7 @@ void AHidingWardrobe::ApplyHidingState(AHronoCharacter* Player, bool bEntering)
 	if (bEntering)
 	{
 		bHiddenPlayerActorCollisionWasEnabled = Player->GetActorEnableCollision();
+		HiddenPlayerTimelineBeforeHiding = Player->GetTimeline();
 		if (Capsule)
 		{
 			HiddenPlayerCapsuleCollisionBeforeHiding = Capsule->GetCollisionEnabled();
@@ -641,12 +630,17 @@ void AHidingWardrobe::ApplyHidingState(AHronoCharacter* Player, bool bEntering)
 
 		if (Capsule)
 		{
+			// A timeline transition supersedes the responses cached on entry.
+			// Replication may deliver timeline before or after the exit snapshot.
+			const bool bTimelineChanged = Player->GetTimeline() != HiddenPlayerTimelineBeforeHiding;
 			Capsule->SetCollisionResponseToChannel(
 				COLLISION_CHANNEL_DOOR_PAST,
-				HiddenPlayerDoorPastResponseBeforeHiding);
+				bTimelineChanged ? (Player->GetTimeline() == EItemTimeline::Past ? ECR_Block : ECR_Ignore)
+					: HiddenPlayerDoorPastResponseBeforeHiding);
 			Capsule->SetCollisionResponseToChannel(
 				COLLISION_CHANNEL_DOOR_FUTURE,
-				HiddenPlayerDoorFutureResponseBeforeHiding);
+				bTimelineChanged ? (Player->GetTimeline() == EItemTimeline::Future ? ECR_Block : ECR_Ignore)
+					: HiddenPlayerDoorFutureResponseBeforeHiding);
 			Capsule->SetCollisionEnabled(HiddenPlayerCapsuleCollisionBeforeHiding);
 			Capsule->UpdateOverlaps();
 		}
@@ -668,7 +662,7 @@ void AHidingWardrobe::ApplyHidingState(AHronoCharacter* Player, bool bEntering)
 		&& SafetyVolume->IsOverlappingComponent(Capsule))
 	{
 		CharactersInsideSafetyVolume.Add(Player);
-		Player->SetSafeInHidingWardrobe(AreDoorsClosedForSafety());
+		Player->UpdateWardrobeSafetySource(this, true);
 	}
 	RefreshWardrobeSafety();
 }

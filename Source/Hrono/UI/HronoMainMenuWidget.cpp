@@ -1,6 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "UI/HronoMainMenuWidget.h"
+#include "Audio/HronoAudioSettingsSubsystem.h"
+#include "Sessions/HronoSessionSubsystem.h"
 
 #include "Blueprint/WidgetTree.h"
 #include "Brushes/SlateColorBrush.h"
@@ -32,9 +34,6 @@
 #include "InputMappingContext.h"
 #include "Kismet/GameplayStatics.h"
 #include "Kismet/KismetSystemLibrary.h"
-#include "Sound/AudioSettings.h"
-#include "Sound/SoundClass.h"
-#include "Sound/SoundMix.h"
 #include "UI/HronoLoadingSubsystem.h"
 #include "UI/HronoMenuSettingsSaveGame.h"
 #include "UObject/ConstructorHelpers.h"
@@ -214,7 +213,10 @@ void UHronoMainMenuWidget::NativeConstruct()
 			LoadingSubsystem->OnPreloadCompleted.AddUniqueDynamic(
 				this, &ThisClass::HandleGameplayPreloadCompleted);
 		}
+		if (UHronoSessionSubsystem* Sessions = GameInstance->GetSubsystem<UHronoSessionSubsystem>())
+			Sessions->OnChanged.AddUniqueDynamic(this, &ThisClass::HandleSessionChanged);
 	}
+	RefreshSessionView();
 
 	if (APlayerController* PlayerController = GetOwningPlayer())
 	{
@@ -230,12 +232,23 @@ void UHronoMainMenuWidget::NativeDestruct()
 {
 	if (UGameInstance* GameInstance = GetGameInstance())
 	{
+		if (UHronoAudioSettingsSubsystem* Audio = GameInstance->GetSubsystem<UHronoAudioSettingsSubsystem>())
+		{
+			Audio->SetVolumes(OriginalMasterVolume, OriginalMusicVolume, OriginalSfxVolume);
+		}
 		if (UHronoLoadingSubsystem* LoadingSubsystem = GameInstance->GetSubsystem<UHronoLoadingSubsystem>())
 		{
 			LoadingSubsystem->OnPreloadCompleted.RemoveDynamic(
 				this, &ThisClass::HandleGameplayPreloadCompleted);
+			if (bSessionRequestPending) LoadingSubsystem->CancelLoadingFlow();
+		}
+		if (UHronoSessionSubsystem* Sessions = GameInstance->GetSubsystem<UHronoSessionSubsystem>())
+		{
+			Sessions->OnChanged.RemoveDynamic(this, &ThisClass::HandleSessionChanged);
+			if (bSessionRequestPending) Sessions->ReleaseMenuPreload();
 		}
 	}
+	bSessionRequestPending = false;
 
 	Super::NativeDestruct();
 }
@@ -317,7 +330,17 @@ void UHronoMainMenuWidget::BuildDefaultWidgetTree()
 	}
 
 	CreateSessionButton = MakeButton(WidgetTree, MenuFont, MainButtons, TEXT("CreateSessionButton"), FText::FromString(TEXT("CREATE SESSION")));
-	JoinSessionButton = MakeButton(WidgetTree, MenuFont, MainButtons, TEXT("JoinSessionButton"), FText::FromString(TEXT("JOIN SESSION")));
+	JoinSessionButton = MakeButton(WidgetTree, MenuFont, MainButtons, TEXT("JoinSessionButton"), FText::FromString(TEXT("FIND SESSIONS")));
+	SessionCombo = WidgetTree->ConstructWidget<UComboBoxString>(UComboBoxString::StaticClass(), TEXT("SessionCombo"));
+	MainButtons->AddChildToVerticalBox(SessionCombo)->SetPadding(FMargin(16.0f, 4.0f));
+	JoinSelectedButton = MakeButton(WidgetTree, MenuFont, MainButtons, TEXT("JoinSelectedButton"), FText::FromString(TEXT("JOIN SELECTED")));
+	LeaveSessionButton = MakeButton(WidgetTree, MenuFont, MainButtons, TEXT("LeaveSessionButton"), FText::FromString(TEXT("LEAVE SESSION")));
+	LANCheckBox = WidgetTree->ConstructWidget<UCheckBox>(UCheckBox::StaticClass(), TEXT("LANCheckBox"));
+	LANCheckBox->AddChild(MakeText(WidgetTree, MenuFont, FText::FromString(TEXT("Local network (LAN)")), 14));
+	MainButtons->AddChildToVerticalBox(LANCheckBox)->SetPadding(FMargin(18.0f, 6.0f));
+	SessionStatusText = MakeText(WidgetTree, MenuFont, FText::GetEmpty(), 14);
+	SessionStatusText->SetAutoWrapText(true);
+	MainButtons->AddChildToVerticalBox(SessionStatusText)->SetPadding(FMargin(18.0f, 6.0f));
 	OptionsButton = MakeButton(WidgetTree, MenuFont, MainButtons, TEXT("OptionsButton"), FText::FromString(TEXT("OPTIONS")));
 	ExitButton = MakeButton(WidgetTree, MenuFont, MainButtons, TEXT("ExitButton"), FText::FromString(TEXT("EXIT")));
 
@@ -504,6 +527,11 @@ void UHronoMainMenuWidget::ResolveNamedWidgets()
 	if (!PageSwitcher) PageSwitcher = Cast<UWidgetSwitcher>(Find(TEXT("PageSwitcher")));
 	if (!CreateSessionButton) CreateSessionButton = Cast<UButton>(Find(TEXT("CreateSessionButton")));
 	if (!JoinSessionButton) JoinSessionButton = Cast<UButton>(Find(TEXT("JoinSessionButton")));
+	if (!JoinSelectedButton) JoinSelectedButton = Cast<UButton>(Find(TEXT("JoinSelectedButton")));
+	if (!LeaveSessionButton) LeaveSessionButton = Cast<UButton>(Find(TEXT("LeaveSessionButton")));
+	if (!SessionCombo) SessionCombo = Cast<UComboBoxString>(Find(TEXT("SessionCombo")));
+	if (!SessionStatusText) SessionStatusText = Cast<UTextBlock>(Find(TEXT("SessionStatusText")));
+	if (!LANCheckBox) LANCheckBox = Cast<UCheckBox>(Find(TEXT("LANCheckBox")));
 	if (!OptionsButton) OptionsButton = Cast<UButton>(Find(TEXT("OptionsButton")));
 	if (!ExitButton) ExitButton = Cast<UButton>(Find(TEXT("ExitButton")));
 	if (!ApplyButton) ApplyButton = Cast<UButton>(Find(TEXT("ApplyButton")));
@@ -533,6 +561,9 @@ void UHronoMainMenuWidget::BindWidgetEvents()
 
 	if (CreateSessionButton) CreateSessionButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleCreateSessionClicked);
 	if (JoinSessionButton) JoinSessionButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleJoinSessionClicked);
+	if (JoinSelectedButton) JoinSelectedButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleJoinSelectedClicked);
+	if (LeaveSessionButton) LeaveSessionButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleLeaveSessionClicked);
+	if (SessionCombo) SessionCombo->OnSelectionChanged.AddUniqueDynamic(this, &ThisClass::HandleSessionSelection);
 	if (OptionsButton) OptionsButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleOptionsClicked);
 	if (ExitButton) ExitButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleExitClicked);
 	if (ApplyButton) ApplyButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleApplyClicked);
@@ -543,6 +574,8 @@ void UHronoMainMenuWidget::BindWidgetEvents()
 	ButtonScaleValues.Reset();
 	RegisterAnimatedButton(CreateSessionButton);
 	RegisterAnimatedButton(JoinSessionButton);
+	RegisterAnimatedButton(JoinSelectedButton);
+	RegisterAnimatedButton(LeaveSessionButton);
 	RegisterAnimatedButton(OptionsButton);
 	RegisterAnimatedButton(ExitButton);
 	RegisterAnimatedButton(ApplyButton);
@@ -662,6 +695,15 @@ void UHronoMainMenuWidget::LoadAudioSettings()
 		}
 	}
 
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		if (const UHronoAudioSettingsSubsystem* Audio = GameInstance->GetSubsystem<UHronoAudioSettingsSubsystem>())
+		{
+			MasterVolume = Audio->MasterVolume;
+			MusicVolume = Audio->MusicVolume;
+			SfxVolume = Audio->SfxVolume;
+		}
+	}
 	OriginalMasterVolume = MasterVolume;
 	OriginalMusicVolume = MusicVolume;
 	OriginalSfxVolume = SfxVolume;
@@ -679,44 +721,12 @@ void UHronoMainMenuWidget::LoadAudioSettings()
 
 void UHronoMainMenuWidget::ApplyAudioSettings(float FadeTime)
 {
-	USoundMix* ActiveMix = MenuSoundMix;
-	if (!ActiveMix)
+	if (UGameInstance* GameInstance = GetGameInstance())
 	{
-		ActiveMix = Cast<USoundMix>(GetDefault<UAudioSettings>()->DefaultBaseSoundMix.TryLoad());
-	}
-	if (!ActiveMix)
-	{
-		if (!RuntimeSoundMix)
+		if (UHronoAudioSettingsSubsystem* Audio = GameInstance->GetSubsystem<UHronoAudioSettingsSubsystem>())
 		{
-			RuntimeSoundMix = NewObject<USoundMix>(this, TEXT("RuntimeMenuSoundMix"));
+			Audio->SetVolumes(MasterVolume, MusicVolume, SfxVolume, FadeTime);
 		}
-		ActiveMix = RuntimeSoundMix;
-	}
-
-	USoundClass* ActiveMaster = MasterSoundClass;
-	if (!ActiveMaster)
-	{
-		ActiveMaster = Cast<USoundClass>(GetDefault<UAudioSettings>()->DefaultSoundClassName.TryLoad());
-	}
-
-	if (!ActiveMix || !ActiveMaster)
-	{
-		return;
-	}
-
-	if (!bSoundMixPushed)
-	{
-		UGameplayStatics::PushSoundMixModifier(this, ActiveMix);
-		bSoundMixPushed = true;
-	}
-	UGameplayStatics::SetSoundMixClassOverride(this, ActiveMix, ActiveMaster, MasterVolume, 1.0f, FadeTime, true);
-	if (MusicSoundClass)
-	{
-		UGameplayStatics::SetSoundMixClassOverride(this, ActiveMix, MusicSoundClass, MusicVolume, 1.0f, FadeTime, false);
-	}
-	if (SfxSoundClass)
-	{
-		UGameplayStatics::SetSoundMixClassOverride(this, ActiveMix, SfxSoundClass, SfxVolume, 1.0f, FadeTime, false);
 	}
 }
 
@@ -892,6 +902,7 @@ void UHronoMainMenuWidget::RefreshControlsList()
 	ControlsList->ClearChildren();
 
 	TMap<FName, TArray<FString>> Bindings;
+	Bindings.Add(TEXT("IA_Radio_Transmission"), { TEXT("V"), TEXT("B") });
 	for (const TSoftObjectPtr<UInputMappingContext>& ContextReference : ControlMappingContexts)
 	{
 		const UInputMappingContext* Context = ContextReference.LoadSynchronous();
@@ -942,30 +953,98 @@ void UHronoMainMenuWidget::RefreshControlsList()
 
 void UHronoMainMenuWidget::HandleCreateSessionClicked()
 {
+	PendingSessionIndex = INDEX_NONE;
 	BeginSessionRequest(true);
 }
 
 void UHronoMainMenuWidget::HandleJoinSessionClicked()
 {
+	PendingSessionIndex = INDEX_NONE;
 	BeginSessionRequest(false);
+}
+
+void UHronoMainMenuWidget::HandleJoinSelectedClicked()
+{
+	if (!SessionCombo || SessionCombo->GetSelectedIndex() == INDEX_NONE) return;
+	PendingSessionIndex = SessionCombo->GetSelectedIndex();
+	BeginSessionRequest(false);
+}
+
+void UHronoMainMenuWidget::HandleLeaveSessionClicked()
+{
+	if (UGameInstance* Game = GetGameInstance())
+		if (UHronoSessionSubsystem* Sessions = Game->GetSubsystem<UHronoSessionSubsystem>()) Sessions->LeaveSession();
+}
+
+void UHronoMainMenuWidget::HandleSessionSelection(FString Selection, ESelectInfo::Type SelectionType)
+{
+	RefreshSessionView();
+}
+
+void UHronoMainMenuWidget::RefreshSessionView()
+{
+	UHronoSessionSubsystem* Sessions = GetGameInstance() ? GetGameInstance()->GetSubsystem<UHronoSessionSubsystem>() : nullptr;
+	const bool bBusy = bSessionRequestPending || (Sessions && Sessions->IsBusy());
+	const bool bInSession = Sessions && (Sessions->State == EHronoSessionState::InSession || (GetWorld() && GetWorld()->GetNetMode() != NM_Standalone));
+	if (SessionStatusText) SessionStatusText->SetText(bSessionRequestPending
+		? FText::FromString(TEXT("Loading content...")) : (Sessions ? Sessions->Status : FText::FromString(TEXT("Online service unavailable."))));
+	TArray<FString> Ids;
+	if (Sessions) for (const FHronoSessionEntry& Entry : Sessions->Entries) Ids.Add(Entry.SessionId);
+	if (SessionCombo && Ids != DisplayedSessionIds)
+	{
+		DisplayedSessionIds = Ids; // Selection delegates can fire synchronously from ClearOptions.
+		SessionCombo->ClearOptions();
+		if (Sessions) for (int32 Index = 0; Index < Sessions->Entries.Num(); ++Index)
+		{
+			const FHronoSessionEntry& Entry = Sessions->Entries[Index];
+			SessionCombo->AddOption(FString::Printf(TEXT("%d. %s | %d ms | %s"), Index + 1, *Entry.Host, Entry.Ping, *Entry.SessionId.Right(8)));
+		}
+		SessionCombo->ClearSelection();
+	}
+	if (CreateSessionButton) CreateSessionButton->SetIsEnabled(Sessions && !bBusy && !bInSession);
+	if (JoinSessionButton) JoinSessionButton->SetIsEnabled(Sessions && !bBusy && !bInSession);
+	if (JoinSelectedButton) JoinSelectedButton->SetIsEnabled(Sessions && !bBusy && !bInSession && SessionCombo && SessionCombo->GetSelectedIndex() != INDEX_NONE);
+	if (SessionCombo) SessionCombo->SetIsEnabled(!bBusy && !bInSession);
+	if (LANCheckBox) LANCheckBox->SetIsEnabled(!bBusy && !bInSession);
+	if (LeaveSessionButton)
+	{
+		LeaveSessionButton->SetVisibility(bInSession ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+		LeaveSessionButton->SetIsEnabled(!bBusy);
+	}
+}
+
+void UHronoMainMenuWidget::HandleSessionChanged()
+{
+	const UHronoSessionSubsystem* Sessions = GetGameInstance() ? GetGameInstance()->GetSubsystem<UHronoSessionSubsystem>() : nullptr;
+	if (Sessions && Sessions->State == EHronoSessionState::Failed && !Sessions->IsMenuPreloading())
+		bSessionRequestPending = false;
+	RefreshSessionView();
 }
 
 void UHronoMainMenuWidget::BeginSessionRequest(bool bCreateSession)
 {
-	if (bSessionRequestPending)
+	UHronoSessionSubsystem* Sessions = GetGameInstance() ? GetGameInstance()->GetSubsystem<UHronoSessionSubsystem>() : nullptr;
+	if (bSessionRequestPending || !Sessions || Sessions->IsBusy())
 	{
 		return;
 	}
 
 	bSessionRequestPending = true;
 	bPendingCreateSession = bCreateSession;
+	RefreshSessionView();
 
-	if (bPreloadBeforeSessionRequest)
+	if (bPreloadBeforeSessionRequest && (bCreateSession || PendingSessionIndex != INDEX_NONE))
 	{
 		if (UGameInstance* GameInstance = GetGameInstance())
 		{
 			if (UHronoLoadingSubsystem* LoadingSubsystem = GameInstance->GetSubsystem<UHronoLoadingSubsystem>())
 			{
+				if (!Sessions->ReserveMenuPreload())
+				{
+					bSessionRequestPending = false;
+					RefreshSessionView();
+					return;
+				}
 				LoadingSubsystem->PreloadGameplayContent(
 					GameplayMapToPreload, AdditionalGameplayAssetsToPreload);
 				return;
@@ -986,6 +1065,13 @@ void UHronoMainMenuWidget::HandleGameplayPreloadCompleted(bool bSuccess)
 	if (!bSuccess)
 	{
 		bSessionRequestPending = false;
+		if (UGameInstance* Game = GetGameInstance())
+		{
+			if (UHronoSessionSubsystem* Session = Game->GetSubsystem<UHronoSessionSubsystem>()) Session->ReleaseMenuPreload();
+			if (UHronoLoadingSubsystem* Loading = Game->GetSubsystem<UHronoLoadingSubsystem>()) Loading->CancelLoadingFlow();
+		}
+		RefreshSessionView();
+		if (SessionStatusText) SessionStatusText->SetText(FText::FromString(TEXT("Content loading failed. Try again.")));
 		UE_LOG(LogTemp, Error,
 			TEXT("Session request cancelled because gameplay content failed to preload."));
 		return;
@@ -1004,16 +1090,18 @@ void UHronoMainMenuWidget::DispatchPendingSessionRequest()
 	const bool bCreateSession = bPendingCreateSession;
 	bSessionRequestPending = false;
 
-	if (bCreateSession)
+	if (UGameInstance* Game = GetGameInstance())
 	{
-		OnCreateSessionRequested.Broadcast();
-		BP_CreateSessionRequested();
+		if (UHronoSessionSubsystem* Sessions = Game->GetSubsystem<UHronoSessionSubsystem>())
+		{
+			Sessions->ReleaseMenuPreload();
+			const bool bLAN = LANCheckBox && LANCheckBox->IsChecked();
+			if (bCreateSession) Sessions->HostSession(bLAN);
+			else if (PendingSessionIndex != INDEX_NONE) Sessions->JoinSessionByIndex(PendingSessionIndex);
+			else Sessions->FindSessions(bLAN);
+		}
 	}
-	else
-	{
-		OnJoinSessionRequested.Broadcast();
-		BP_JoinSessionRequested();
-	}
+	RefreshSessionView();
 }
 
 void UHronoMainMenuWidget::HandleOptionsClicked()

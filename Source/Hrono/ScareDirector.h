@@ -611,6 +611,8 @@ private:
 
 	FTimerHandle PassiveThreatTimerHandle;
 	FTimerHandle TimelineEntityRefreshTimerHandle;
+	/** Entities already placed under local director control; weak across streaming/destruction. */
+	TSet<TWeakObjectPtr<ATimelineEntityActor>> ManagedTimelineEntities;
 	FTimerHandle DebugScreenTimerHandle;
 	FTimerHandle DebugTestScenarioTimerHandle;
 	FTimerHandle DebugTestPerceptionTimerHandle;
