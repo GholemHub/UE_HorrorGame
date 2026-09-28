@@ -20,6 +20,7 @@
 #include "Net/UnrealNetwork.h"
 #include "TimerManager.h"
 #include "UObject/UObjectGlobals.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 #if !UE_BUILD_SHIPPING
 #include "HAL/IConsoleManager.h"
@@ -188,9 +189,17 @@ void AScareDirector::DiscoverTimelineEntities()
 		return;
 	}
 
+	// One discovery at startup handles entities whose BeginPlay preceded the director.
+	// BeginPlay/EndPlay registration handles later spawns and streamed levels.
+	TSet<ATimelineEntityActor*> KnownEntities;
+	for (ATimelineEntityActor* Entity : TimelineEntities) KnownEntities.Add(Entity);
 	for (TActorIterator<ATimelineEntityActor> It(GetWorld()); It; ++It)
 	{
-		TimelineEntities.AddUnique(*It);
+		if (!KnownEntities.Contains(*It))
+		{
+			KnownEntities.Add(*It);
+			TimelineEntities.Add(*It);
+		}
 	}
 }
 
@@ -211,6 +220,8 @@ void AScareDirector::RegisterTimelineEntity(ATimelineEntityActor* Entity)
 void AScareDirector::UnregisterTimelineEntity(ATimelineEntityActor* Entity)
 {
 	TimelineEntities.Remove(Entity);
+	ManagedTimelineEntities.Remove(Entity);
+	if (IsValid(Entity)) Entity->ClearDirectorVisibilityControl();
 	if (ActiveTimelineEntity == Entity)
 	{
 		ActiveTimelineEntity = nullptr;
@@ -219,12 +230,24 @@ void AScareDirector::UnregisterTimelineEntity(ATimelineEntityActor* Entity)
 
 void AScareDirector::RefreshTimelineEntityVisibility()
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(Hrono_EntitySelection);
 	if (!bShowOnlyNearestTimelineEntity || GetNetMode() == NM_DedicatedServer || !GetWorld())
 	{
+		for (const TWeakObjectPtr<ATimelineEntityActor>& Entity : ManagedTimelineEntities)
+		{
+			if (Entity.IsValid()) Entity->ClearDirectorVisibilityControl();
+		}
+		ManagedTimelineEntities.Reset();
+		ActiveTimelineEntity = nullptr;
 		return;
 	}
 
-	DiscoverTimelineEntities();
+	TimelineEntities.RemoveAllSwap([](const TObjectPtr<ATimelineEntityActor>& Entity)
+	{
+		return !IsValid(Entity);
+	});
+	// Preserve explicit Blueprint pool edits without re-scanning the entire world.
+	TSet<TWeakObjectPtr<ATimelineEntityActor>> CurrentPool;
 
 	APlayerController* PlayerController = GetWorld()->GetFirstPlayerController();
 	AHronoCharacter* Character = PlayerController
@@ -233,14 +256,15 @@ void AScareDirector::RefreshTimelineEntityVisibility()
 
 	ATimelineEntityActor* NearestEntity = nullptr;
 	float NearestDistanceSquared = TNumericLimits<float>::Max();
-	if (IsValid(Character))
+	for (ATimelineEntityActor* Entity : TimelineEntities)
 	{
-		for (ATimelineEntityActor* Entity : TimelineEntities)
+		CurrentPool.Add(Entity);
+		if (!ManagedTimelineEntities.Contains(Entity))
 		{
-			if (!IsValid(Entity) || !Entity->IsAvailableForCharacter(*Character))
-			{
-				continue;
-			}
+			Entity->SetDirectorVisibility(false);
+		}
+		if (IsValid(Character) && Entity->IsAvailableForCharacter(*Character))
+		{
 
 			const float DistanceSquared = FVector::DistSquared(
 				Character->GetActorLocation(),
@@ -253,14 +277,23 @@ void AScareDirector::RefreshTimelineEntityVisibility()
 		}
 	}
 
-	ActiveTimelineEntity = NearestEntity;
-	for (ATimelineEntityActor* Entity : TimelineEntities)
+	for (const TWeakObjectPtr<ATimelineEntityActor>& Entity : ManagedTimelineEntities)
 	{
-		if (IsValid(Entity))
+		if (!CurrentPool.Contains(Entity) && Entity.IsValid())
 		{
-			Entity->SetDirectorVisibility(Entity == ActiveTimelineEntity);
+			Entity->ClearDirectorVisibilityControl();
 		}
 	}
+	ManagedTimelineEntities = MoveTemp(CurrentPool);
+	if (ActiveTimelineEntity != NearestEntity)
+	{
+		if (IsValid(ActiveTimelineEntity) && ManagedTimelineEntities.Contains(ActiveTimelineEntity.Get()))
+		{
+			ActiveTimelineEntity->SetDirectorVisibility(false);
+		}
+		ActiveTimelineEntity = NearestEntity;
+	}
+	if (IsValid(NearestEntity)) NearestEntity->SetDirectorVisibility(true);
 }
 
 void AScareDirector::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const

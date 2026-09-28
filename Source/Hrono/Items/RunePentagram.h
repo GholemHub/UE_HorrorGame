@@ -32,7 +32,11 @@ class HRONO_API ARunePentagram : public AActor, public IEnviroment_Interface
 	GENERATED_BODY()
 
 public:
+	/** Player request: slot rules and transforms always come from this authority actor. */
+	bool RequestRunePlacement(AHronoCharacter* Character, ARune_Item* Rune, FName RequestedSlot = NAME_None);
 	ARunePentagram();
+	/** Authority transaction: commit only after the captured target timeline is applied. */
+	bool TryCompletePentagram(AHronoCharacter* PlayerWhoPlacedRune);
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Pentagram|Components")
 	TObjectPtr<USceneComponent> SceneRoot;
@@ -189,9 +193,8 @@ protected:
 
 private:
 	bool TryInsertCurrentRune(AHronoCharacter* Character);
-	bool TryPlaceRuneInMatchingSlot(ARune_Item* Rune, AHronoCharacter* PlacingCharacter);
+	bool TryPlaceRuneInMatchingSlot(ARune_Item* Rune, AHronoCharacter* PlacingCharacter, FName RequestedSlot = NAME_None);
 	bool HasValidRequiredRuneSetup() const;
-	void CheckPentagramCompletion(AHronoCharacter* PlayerWhoPlacedRune);
 	void BroadcastPentagramCompleted();
 	void DeliverThirdRuneEvents();
 	void RefreshReplicatedRuneAttachments();
@@ -199,4 +202,7 @@ private:
 	void SetLastInteractionDebug(const FString& NewStatus, bool bSuccess);
 
 	bool bThirdRuneEventsDelivered = false;
+	bool bCompletionInProgress = false;
+	TWeakObjectPtr<AHronoCharacter> PendingCompletingPlayer;
+	EItemTimeline PendingRequestedTimeline = EItemTimeline::Both;
 };

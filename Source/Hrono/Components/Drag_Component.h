@@ -8,6 +8,7 @@
 
 class UPrimitiveComponent;
 class USceneComponent;
+class AHronoCharacter;
 
 UCLASS( ClassGroup=(Custom), meta=(BlueprintSpawnableComponent) )
 class HRONO_API UDrag_Component : public UActorComponent
@@ -31,6 +32,10 @@ public:
 	
 	UFUNCTION()
 	void StopDrag();
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	/** Send at most 20 changed poses/s, with a reliable final pose on release. */
+	void SendPanelPose(AHronoCharacter* Character, USceneComponent* MovementComponent,
+		bool bLinear, const FVector& Location, const FRotator& Rotation, bool bFinal = false);
 
 	/** Scene component that actually rotates. Null uses the owner's primary door mesh/pivot. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Door")
@@ -196,5 +201,10 @@ public:
 	/** Initial relative mesh location captured at BeginPlay and used as the closed pose. */
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "CupBoard")
 	FVector CupBoardClosedLocation = FVector::ZeroVector;
+	private:
+		double LastPoseSendTime = -1.0;
+		FVector LastSentLocation = FVector::ZeroVector;
+		FRotator LastSentRotation = FRotator::ZeroRotator;
+		bool bHasSentPose = false;
 
 };

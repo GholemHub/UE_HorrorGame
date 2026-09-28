@@ -120,6 +120,10 @@ public:
 	virtual void Use_Implementation(AActor* Character);
 
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+	virtual void Tick(float DeltaSeconds) override;
+	virtual void GatherCurrentMovement() override;
+	virtual void OnRep_ReplicatedMovement() override;
+	virtual void OnRep_AttachmentReplication() override;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<USceneComponent> DefaultSceneRoot;
@@ -171,7 +175,8 @@ public:
 	virtual void UpdateMeshForLocalPlayer();
 
 	virtual bool TryPickUp(AHronoCharacter* Character);
-	void OnPickedUp(AHronoCharacter* Character);
+	/** Whether this item can ever enter a character's hand. World-only items override this. */
+	virtual bool CanBePickedUp() const { return true; }
 
 	bool AttachToCharacter();
 
@@ -192,17 +197,28 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Item|Performance")
 	bool bOnlyRunSceneCaptureWhileLocallyHeld = true;
 
+	/** Optional mesh material slot that displays this item's capture while locally held. -1 disables the swap. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Item|Performance", meta = (ClampMin = "-1"))
+	int32 SceneCaptureDisplayMaterialIndex = INDEX_NONE;
+
 	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_OwningCharacter)
 	AHronoCharacter* OwningCharacter;
 
 	UPROPERTY(EditAnywhere, Category = "Pickup")
 	FTransform HoldOffset;
 
+	/** Use the camera-centred monocle point in both timelines. Translation and inertia are suppressed. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Pickup|Attachment")
+	bool bUseCenteredInteractionPoint = false;
+
 	UFUNCTION()
 	virtual void OnRep_OwningCharacter(AHronoCharacter* PreviousOwningCharacter);
 
 	UFUNCTION(BlueprintCallable, Category = "Item")
 	virtual void Drop();
+
+	/** Server-only hand release for placement: no physical drop or drop sound. */
+	bool ReleaseForPlacement(AHronoCharacter* Character);
 
 	UPROPERTY(BlueprintReadOnly, Category = "Item")
 	bool bIsPickedUp = false;
@@ -232,8 +248,15 @@ public:
 	UFUNCTION(BlueprintImplementableEvent, Category = "Item|Mirror Transfer")
 	void OnMirrorTransferStateChanged(EMirrorItemTransferState NewState);
 	
+private:
+	/** Mutates ownership only after TryPickUp has accepted an unoccupied item. */
+	void OnPickedUp(AHronoCharacter* Character);
+
 protected:
 	virtual void PostInitializeComponents() override;
+	/** One-shot authority event, deliberately absent from replicated snapshots. */
+	UFUNCTION(NetMulticast, Unreliable)
+	void MulticastItemSound(bool bPickup, EItemTimeline EventTimeline, FVector_NetQuantize Location);
 	virtual void BeginPlay() override;
 
 	/** True only when a native subclass genuinely needs to tick while idle. */
@@ -252,15 +275,28 @@ protected:
 	FTransform ItemMeshRelativeTransform = FTransform::Identity;
 
 	/** Applies mesh, gameplay tag, collision, and local visibility for ItemTimeline. */
-	void ApplyItemTimelineState();
+	virtual void ApplyItemTimelineState();
 	void ApplyDroppedPhysicsState();
 	void ApplyFloatingPickupState();
+	/** Resolves independent replication notifications: Placed > Held > Floating > Dropped. */
+	void ApplyWorldItemState();
+	virtual bool IsPlacementLocked() const { return false; }
+	void RestoreItemMeshAttachment();
+	bool NeedsDroppedPhysicsTracking() const;
+	void SyncDroppedPhysicsTransform();
+	ETickingGroup AuthoredTickGroup = TG_PrePhysics;
+	bool bTemporaryItemTickActive = false;
 	/** Class/category policy for local aim highlighting. Forced highlights are handled separately. */
 	virtual bool AllowsAimInteractionHighlight() const;
 	void EnsureInteractionOverlayMaterial();
 	void RefreshInteractionHighlight();
 	void LogHeldTransformState(const TCHAR* Context) const;
 	void SetHeldSceneCapturesEnabled(bool bEnabled);
+	void CacheSceneCaptureDisplayMaterial();
+	void SetSceneCaptureDisplayMaterialEnabled(bool bEnabled);
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInterface> ActiveSceneCaptureDisplayMaterial;
+	bool bSceneCaptureDisplayMaterialCached = false;
 
 	/** Restores world physics and timeline interaction responses for a dropped item. */
 	void ConfigureDroppedCollision(UPrimitiveComponent* PrimitiveComponent);

@@ -2,6 +2,8 @@
 
 
 #include "Items/Drag_Item.h"
+#include "Audio/HronoAudioPolicy.h"
+#include "TimerManager.h"
 #include "Components/Drag_Component.h"
 #include "HronoCharacter.h"
 #include "HronoCollisionChannels.h"
@@ -50,6 +52,7 @@ ADrag_Item::ADrag_Item()
 	MoveAudioComponent = CreateDefaultSubobject<UAudioComponent>(TEXT("MoveAudioComponent"));
 	MoveAudioComponent->SetupAttachment(ItemMesh);
 	MoveAudioComponent->bAutoActivate = false;
+	MoveAudioComponent->bStopWhenOwnerDestroyed = true;
 }
 
 void ADrag_Item::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -66,6 +69,8 @@ void ADrag_Item::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifeti
 	DOREPLIFETIME(ADrag_Item, FutureBarricadeCount);
 	DOREPLIFETIME(ADrag_Item, TriggerLockCount);
 	DOREPLIFETIME(ADrag_Item, bUseAutomaticOpenClose);
+	DOREPLIFETIME(ADrag_Item, bManualMovementAudioActive);
+	DOREPLIFETIME(ADrag_Item, bManualMovementIsLinear);
 
 }
 
@@ -331,7 +336,7 @@ void ADrag_Item::UpdateDoorAnimation(float DeltaTime)
     bDoorAnimationActive = false;
     DoorRotation = DoorAnimationTargetRotation;
 	DoorMovementComponent->SetRelativeRotation(DoorRotation);
-    StopMoveSound();
+    if (!bManualMovementAudioActive && AutomaticPanelAnimations.IsEmpty()) StopMoveSound();
 
     if (HasAuthority())
     {
@@ -622,7 +627,8 @@ void ADrag_Item::UpdateAutomaticPanelAnimations(float DeltaTime)
 
 	if (AutomaticPanelAnimations.IsEmpty())
 	{
-		StopMoveSound();
+		if (bManualMovementAudioActive) StartMoveSound(bManualMovementIsLinear);
+		else StopMoveSound();
 		RefreshActiveTickState();
 	}
 }
@@ -654,7 +660,9 @@ void ADrag_Item::ApplyDoorRotationFromServer(FName DoorComponentName, const FRot
 		return;
 	}
 
+	const bool bChanged = !DoorMovementComponent->GetRelativeRotation().Equals(NewRotation, 0.01f);
 	DoorMovementComponent->SetRelativeRotation(NewRotation);
+	if (bChanged && !bUseAutomaticOpenClose) MarkManualPanelMovement(DoorMovementComponent->GetFName(), false);
 	DoorRotation = NewRotation;
 	RefreshDoorClosedState();
 	ForceNetUpdate();
@@ -752,7 +760,9 @@ void ADrag_Item::ApplyShelfPositionFromServer(
 	const FVector ClampedPosition = ClampShelfPositionForComponent(
 		ShelfMovementComponent,
 		NewPosition);
+	const bool bChanged = !ShelfMovementComponent->GetRelativeLocation().Equals(ClampedPosition, 0.01f);
 	ShelfMovementComponent->SetRelativeLocation(ClampedPosition);
+	if (bChanged && !bUseAutomaticOpenClose) MarkManualPanelMovement(ShelfMovementComponent->GetFName(), true);
 	ShelfPosition = ClampedPosition;
 	RefreshShelfOpenState();
 	ForceNetUpdate();
@@ -778,7 +788,7 @@ void ADrag_Item::RefreshDoorClosedState()
     // OnRep_IsClosed only fires on remote clients, so broadcast here for the
     // server/listen-server host as well.
     UE_LOG(LogTemp, Log, TEXT("[SERVER] Door %s"), bIsClosed ? TEXT("closed") : TEXT("open"));
-    UGameplayStatics::PlaySoundAtLocation(this, bIsClosed ? DoorCloseSound : DoorOpenSound, GetActorLocation());
+    MulticastPanelStateSound(false, !bIsClosed, ItemTimeline);
     OnDoorStateChanged.Broadcast(bIsClosed);
 }
 
@@ -787,10 +797,10 @@ void ADrag_Item::RefreshShelfOpenState()
     if (!ItemMesh || !DragComponent) return;
 
     const FVector CurrentPosition = ItemMesh->GetRelativeLocation();
-    const bool bCupBoard = DragComponent && DragComponent->bIsCupBoard;
-    const float CurrentDistance = bCupBoard
-        ? FVector::Distance(CurrentPosition, DragComponent->CupBoardClosedLocation)
-        : FMath::Abs(CurrentPosition.Y);
+    const bool bCupBoard = DragComponent->bIsCupBoard;
+    const FVector Closed = bCupBoard ? DragComponent->CupBoardClosedLocation : DragComponent->ShelfClosedLocation;
+    const FVector Axis = (bCupBoard ? DragComponent->CupBoardSlideAxis : DragComponent->ShelfSlideAxis).GetSafeNormal();
+    const float CurrentDistance = FVector::DotProduct(CurrentPosition - Closed, Axis);
     const float MaxDistance = bCupBoard
         ? DragComponent->CupBoardMaxDistance
         : DragComponent->ShelfMaxDistance;
@@ -802,6 +812,7 @@ void ADrag_Item::RefreshShelfOpenState()
     if (bIsNowOpen != bIsShelfOpen)
     {
         bIsShelfOpen = bIsNowOpen;
+        MulticastPanelStateSound(true, bIsNowOpen, ItemTimeline);
 
         // Play sound/animation based on state
         if (bIsNowOpen)
@@ -841,7 +852,6 @@ void ADrag_Item::OnShelfOpened()
         OnShelfOpen.Broadcast();
     }
 
-    UGameplayStatics::PlaySoundAtLocation(this, ShelfOpenSound, GetActorLocation());
     UE_LOG(LogTemp, Log, TEXT("Shelf opened"));
 }
 
@@ -853,7 +863,6 @@ void ADrag_Item::OnShelfClosed()
         OnShelfClose.Broadcast();
     }
 
-    UGameplayStatics::PlaySoundAtLocation(this, ShelfCloseSound, GetActorLocation());
     UE_LOG(LogTemp, Log, TEXT("Shelf closed"));
 }
 
@@ -870,21 +879,98 @@ void ADrag_Item::StartMoveSound(bool bShelf)
         return;
     }
 
-    MoveAudioComponent->SetSound(MoveSound);
-
-    if (!MoveAudioComponent->IsPlaying())
+    if (!HronoAudioPolicy::CanHear(this, ItemTimeline)) return;
+    if (!bMoveSoundRequested || MoveAudioComponent->GetSound() != MoveSound)
     {
+        // Cancel an in-flight FadeOut before restarting the same loop.
+        MoveAudioComponent->Stop();
+        MoveAudioComponent->SetSound(MoveSound);
+        MoveAudioComponent->SetVolumeMultiplier(1.0f);
         MoveAudioComponent->Play();
+        bMoveSoundRequested = true;
     }
 }
 
 void ADrag_Item::StopMoveSound()
 {
+    bMoveSoundRequested = false;
     if (MoveAudioComponent && MoveAudioComponent->IsPlaying())
     {
         // Small fade avoids an abrupt cut when the player releases the door.
         MoveAudioComponent->FadeOut(0.15f, 0.0f);
     }
+}
+
+void ADrag_Item::MarkManualPanelMovement(FName ComponentName, bool bLinear)
+{
+	if (!HasAuthority() || ComponentName.IsNone()) return;
+	ManualPanelSoundExpiry.FindOrAdd(ComponentName) = GetWorld()->GetTimeSeconds() + 0.25;
+	const bool bChanged = !bManualMovementAudioActive || bManualMovementIsLinear != bLinear;
+	bManualMovementAudioActive = true;
+	bManualMovementIsLinear = bLinear;
+	if (bChanged)
+	{
+		OnRep_ManualMovementAudio();
+		ForceNetUpdate();
+	}
+	if (!GetWorldTimerManager().IsTimerActive(ManualMovementAudioTimer))
+	{
+		GetWorldTimerManager().SetTimer(ManualMovementAudioTimer, this,
+			&ADrag_Item::ExpireManualPanelMovement, 0.1f, true);
+	}
+}
+
+void ADrag_Item::FinishManualPanelMovement(FName ComponentName)
+{
+	if (!HasAuthority()) return;
+	ManualPanelSoundExpiry.Remove(ComponentName);
+	ExpireManualPanelMovement();
+}
+
+void ADrag_Item::ExpireManualPanelMovement()
+{
+	if (!HasAuthority()) return;
+	const double Now = GetWorld()->GetTimeSeconds();
+	for (auto It = ManualPanelSoundExpiry.CreateIterator(); It; ++It)
+	{
+		if (It.Value() <= Now) It.RemoveCurrent();
+	}
+	if (!ManualPanelSoundExpiry.IsEmpty()) return;
+	GetWorldTimerManager().ClearTimer(ManualMovementAudioTimer);
+	if (!bManualMovementAudioActive) return;
+	bManualMovementAudioActive = false;
+	OnRep_ManualMovementAudio();
+	ForceNetUpdate();
+}
+
+void ADrag_Item::OnRep_ManualMovementAudio()
+{
+	if (bManualMovementAudioActive) StartMoveSound(bManualMovementIsLinear);
+	else if (AutomaticPanelAnimations.IsEmpty() && !bDoorAnimationActive) StopMoveSound();
+}
+
+void ADrag_Item::MulticastPanelStateSound_Implementation(bool bLinear, bool bOpen,
+	EItemTimeline EventTimeline)
+{
+	if (!HronoAudioPolicy::CanHear(this, EventTimeline)) return;
+	USoundBase* Sound = bLinear
+		? (bOpen ? ShelfOpenSound.Get() : ShelfCloseSound.Get())
+		: (bOpen ? DoorOpenSound.Get() : DoorCloseSound.Get());
+	if (IsValid(Sound)) UGameplayStatics::PlaySoundAtLocation(this, Sound, GetActorLocation());
+}
+
+void ADrag_Item::UpdateVisibilityForLocalPlayer(EItemTimeline ViewerTimeline)
+{
+	Super::UpdateVisibilityForLocalPlayer(ViewerTimeline);
+	if (!HronoAudioPolicy::CanHear(this, ItemTimeline)) StopMoveSound();
+	else if (bManualMovementAudioActive) StartMoveSound(bManualMovementIsLinear);
+}
+
+void ADrag_Item::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	GetWorldTimerManager().ClearTimer(ManualMovementAudioTimer);
+	StopMoveSound();
+	Super::EndPlay(EndPlayReason);
 }
 
 void ADrag_Item::NotifyDragStarted(bool bShelf)
@@ -908,7 +994,6 @@ void ADrag_Item::OnRep_IsClosed()
 {
     // Runs on remote clients when the authority changes bIsClosed.
     UE_LOG(LogTemp, Log, TEXT("[CLIENT] Door %s"), bIsClosed ? TEXT("closed") : TEXT("open"));
-    UGameplayStatics::PlaySoundAtLocation(this, bIsClosed ? DoorCloseSound : DoorOpenSound, GetActorLocation());
     OnDoorStateChanged.Broadcast(bIsClosed);
 }
 

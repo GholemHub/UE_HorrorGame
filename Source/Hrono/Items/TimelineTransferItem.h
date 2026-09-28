@@ -75,6 +75,12 @@ public:
 		meta = (ClampMin = "50.0", Units = "cm"))
 	float MaxTakeDistance = 350.0f;
 
+	/** Maximum distance from a character to the finite mirror surface. Checked on
+	 * the server for both preview creation and the final handoff. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mirror Transfer|Validation",
+		meta = (ClampMin = "50.0", Units = "cm"))
+	float MaxCharacterDistanceToMirror = 150.0f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mirror Transfer|Debug")
 	bool bDrawDebugTransferVolume = false;
 
@@ -89,6 +95,9 @@ public:
 
 	/** Stable mirrored/local mapping from this surface to LinkedTransfer. */
 	FTransform MapItemTransformToLinked(const FTransform& ItemWorldTransform) const;
+
+	/** Geometric proximity to the mirror plane, including its finite width/height. */
+	bool IsCharacterNearMirror(const AHronoCharacter& Character) const;
 
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	virtual bool TryPickUp(AHronoCharacter* Character) override { return false; }

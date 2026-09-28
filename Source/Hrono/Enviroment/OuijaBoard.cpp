@@ -3,6 +3,7 @@
 #include "Components/BoxComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Components/TextRenderComponent.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -20,6 +21,11 @@ AOuijaBoard::AOuijaBoard()
 
 	SceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("SceneRoot"));
 	SetRootComponent(SceneRoot);
+	PastMirrorVisualRoot = CreateDefaultSubobject<USceneComponent>(TEXT("PastMirrorVisualRoot"));
+	PastMirrorVisualRoot->SetupAttachment(SceneRoot);
+	PastMirrorVisualRoot->SetMobility(EComponentMobility::Movable);
+	PastMirrorVisualRoot->SetRelativeScale3D(FVector(-1.0f, 1.0f, 1.0f));
+	PastMirrorVisualRoot->SetVisibility(false);
 
 	BoardMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("BoardMesh"));
 	BoardMesh->SetupAttachment(SceneRoot);
@@ -81,6 +87,170 @@ void AOuijaBoard::OnConstruction(const FTransform& Transform)
 	}
 }
 
+void AOuijaBoard::BeginPlay()
+{
+	Super::BeginPlay();
+	APlayerController* LocalController = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
+	const AHronoCharacter* LocalViewer = LocalController
+		? Cast<AHronoCharacter>(LocalController->GetPawn()) : nullptr;
+	if (IsValid(LocalViewer) && LocalViewer->IsLocallyControlled())
+	{
+		RefreshPastReadability(LocalViewer->GetTimeline());
+	}
+}
+
+void AOuijaBoard::RefreshPastReadability(EItemTimeline ViewerTimeline)
+{
+	const bool bShouldMirror = ViewerTimeline == EItemTimeline::Past;
+	if (bShouldMirror)
+	{
+		EnsurePastMirrorVisuals();
+		SyncPastMirrorVisuals();
+	}
+	if (bShouldMirror == bPastMirrorVisualActive)
+	{
+		return;
+	}
+
+	if (bShouldMirror)
+	{
+		bSavedBoardVisibility = BoardMesh->IsVisible();
+		bSavedArrowVisibility = ArrowMesh->IsVisible();
+		if (UTextRenderComponent* Text = SourceVisualText.Get())
+		{
+			bSavedTextVisibility = Text->IsVisible();
+			Text->SetVisibility(false);
+		}
+		BoardMesh->SetVisibility(false);
+		ArrowMesh->SetVisibility(false);
+	}
+	else
+	{
+		BoardMesh->SetVisibility(bSavedBoardVisibility);
+		ArrowMesh->SetVisibility(bSavedArrowVisibility);
+		if (UTextRenderComponent* Text = SourceVisualText.Get())
+		{
+			Text->SetVisibility(bSavedTextVisibility);
+		}
+	}
+
+	bPastMirrorVisualActive = bShouldMirror;
+	PastMirrorVisualRoot->SetVisibility(bShouldMirror);
+	if (PastMirrorBoardMesh)
+	{
+		PastMirrorBoardMesh->SetVisibility(bShouldMirror && bSavedBoardVisibility);
+	}
+	if (PastMirrorArrowMesh)
+	{
+		PastMirrorArrowMesh->SetVisibility(bShouldMirror && bSavedArrowVisibility);
+	}
+	if (PastMirrorText)
+	{
+		PastMirrorText->SetVisibility(bShouldMirror && bSavedTextVisibility);
+	}
+}
+
+void AOuijaBoard::EnsurePastMirrorVisuals()
+{
+	if (PastMirrorBoardMesh || !SceneRoot || !BoardMesh || !ArrowMesh)
+	{
+		return;
+	}
+
+	auto CreateMirrorMesh = [this](UStaticMeshComponent* Source, FName Name)
+	{
+		UStaticMeshComponent* Clone = NewObject<UStaticMeshComponent>(this, Name, RF_Transient);
+		AddInstanceComponent(Clone);
+		Clone->SetMobility(EComponentMobility::Movable);
+		Clone->SetupAttachment(PastMirrorVisualRoot);
+		Clone->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Clone->SetGenerateOverlapEvents(false);
+		Clone->SetCanEverAffectNavigation(false);
+		Clone->SetCastShadow(Source->CastShadow);
+		Clone->SetStaticMesh(Source->GetStaticMesh());
+		for (int32 Slot = 0; Slot < Source->GetNumMaterials(); ++Slot)
+		{
+			Clone->SetMaterial(Slot, Source->GetMaterial(Slot));
+		}
+		Clone->SetVisibility(false);
+		Clone->RegisterComponent();
+		return Clone;
+	};
+
+	PastMirrorBoardMesh = CreateMirrorMesh(BoardMesh, TEXT("PastMirrorBoardMesh"));
+	PastMirrorArrowMesh = CreateMirrorMesh(ArrowMesh, TEXT("PastMirrorArrowMesh"));
+
+	TInlineComponentArray<UTextRenderComponent*> TextComponents(this);
+	for (UTextRenderComponent* Text : TextComponents)
+	{
+		if (IsValid(Text) && Text->GetFName() == TEXT("VisualText"))
+		{
+			SourceVisualText = Text;
+			break;
+		}
+	}
+	if (UTextRenderComponent* Source = SourceVisualText.Get())
+	{
+		PastMirrorText = NewObject<UTextRenderComponent>(this, TEXT("PastMirrorVisualText"), RF_Transient);
+		AddInstanceComponent(PastMirrorText);
+		PastMirrorText->SetMobility(EComponentMobility::Movable);
+		PastMirrorText->SetupAttachment(PastMirrorVisualRoot);
+		PastMirrorText->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		PastMirrorText->SetCanEverAffectNavigation(false);
+		PastMirrorText->SetTextMaterial(Source->TextMaterial);
+		PastMirrorText->SetFont(Source->Font);
+		PastMirrorText->SetHorizontalAlignment(Source->HorizontalAlignment);
+		PastMirrorText->SetVerticalAlignment(Source->VerticalAlignment);
+		PastMirrorText->SetTextRenderColor(Source->TextRenderColor);
+		PastMirrorText->SetWorldSize(Source->WorldSize);
+		PastMirrorText->SetXScale(Source->XScale);
+		PastMirrorText->SetYScale(Source->YScale);
+		PastMirrorText->SetText(Source->Text);
+		PastMirrorText->SetVisibility(false);
+		PastMirrorText->RegisterComponent();
+	}
+}
+
+void AOuijaBoard::SyncPastMirrorVisuals()
+{
+	if (!bPastMirrorVisualActive && !PastMirrorBoardMesh)
+	{
+		return;
+	}
+
+	auto SyncMesh = [this](UStaticMeshComponent* Source, UStaticMeshComponent* Clone)
+	{
+		if (!IsValid(Source) || !IsValid(Clone))
+		{
+			return;
+		}
+		const FTransform RelativeToRoot = Source->GetComponentTransform().GetRelativeTransform(
+			SceneRoot->GetComponentTransform());
+		if (!Clone->GetRelativeTransform().Equals(RelativeToRoot))
+		{
+			Clone->SetRelativeTransform(RelativeToRoot);
+		}
+	};
+	SyncMesh(BoardMesh, PastMirrorBoardMesh);
+	SyncMesh(ArrowMesh, PastMirrorArrowMesh);
+	if (UTextRenderComponent* Source = SourceVisualText.Get())
+	{
+		if (PastMirrorText)
+		{
+			const FTransform RelativeToRoot = Source->GetComponentTransform().GetRelativeTransform(
+				SceneRoot->GetComponentTransform());
+			if (!PastMirrorText->GetRelativeTransform().Equals(RelativeToRoot))
+			{
+				PastMirrorText->SetRelativeTransform(RelativeToRoot);
+			}
+			if (!PastMirrorText->Text.EqualTo(Source->Text))
+			{
+				PastMirrorText->SetText(Source->Text);
+			}
+		}
+	}
+}
+
 void AOuijaBoard::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
@@ -100,6 +270,10 @@ void AOuijaBoard::Tick(float DeltaSeconds)
 	FString Letter;
 	CheckArrowLetterCollision(Letter);
 	DrawArrowCenterPoint();
+	if (bPastMirrorVisualActive)
+	{
+		SyncPastMirrorVisuals();
+	}
 }
 
 void AOuijaBoard::Interact_Implementation(AActor* Interactor)
@@ -154,7 +328,17 @@ bool AOuijaBoard::TraceBoardFromInteractor(AActor* Interactor)
 		return false;
 	}
 
-	MoveArrowToWorldPoint(Hit.ImpactPoint);
+	FVector LocalPoint = BoardMesh->GetComponentTransform().InverseTransformPosition(Hit.ImpactPoint);
+	if (const AHronoCharacter* Player = Cast<AHronoCharacter>(Interactor))
+	{
+		if (Player->GetTimeline() == EItemTimeline::Past)
+		{
+			// The Past player's postprocess mirrors the sight line. Resolve the
+			// letter against the original authoritative board coordinates.
+			LocalPoint.X *= -1.0f;
+		}
+	}
+	MoveArrowToLocalPoint(LocalPoint);
 	return true;
 }
 
@@ -165,7 +349,11 @@ void AOuijaBoard::MoveArrowToWorldPoint(const FVector& WorldPoint)
 		return;
 	}
 
-	FVector LocalPoint = BoardMesh->GetComponentTransform().InverseTransformPosition(WorldPoint);
+	MoveArrowToLocalPoint(BoardMesh->GetComponentTransform().InverseTransformPosition(WorldPoint));
+}
+
+void AOuijaBoard::MoveArrowToLocalPoint(FVector LocalPoint)
+{
 	LocalPoint.X = FMath::Clamp(LocalPoint.X, -BoardHalfExtents.X, BoardHalfExtents.X);
 	LocalPoint.Y = FMath::Clamp(LocalPoint.Y, -BoardHalfExtents.Y, BoardHalfExtents.Y);
 	LocalPoint.Z = ArrowHeight;

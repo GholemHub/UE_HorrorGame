@@ -124,6 +124,8 @@ void ARunePentagram::BeginPlay()
 void ARunePentagram::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+	if (HasAuthority() && !bPentagramCompleted && PendingCompletingPlayer.IsValid())
+		TryCompletePentagram(PendingCompletingPlayer.Get());
 
 	if (!bShowDebugStatusOnScreen || !GEngine)
 	{
@@ -220,12 +222,23 @@ bool ARunePentagram::TryInsertCurrentRune(AHronoCharacter* Character)
 		return false;
 	}
 
-	return TryPlaceRuneInMatchingSlot(Rune, Character);
+	return RequestRunePlacement(Character, Rune);
+}
+
+bool ARunePentagram::RequestRunePlacement(AHronoCharacter* Character, ARune_Item* Rune, FName RequestedSlot)
+{
+	if (!HasAuthority() || !IsValid(Character) || !IsValid(Rune)
+		|| bPentagramCompleted || !HasValidRequiredRuneSetup()
+		|| Character->GetHeldItem() != Rune || Rune->OwningCharacter != Character
+		|| Rune->GetOwner() != Character || !Rune->bIsPickedUp
+		|| (Rune->ItemTimeline != EItemTimeline::Both && Rune->ItemTimeline != Character->GetTimeline())
+		|| !Character->CanInteractWithActorOnServer(this)) return false;
+	return TryPlaceRuneInMatchingSlot(Rune, Character, RequestedSlot);
 }
 
 bool ARunePentagram::TryPlaceRuneInMatchingSlot(
 	ARune_Item* Rune,
-	AHronoCharacter* PlacingCharacter)
+	AHronoCharacter* PlacingCharacter, FName RequestedSlot)
 {
 	if (!IsValid(Rune) || !IsValid(PlacingCharacter))
 	{
@@ -259,7 +272,7 @@ bool ARunePentagram::TryPlaceRuneInMatchingSlot(
 		TargetRequiredId = RequiredRuneIdThree;
 	}
 
-	if (!TargetPlacedRune || !TargetSlot)
+	if (!TargetPlacedRune || !TargetSlot || (!RequestedSlot.IsNone() && RequestedSlot != TargetSlotId))
 	{
 		UE_LOG(LogTemp, Warning,
 			TEXT("[RunePentagram] WRONG Rune=%s RuneId=%s for %s"),
@@ -307,7 +320,7 @@ bool ARunePentagram::TryPlaceRuneInMatchingSlot(
 	}
 	MulticastRuneInteractionResult(
 		true, Rune, TargetSlotId, RunePentagramNames::Accepted);
-	CheckPentagramCompletion(PlacingCharacter);
+	TryCompletePentagram(PlacingCharacter);
 	return true;
 }
 
@@ -328,30 +341,36 @@ int32 ARunePentagram::GetPlacedRuneCount() const
 		(IsValid(PlacedRuneThree) ? 1 : 0);
 }
 
-void ARunePentagram::CheckPentagramCompletion(AHronoCharacter* PlayerWhoPlacedRune)
+bool ARunePentagram::TryCompletePentagram(AHronoCharacter* PlayerWhoPlacedRune)
 {
-	if (!HasAuthority() || bPentagramCompleted || GetPlacedRuneCount() != 3)
+	if (!HasAuthority() || bPentagramCompleted || bCompletionInProgress || GetPlacedRuneCount() != 3)
+		return false;
+	TGuardValue<bool> CompletionGuard(bCompletionInProgress, true);
+	if (!PendingCompletingPlayer.IsValid())
 	{
-		return;
+		if (!IsValid(PlayerWhoPlacedRune) || PlayerWhoPlacedRune->IsActorBeingDestroyed()
+			|| (PlayerWhoPlacedRune->GetTimeline() != EItemTimeline::Past
+				&& PlayerWhoPlacedRune->GetTimeline() != EItemTimeline::Future)) return false;
+		PendingCompletingPlayer = PlayerWhoPlacedRune;
+		PendingRequestedTimeline = PlayerWhoPlacedRune->GetTimeline() == EItemTimeline::Past
+			? EItemTimeline::Future : EItemTimeline::Past;
 	}
-	if (!IsValid(PlayerWhoPlacedRune))
+	AHronoCharacter* Candidate = PendingCompletingPlayer.Get();
+	if (!IsValid(Candidate) || Candidate->IsActorBeingDestroyed() || Candidate->GetWorld() != GetWorld())
 	{
-		UE_LOG(LogTemp, Error,
-			TEXT("[RunePentagram] Cannot complete %s: third-rune player is invalid"),
-			*GetName());
-		return;
+		PendingCompletingPlayer.Reset();
+		return false;
 	}
-
-	CompletingPlayer = PlayerWhoPlacedRune;
-	const EItemTimeline PreviousTimeline = CompletingPlayer->GetTimeline();
-	const EItemTimeline RequestedTimeline = PreviousTimeline == EItemTimeline::Past
-		? EItemTimeline::Future
-		: EItemTimeline::Past;
-
-	// Use the character's server-authoritative API so mirroring, carried items,
-	// collision and same-timeline player visibility are updated together.
-	CompletingPlayer->SetPlayerTimeline(RequestedTimeline);
-	CompletingPlayerNewTimeline = CompletingPlayer->GetTimeline();
+	const EItemTimeline PreviousTimeline = Candidate->GetTimeline();
+	if (!Candidate->TrySetPlayerTimelineOnAuthority(PendingRequestedTimeline)
+		|| Candidate->GetTimeline() != PendingRequestedTimeline) return false;
+	// Publish only the successful transaction. A deferred retry uses the same
+	// captured target rather than toggling whichever timeline happens to be current.
+	CompletingPlayer = Candidate;
+	CompletingPlayerNewTimeline = PendingRequestedTimeline;
+	bPentagramCompleted = true;
+	PendingCompletingPlayer.Reset();
+	ForceNetUpdate();
 
 	bool bAllPlayersShareTimeline = true;
 	int32 GameplayPlayerCount = 0;
@@ -374,7 +393,7 @@ void ARunePentagram::CheckPentagramCompletion(AHronoCharacter* PlayerWhoPlacedRu
 		}
 		++GameplayPlayerCount;
 	}
-	if (bAllPlayersShareTimeline && GameplayPlayerCount > 0)
+	if (bAllPlayersShareTimeline && GameplayPlayerCount >= 2)
 	{
 		for (TActorIterator<AHronoCharacter> It(GetWorld()); It; ++It)
 		{
@@ -386,8 +405,6 @@ void ARunePentagram::CheckPentagramCompletion(AHronoCharacter* PlayerWhoPlacedRu
 		}
 	}
 
-	bPentagramCompleted = true;
-	ForceNetUpdate();
 	DeliverThirdRuneEvents();
 
 	UE_LOG(LogTemp, Warning,
@@ -395,6 +412,7 @@ void ARunePentagram::CheckPentagramCompletion(AHronoCharacter* PlayerWhoPlacedRu
 		*GetName(), *GetNameSafe(CompletingPlayer),
 		*StaticEnum<EItemTimeline>()->GetNameStringByValue(static_cast<int64>(PreviousTimeline)),
 		*StaticEnum<EItemTimeline>()->GetNameStringByValue(static_cast<int64>(CompletingPlayerNewTimeline)));
+	return true;
 }
 
 void ARunePentagram::MulticastRuneInteractionResult_Implementation(

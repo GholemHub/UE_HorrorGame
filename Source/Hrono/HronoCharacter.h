@@ -15,11 +15,13 @@ class UCameraComponent;
 class UInputAction;
 class UDrag_Component;
 class ADrag_Item;
+class AHidingWardrobe;
 class ABase_Item;
 class APaintItem;
 class USpotLightComponent;
 class AChair;
 class USoundBase;
+class USoundAttenuation;
 class UMaterialInterface;
 class UMaterialInstanceDynamic;
 class UPrimitiveComponent;
@@ -109,9 +111,20 @@ protected:
 public:
 	AHronoCharacter();
 
-	/** Current radio microphone state for Blueprint UI and gameplay logic. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voice|Radio")
+	/** Locally applied transmission state; the controller is its only writer. */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Voice|Radio")
 	bool MicroStatus = false;
+
+	/** Called after this pawn's VOIPTalker has a PlayerState and receiver settings. */
+	UFUNCTION(BlueprintCallable, Category = "Voice|Radio")
+	void NotifyVoiceReceiverReady();
+	bool HasConfiguredVoiceReceiver() const { return bVoiceReceiverConfigured; }
+
+private:
+	/** Receiver setup can finish before this replica acquires its controller. */
+	bool bVoiceReceiverConfigured = false;
+
+public:
 
 	/** Re-evaluates the local ritual-chair overlays immediately after replicated state changes. */
 	void RefreshRitualChairGuidanceNow();
@@ -158,9 +171,16 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components|Interaction")
 	TObjectPtr<USceneComponent> PastInteractionPoint;
 
+	/** Camera-centred attachment for the monocle in either timeline. Tune only its forward distance. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components|Interaction")
+	TObjectPtr<USceneComponent> MonocleInteractionPoint;
+
 	/** Returns the held-item attachment point selected by CharacterTimeline. */
 	UFUNCTION(BlueprintPure, Category = "Interaction|Timeline")
 	USceneComponent* GetActiveInteractionPoint() const;
+
+	/** Chooses the centred monocle point or the ordinary timeline-dependent hand point. */
+	USceneComponent* GetHeldItemInteractionPoint(const ABase_Item* Item) const;
 
 	// =========================================================
 	// AUDIO (placeholder sounds — assign any sound in Blueprint)
@@ -185,6 +205,32 @@ public:
 	/** Plays the footstep sound at the character's feet. Hook this up to an animation notify. */
 	UFUNCTION(BlueprintCallable, Category = "Audio")
 	void PlayFootstepSound();
+	/** Native distance cadence is the sole footstep source by default; disable for authored notifies. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Audio|Movement")
+	bool bUseMovementFootsteps = true;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Audio|Movement", meta=(ClampMin="30"))
+	float FootstepDistance = 180.0f;
+	/** Optional physical surface variants; missing surfaces use FootstepSound. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Audio|Movement")
+	TMap<TEnumAsByte<EPhysicalSurface>, TObjectPtr<USoundBase>> SurfaceFootstepSounds;
+	UPROPERTY(VisibleDefaultsOnly, Category="Audio|Movement")
+	TObjectPtr<USoundBase> NativeFootstepFallback;
+	UPROPERTY(VisibleDefaultsOnly, Category="Audio|Movement")
+	TObjectPtr<USoundBase> NativeJumpFallback;
+	UPROPERTY(VisibleDefaultsOnly, Category="Audio|Movement")
+	TMap<TEnumAsByte<EPhysicalSurface>, TObjectPtr<USoundBase>> NativeSurfaceFootstepFallbacks;
+	UPROPERTY(VisibleDefaultsOnly, Category="Audio|Movement")
+	TObjectPtr<USoundAttenuation> MovementSoundAttenuation;
+	virtual void OnJumped_Implementation() override;
+	UFUNCTION(NetMulticast, Unreliable)
+	void MulticastMovementSound(uint8 Event, EItemTimeline EventTimeline, uint8 Surface);
+
+	/** Local presentation trace shared by native highlight and Blueprint prompt. Never authorizes RPCs. */
+	UFUNCTION(BlueprintCallable, Category = "Interaction|Presentation")
+	FHitResult GetInteractionPresentationHit();
+
+	UFUNCTION(BlueprintCallable, Category = "Interaction|Presentation")
+	bool IsFocusedItemUsable();
 
 	/** Current local mouse multiplier loaded from menu settings. */
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Input|Settings")
@@ -241,19 +287,38 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "Timeline")
 	FCharacterTimelineChangedDelegate OnCharacterTimelineChanged;
 
-	/** Toggles Past <-> Future. Client calls are safely routed to the server. */
+	/** Authority-only toggle. Clients receive the replicated result. */
 	UFUNCTION(BlueprintCallable, Category = "Timeline", meta = (DisplayName = "Switch Player Timeline"))
 	void SwitchPlayerTimeline();
 
-	/** Moves the player and the held item to a specific timeline. */
+	/** Authority-only transition of the player and carried item. */
 	UFUNCTION(BlueprintCallable, Category = "Timeline", meta = (DisplayName = "Set Player Timeline"))
 	void SetPlayerTimeline(EItemTimeline NewTimeline);
+
+	/** Trusted authority API. Returns true only when the requested state is applied. */
+	bool TrySetPlayerTimelineOnAuthority(EItemTimeline NewTimeline);
+
+	/** Capture one server death transition; clients may start presentation only.
+	 * Returns false for an already pending server death, preventing montage restart. */
+	UFUNCTION(BlueprintCallable, Category = "Timeline|Death")
+	bool BeginDeathTimelineTransition(USkeletalMeshComponent* DeathMesh);
+
+	/** Consume the captured death once. Never accepts a client-selected timeline. */
+	UFUNCTION(BlueprintCallable, Category = "Timeline|Death")
+	bool CompleteDeathTimelineTransition();
+
+	UFUNCTION(BlueprintCallable, Category = "Timeline|Death")
+	void CancelDeathTimelineTransition();
+
+	UFUNCTION(BlueprintPure, Category = "Timeline|Death")
+	EItemTimeline GetDeathOriginalTimeline() const { return DeathOriginalTimeline; }
+
 
 	/** Immediately refreshes local visibility for every Base_Item timeline actor. */
 	UFUNCTION(BlueprintCallable, Category = "Timeline")
 	void RefreshTimelineVisibilityForLocalPlayer();
 
-	/** Prevents a multicast death event from toggling the same player twice in one frame. */
+	/** Legacy asset setting retained for compatibility; death identity now replaces the time guard. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = "Timeline",
 		meta = (ClampMin = "0.0", Units = "s"))
 	float TimelineSwitchDuplicateGuardSeconds = 0.25f;
@@ -326,8 +391,7 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Items|Mirror Transfer")
 	bool TransferHeldItemTo(AHronoCharacter* TargetCharacter, class ABase_Item* Item);
 
-	/** True only while the character overlaps a HidingWardrobe safety volume and
-	 *  both wardrobe doors are below that wardrobe's unsafe angle. */
+	/** Derived on authority from all overlapping, enabled wardrobes in this timeline. */
 	UPROPERTY(ReplicatedUsing = OnRep_IsSafeInHidingWardrobe, VisibleInstanceOnly,
 		BlueprintReadOnly, Category = "Hiding|Safety")
 	bool bIsSafeInHidingWardrobe = false;
@@ -344,9 +408,14 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Hiding|Safety")
 	bool IsSafeInHidingWardrobe() const { return bIsSafeInHidingWardrobe; }
 
-	/** Authority-only setter used by HidingWardrobe safety volumes. */
+	/** Legacy entry point: recomputes valid sources; a bare bool cannot grant/remove protection. */
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Hiding|Safety")
 	void SetSafeInHidingWardrobe(bool bNewSafe);
+
+	/** Registers/removes one physical overlap source without overriding other wardrobes. */
+	void UpdateWardrobeSafetySource(AHidingWardrobe* Source, bool bInside);
+	void RefreshWardrobeSafetySources();
+
 
 protected:
 	UFUNCTION()
@@ -438,6 +507,14 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Interaction", meta = (ClampMin = 0, Units = "cm"))
 	float InteractTraceDistance = 500.0f;
 
+public:
+	/** Server-side reach/visibility/timeline policy. Uses collision geometry, not actor pivot. */
+	bool CanInteractWithActorOnServer(const AActor* Target,
+		const UPrimitiveComponent* TargetComponent = nullptr, float ExtraDistance = 0.0f) const;
+
+protected:
+	UDrag_Component* GetAllowedDragPanel(ADrag_Item* Item, FName Name, bool bLinear) const;
+
 	UFUNCTION()
 	void OnRep_CharacterTimeline(EItemTimeline PreviousTimeline);
 
@@ -452,7 +529,7 @@ protected:
 	void ClientApplyTimelineMirror(EItemTimeline NewTimeline);
 
 	void ApplyTimelineCollision();
-	void ApplyPlayerTimelineOnAuthority(EItemTimeline NewTimeline);
+	bool ApplyPlayerTimelineOnAuthority(EItemTimeline NewTimeline);
 	void MoveCarriedItemsToTimeline(EItemTimeline NewTimeline);
 	void RefreshHeldItemsInteractionPoint();
 	bool EnsureMirrorPostProcessInstance();
@@ -461,7 +538,19 @@ protected:
 	UPROPERTY(ReplicatedUsing = OnRep_TimelineMirrorRequested)
 	bool bTimelineMirrorRequested = false;
 
-	double LastTimelineSwitchServerTime = -1.0;
+	TSet<TWeakObjectPtr<AHidingWardrobe>> WardrobeSafetySources;
+	bool bRefreshingWardrobeSafetySources = false;
+	bool bWardrobeSafetyRefreshPending = false;
+	void ApplyDerivedWardrobeSafety(bool bNewSafe);
+	UFUNCTION()
+	void OnWardrobeSafetySourceDestroyed(AActor* DestroyedActor);
+
+	bool bApplyingTimelineTransition = false;
+	bool bDeathTimelineTransitionPending = false;
+	EItemTimeline DeathOriginalTimeline = EItemTimeline::Both;
+	EItemTimeline DeathTargetTimeline = EItemTimeline::Both;
+	TWeakObjectPtr<USkeletalMeshComponent> DeathTransitionMesh;
+	uint8 DeathMeshPreviousTickOption = 0;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UMaterialInstanceDynamic> MirrorPostProcessInstance;
@@ -715,6 +804,10 @@ public:
 	/** Streams rotation for a specific panel/pivot of a multi-door Drag_Item. */
 	UFUNCTION(Server, Unreliable)
 	void Server_SetDoorPanelRotation(ADrag_Item* Door, FName DoorComponentName, FRotator NewRotation);
+	/** Reliable final pose uses exactly the same validation as the streamed updates. */
+	UFUNCTION(Server, Reliable)
+	void Server_CommitDragPanelPose(ADrag_Item* Item, FName ComponentName, bool bLinear,
+		FVector Location, FRotator Rotation);
 
 	/** Returns the first person mesh **/
 	USkeletalMeshComponent* GetFirstPersonMesh() const { return FirstPersonMesh; }
@@ -733,5 +826,13 @@ public:
 
 		void OnEnyInteractTrace(FHitResult HitResult);
 		void LoadLocalPlayerSettings();
+		FHitResult CachedPresentationHit;
+		uint64 PresentationTraceFrame = MAX_uint64;
+		FVector PresentationTraceStart = FVector::ZeroVector;
+		FVector PresentationTraceEnd = FVector::ZeroVector;
+		EItemTimeline PresentationTraceTimeline = EItemTimeline::Both;
+		void UpdateMovementAudio(float DeltaSeconds);
+		float AccumulatedFootstepDistance = 0.0f;
+		double LastFootstepTime = -1.0;
 };
 

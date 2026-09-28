@@ -78,3 +78,29 @@ DerivedDataCache/*
 *.uasset
 !**/_Alex/**/*.uasset
 !**/_alex/**/*.uasset
+
+# Audio routing overrides used by the project's Master/Music/SFX settings.
+# Native session flow replaces the legacy async Blueprint pipelines.
+!Content/_UI/WBP_HronoMainMenuWidget.uasset
+!Content/FirstPerson/Blueprints/BP_FirstPersonGameMode.uasset
+!Content/HorrorEngine/Audio/_SoundSettings/SC_MasterSound.uasset
+!Content/HorrorEngine/Audio/_SoundSettings/SC_Music.uasset
+!Content/HorrorEngine/Audio/_SoundSettings/SC_Effects.uasset
+!Content/HorrorEngine/Audio/_SoundSettings/SC_Dialogue.uasset
+!Content/UltraDynamicSky/Sound/UDS_Weather.uasset
+!Content/UltraDynamicSky/Sound/UDS_Outdoor_Sound.uasset
+!Content/UltraDynamicSky/Sound/Distant_Thunder/DistantThunder_1.uasset
+!Content/UltraDynamicSky/Sound/Distant_Thunder/DistantThunder_2.uasset
+!Content/UltraDynamicSky/Sound/Distant_Thunder/DistantThunder_3.uasset
+!Content/UltraDynamicSky/Sound/Distant_Thunder/DistantThunder_4.uasset
+!Content/UltraDynamicSky/Sound/Distant_Thunder/DistantThunder_5.uasset
+!Content/UltraDynamicSky/Sound/Distant_Thunder/DistantThunder_6.uasset
+!Content/UltraDynamicSky/Sound/Distant_Thunder/DistantThunder_7.uasset
+!Content/UltraDynamicSky/Sound/Distant_Thunder/DistantThunder_8.uasset
+!Content/UltraDynamicSky/Sound/Distant_Thunder/DistantThunder_9.uasset
+!Content/UltraDynamicSky/Sound/Distant_Thunder/DistantThunder_10.uasset
+!Content/UltraDynamicSky/Sound/Distant_Thunder/DistantThunder_11.uasset
+!Content/UltraDynamicSky/Sound/Wind/BrownianNoise_1.uasset
+!Content/UltraDynamicSky/Sound/Wind/BrownianNoise_2.uasset
+!Content/UltraDynamicSky/Sound/Wind/BrownianNoise_3.uasset
+!Content/UltraDynamicSky/Sound/Wind/BrownianNoise_4.uasset

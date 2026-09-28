@@ -127,6 +127,9 @@ void UDrag_Component::TickComponent(float DeltaTime, ELevelTick TickType, FActor
 void UDrag_Component::StartDrag(APlayerController* PC, FVector WorldGrabPoint)
 {
 	if (!PC) return;
+	if (bIsRotating) StopDrag();
+	bHasSentPose = false;
+	LastPoseSendTime = -1.0;
 	if (const ADrag_Item* DragItem = Cast<ADrag_Item>(GetOwner()))
 	{
 		if (DragItem->bUseAutomaticOpenClose)
@@ -224,7 +227,6 @@ void UDrag_Component::StartDrag(APlayerController* PC, FVector WorldGrabPoint)
 	if (ADrag_Item* Drag_Item = Cast<ADrag_Item>(GetOwner()))
 	{
 		const bool bLinearDrag = bIsShelf || bIsCupBoard;
-		Drag_Item->StartMoveSound(bLinearDrag);
 
 		// Notify Blueprints that a drag interaction has begun.
 		Drag_Item->NotifyDragStarted(bLinearDrag);
@@ -237,18 +239,49 @@ void UDrag_Component::StartDrag(APlayerController* PC, FVector WorldGrabPoint)
 
 void UDrag_Component::StopDrag()
 {
+	if (bIsRotating && IsValid(RotatingController))
+	{
+		if (USceneComponent* Movement = GetTargetMovementComponent())
+		{
+			SendPanelPose(Cast<AHronoCharacter>(RotatingController->GetPawn()), Movement,
+				bIsShelf || bIsCupBoard, Movement->GetRelativeLocation(), Movement->GetRelativeRotation(), true);
+		}
+	}
 	bIsRotating = false;
 	RotatingController = nullptr;
 	bHasGrabPoint = false;
 	SetComponentTickEnabled(false);
 
-	// Stop the looping movement sound on the owning door/shelf actor.
-	if (ADrag_Item* Drag_Item = Cast<ADrag_Item>(GetOwner()))
-	{
-		Drag_Item->StopMoveSound();
-	}
 
 	//UE_LOG(LogTemp, Log, TEXT("Drag stopped"));
+}
+
+void UDrag_Component::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	StopDrag();
+	Super::EndPlay(EndPlayReason);
+}
+
+void UDrag_Component::SendPanelPose(AHronoCharacter* Character,
+	USceneComponent* MovementComponent, bool bLinear, const FVector& Location,
+	const FRotator& Rotation, bool bFinal)
+{
+	ADrag_Item* Item = Cast<ADrag_Item>(GetOwner());
+	if (!IsValid(Character) || !IsValid(Item) || !IsValid(MovementComponent)) return;
+	const double Now = GetWorld()->GetTimeSeconds();
+	const bool bChanged = !bHasSentPose || (bLinear
+		? !LastSentLocation.Equals(Location, 0.05f) : !LastSentRotation.Equals(Rotation, 0.05f));
+	if (!bFinal && (!bChanged || (!Character->HasAuthority() && bHasSentPose && Now - LastPoseSendTime < 0.05))) return;
+	if (bFinal)
+	{
+		Character->Server_CommitDragPanelPose(Item, MovementComponent->GetFName(), bLinear, Location, Rotation);
+	}
+	else if (bLinear) Character->Server_SetShelfPanelPosition(Item, MovementComponent->GetFName(), Location);
+	else Character->Server_SetDoorPanelRotation(Item, MovementComponent->GetFName(), Rotation);
+	LastPoseSendTime = Now;
+	LastSentLocation = Location;
+	LastSentRotation = Rotation;
+	bHasSentPose = true;
 }
 
 bool UDrag_Component::UpdateGrabTarget(FVector& OutTargetPoint)
@@ -417,23 +450,11 @@ void UDrag_Component::DoorGrab(float DeltaTime)
 		NewRotation = OldRotation;
 	}
 
-	MovementComponent->SetRelativeRotation(NewRotation);
+	if (!GetOwner()->HasAuthority()) MovementComponent->SetRelativeRotation(NewRotation);
 
 	if (AHronoCharacter* Character = Cast<AHronoCharacter>(PlayerPawn))
 	{
-		if (!Character->HasAuthority())
-		{
-			Character->Server_SetDoorPanelRotation(
-				DragItem,
-				MovementComponent->GetFName(),
-				NewRotation);
-		}
-		else
-		{
-			DragItem->ApplyDoorRotationFromServer(
-				MovementComponent->GetFName(),
-				NewRotation);
-		}
+		SendPanelPose(Character, MovementComponent, false, MovementComponent->GetRelativeLocation(), NewRotation);
 	}
 }
 
@@ -585,24 +606,14 @@ void UDrag_Component::XDrag()
 	}
 
 	// Apply rotation locally for immediate feedback (prediction)
-	MovementComponent->SetRelativeRotation(NewRotation);
+	if (!GetOwner()->HasAuthority()) MovementComponent->SetRelativeRotation(NewRotation);
 
 	// Send the new rotation to the server so it updates the authoritative collision
 	// body and replicates it to every other client. The door is a level actor and
 	// cannot receive client RPCs directly, so we route through the owning character.
 	if (AHronoCharacter* Character = Cast<AHronoCharacter>(RotatingController->GetPawn()))
 	{
-		if (!Character->HasAuthority())
-		{
-			Character->Server_SetDoorPanelRotation(
-				Drag_Item,
-				MovementComponent->GetFName(),
-				NewRotation);
-		}
-		else
-		{
-			Drag_Item->ApplyDoorRotationFromServer(MovementComponent->GetFName(), NewRotation);
-		}
+		SendPanelPose(Character, MovementComponent, false, MovementComponent->GetRelativeLocation(), NewRotation);
 	}
 }
 
@@ -660,23 +671,11 @@ void UDrag_Component::ShelfDrag()
 
 	// Immediate local prediction keeps the drawer responsive for the player who
 	// is holding it. The character RPC below updates the authoritative component.
-	MovementComponent->SetRelativeLocation(NewRelativeLocation);
+	if (!GetOwner()->HasAuthority()) MovementComponent->SetRelativeLocation(NewRelativeLocation);
 
 	if (AHronoCharacter* Character = Cast<AHronoCharacter>(PlayerPawn))
 	{
-		if (!Character->HasAuthority())
-		{
-			Character->Server_SetShelfPanelPosition(
-				Shelf,
-				MovementComponent->GetFName(),
-				NewRelativeLocation);
-		}
-		else
-		{
-			Shelf->ApplyShelfPositionFromServer(
-				MovementComponent->GetFName(),
-				NewRelativeLocation);
-		}
+		SendPanelPose(Character, MovementComponent, true, NewRelativeLocation, MovementComponent->GetRelativeRotation());
 	}
 }
 
@@ -739,20 +738,11 @@ void UDrag_Component::CupBoardDrag()
 		NewRelativeLocation = OldRelativeLocation;
 	}
 
-	MovementComponent->SetRelativeLocation(NewRelativeLocation);
-	CupBoard->ShelfPosition = NewRelativeLocation;
+	if (!GetOwner()->HasAuthority()) MovementComponent->SetRelativeLocation(NewRelativeLocation);
+	if (!GetOwner()->HasAuthority()) CupBoard->ShelfPosition = NewRelativeLocation;
 
 	if (AHronoCharacter* Character = Cast<AHronoCharacter>(PlayerPawn))
 	{
-		if (!Character->HasAuthority())
-		{
-			Character->Server_SetShelfPosition(CupBoard, NewRelativeLocation);
-		}
-		else
-		{
-			CupBoard->ApplyShelfPositionFromServer(
-				MovementComponent->GetFName(),
-				NewRelativeLocation);
-		}
+		SendPanelPose(Character, MovementComponent, true, NewRelativeLocation, MovementComponent->GetRelativeRotation());
 	}
 }

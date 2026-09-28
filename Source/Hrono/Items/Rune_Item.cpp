@@ -1,4 +1,5 @@
 #include "Items/Rune_Item.h"
+#include "Items/RunePentagram.h"
 
 #include "HronoCharacter.h"
 #include "Components/PrimitiveComponent.h"
@@ -135,7 +136,12 @@ void ARune_Item::ServerPlaceRuneInPentagram_Implementation(
 	FTransform SlotWorldTransform,
 	int32 RequiredRuneCount)
 {
-	PlaceRuneOnAuthority(Pentagram, SlotId, RequiredRuneId, SlotWorldTransform, RequiredRuneCount);
+	// Legacy wire signature is retained for Blueprint compatibility. Client rules,
+	// transform and completion count are deliberately ignored.
+	if (ARunePentagram* ServerPentagram = Cast<ARunePentagram>(Pentagram); IsValid(ServerPentagram) && !SlotId.IsNone())
+	{
+		ServerPentagram->RequestRunePlacement(OwningCharacter, this, SlotId);
+	}
 }
 
 void ARune_Item::PlaceRuneOnAuthority(
@@ -165,14 +171,17 @@ void ARune_Item::PlaceRuneOnAuthority(
 		return;
 	}
 
+	// Lock first: a Blueprint held-state callback must not pick up or drop this
+	// rune while it is transitioning out of the hand.
+	bPlacedInPentagram = true;
 	if (OwningCharacter && !OwningCharacter->ReleaseHeldItemForPlacement(this))
 	{
+		bPlacedInPentagram = false;
 		UE_LOG(LogTemp, Warning, TEXT("[RuneRitual] REJECTED %s could not leave the player's hand"), *GetName());
 		MulticastPlacementResult(false, SlotId, RequiredRuneId);
 		return;
 	}
 
-	bPlacedInPentagram = true;
 	PlacedSlotId = SlotId;
 	PlacedPentagram = Pentagram;
 
@@ -258,35 +267,7 @@ void ARune_Item::CheckForCompletedRitual(int32 RequiredRuneCount)
 
 void ARune_Item::ApplyPlacedState()
 {
-	if (!bPlacedInPentagram)
-	{
-		return;
-	}
-
-	bIsPickedUp = false;
-	SetActorHiddenInGame(false);
-	SetActorEnableCollision(false);
-
-	TInlineComponentArray<UPrimitiveComponent*> PrimitiveComponents(this);
-	for (UPrimitiveComponent* Primitive : PrimitiveComponents)
-	{
-		if (IsValid(Primitive))
-		{
-			Primitive->SetSimulatePhysics(false);
-			Primitive->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		}
-	}
-
-	// Physics detaches Base_Item's mesh from its scene root. Restore the authored
-	// hierarchy so the replicated actor/slot transform also moves the rune mesh.
-	if (IsValid(ItemMesh) && IsValid(GetRootComponent()) && ItemMesh != GetRootComponent())
-	{
-		if (ItemMesh->GetAttachParent() != GetRootComponent())
-		{
-			ItemMesh->AttachToComponent(GetRootComponent(), FAttachmentTransformRules::KeepRelativeTransform);
-		}
-		ItemMesh->SetRelativeTransform(ItemMeshRelativeTransform);
-	}
+	ApplyWorldItemState();
 }
 
 void ARune_Item::MulticastPlacementResult_Implementation(bool bAccepted, FName SlotId, FName RequiredRuneId)

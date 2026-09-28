@@ -8,6 +8,7 @@ class ARoom;
 class UClockSecondHandSoundComponent;
 class USceneComponent;
 class USoundBase;
+class UStaticMeshComponent;
 
 /** Editable time-of-day used as the clock's initial and reset value. */
 USTRUCT(BlueprintType)
@@ -82,6 +83,7 @@ public:
 
 	virtual void OnConstruction(const FTransform& Transform) override;
 	virtual void Tick(float DeltaSeconds) override;
+	virtual void UpdateVisibilityForLocalPlayer(EItemTimeline ViewerTimeline) override;
 	virtual void Use_Implementation(AActor* Character) override;
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
@@ -264,6 +266,9 @@ private:
 	void UpdateSecondHandSoundAttachment();
 	bool IsAudibleForLocalPlayer() const;
 	void SetCurrentTimeSeconds(float NewTimeSeconds);
+	void EnsurePastMirrorVisuals();
+	void SyncPastMirrorVisuals();
+	void SetPastMirrorVisualsVisible(bool bVisible);
 
 	UPROPERTY(ReplicatedUsing = OnRep_ClockState)
 	float ClockTimeAtAnchor = 0.0f;
@@ -280,6 +285,23 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<USceneComponent> SecondHandComponent;
 
+	/** Render-only copies. Never scale the authoritative clock or its collision. */
+	UPROPERTY(Transient)
+	TObjectPtr<USceneComponent> PastMirrorVisualRoot;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UStaticMeshComponent>> PastMirrorMeshes;
+
+	TArray<TWeakObjectPtr<UStaticMeshComponent>> PastMirrorSources;
+	bool bPastMirrorVisualActive = false;
+	bool bPastMirrorNeedsSync = false;
+
 	bool bClockAnchorInitialized = false;
 	int32 LastAudibleSecond = INDEX_NONE;
+	int32 LastVisualSecond = INDEX_NONE;
+	FRotator LastVisualOffset = FRotator::ZeroRotator;
+	TWeakObjectPtr<USceneComponent> LastHourHand;
+	TWeakObjectPtr<USceneComponent> LastMinuteHand;
+	TWeakObjectPtr<USceneComponent> LastSecondHand;
+	bool bLastVisualWasSmooth = false;
 };

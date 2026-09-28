@@ -89,8 +89,9 @@ void UHronoLoadingSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	{
 		TravelFailureHandle = GEngine->OnTravelFailure().AddWeakLambda(
 			this,
-			[this](UWorld*, ETravelFailure::Type FailureType, const FString& Error)
+			[this](UWorld* World, ETravelFailure::Type FailureType, const FString& Error)
 			{
+				if (World && World->GetGameInstance() != GetGameInstance()) return;
 				if (!bArmNextMapWarmup && !bWorldWarmupActive && !IsPreloading())
 				{
 					return;
@@ -102,8 +103,9 @@ void UHronoLoadingSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 			});
 		NetworkFailureHandle = GEngine->OnNetworkFailure().AddWeakLambda(
 			this,
-			[this](UWorld*, UNetDriver*, ENetworkFailure::Type FailureType, const FString& Error)
+			[this](UWorld* World, UNetDriver*, ENetworkFailure::Type FailureType, const FString& Error)
 			{
+				if (World && World->GetGameInstance() != GetGameInstance()) return;
 				if (!bArmNextMapWarmup && !bWorldWarmupActive && !IsPreloading())
 				{
 					return;

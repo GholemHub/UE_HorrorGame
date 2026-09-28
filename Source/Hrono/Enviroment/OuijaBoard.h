@@ -8,6 +8,8 @@
 class USceneComponent;
 class UStaticMeshComponent;
 class UBoxComponent;
+class UTextRenderComponent;
+enum class EItemTimeline : uint8;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
 	FOnNewLetterTyped,
@@ -45,6 +47,8 @@ public:
 	virtual void Tick(float DeltaSeconds) override;
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	virtual void Interact_Implementation(AActor* Interactor) override;
+	/** Local presentation only; keeps the server's board and letter collision unchanged. */
+	void RefreshPastReadability(EItemTimeline ViewerTimeline);
 
 	/** Moves the arrow from an already-known world-space point. */
 	UFUNCTION(BlueprintCallable, Category = "Ouija")
@@ -303,6 +307,10 @@ protected:
 	void MulticastAutomaticTypingFinished(const FString& CompletedWord);
 
 private:
+	virtual void BeginPlay() override;
+	void EnsurePastMirrorVisuals();
+	void SyncPastMirrorVisuals();
+	void MoveArrowToLocalPoint(FVector LocalPoint);
 	void ApplyArrowTarget(bool bSnap);
 	void AnnounceDetectedLetter();
 	void DrawArrowCenterPoint() const;
@@ -322,4 +330,22 @@ private:
 	bool bCurrentLetterAccepted = false;
 	bool bAutomaticTypingShouldPressEnter = true;
 	bool bAutomaticTypingIsSubmitting = false;
+
+	UPROPERTY(Transient)
+	TObjectPtr<USceneComponent> PastMirrorVisualRoot;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UStaticMeshComponent> PastMirrorBoardMesh;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UStaticMeshComponent> PastMirrorArrowMesh;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UTextRenderComponent> PastMirrorText;
+
+	TWeakObjectPtr<UTextRenderComponent> SourceVisualText;
+	bool bPastMirrorVisualActive = false;
+	bool bSavedBoardVisibility = true;
+	bool bSavedArrowVisibility = true;
+	bool bSavedTextVisibility = true;
 };

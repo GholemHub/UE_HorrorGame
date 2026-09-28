@@ -2,6 +2,8 @@
 
 
 #include "HronoPlayerController.h"
+#include "Audio/HronoAudioSettingsSubsystem.h"
+#include "Engine/GameInstance.h"
 #include "EnhancedInputSubsystems.h"
 #include "Engine/LocalPlayer.h"
 #include "InputCoreTypes.h"
@@ -30,13 +32,15 @@ AHronoPlayerController::AHronoPlayerController()
 void AHronoPlayerController::BeginPlay()
 {
 	Super::BeginPlay();
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		if (UHronoAudioSettingsSubsystem* Audio = GameInstance->GetSubsystem<UHronoAudioSettingsSubsystem>())
+			Audio->ApplyToWorld(GetWorld());
+	}
 	if (IsLocalPlayerController())
 	{
-		// Blueprint RegisterAllLocalTalkers implicitly enables voice. Restore the
-		// radio switch after all pawn/Blueprint BeginPlay initialization completes.
-		GetWorldTimerManager().SetTimerForNextTick(this, &ThisClass::ApplyRadioTransmissionState);
-		GetWorldTimerManager().SetTimer(RadioBootstrapTimer, this,
-			&ThisClass::ApplyRadioTransmissionState, 0.5f, false);
+		GetWorldTimerManager().SetTimer(RadioReadinessTimer, this,
+			&ThisClass::ApplyRadioTransmissionState, 0.5f, true);
 	}
 
 	
@@ -71,6 +75,7 @@ void AHronoPlayerController::SetupInputComponent()
 		// controller is instantiated for both the listen server and remote clients,
 		// so each local player transmits through the same online voice path.
 		InputComponent->BindKey(EKeys::V, IE_Pressed, this, &ThisClass::ToggleRadioTransmission);
+		InputComponent->BindKey(EKeys::B, IE_Pressed, this, &ThisClass::ToggleRadioTransmission);
 
 		// Add Input Mapping Context
 		if (UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(GetLocalPlayer()))
@@ -95,11 +100,13 @@ void AHronoPlayerController::SetupInputComponent()
 
 void AHronoPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
-	GetWorldTimerManager().ClearTimer(RadioBootstrapTimer);
+	GetWorldTimerManager().ClearTimer(RadioReadinessTimer);
 	if (IsLocalPlayerController())
 	{
-		StopTalking();
 		bRadioTransmissionEnabled = false;
+		bRadioTransmissionActive = false;
+		ApplyRadioCapture(false);
+		ResetRadioRegistration();
 		if (AHronoCharacter* HronoCharacter = Cast<AHronoCharacter>(GetPawn()))
 		{
 			HronoCharacter->MicroStatus = false;
@@ -111,61 +118,61 @@ void AHronoPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 
 void AHronoPlayerController::ToggleRadioTransmission()
 {
-	if (!IsLocalPlayerController())
-	{
-		return;
-	}
+	SetRadioTransmissionEnabled(!bRadioTransmissionEnabled);
+}
 
-	AHronoCharacter* HronoCharacter = Cast<AHronoCharacter>(GetPawn());
-	if (!HronoCharacter)
-	{
-		UE_LOG(LogHrono, Warning, TEXT("Cannot toggle radio microphone without an Hrono character."));
-		return;
-	}
-
-	if (!bRadioTransmissionEnabled && !PrepareRadioVoice())
-	{
-		// A failed registration can still set the OSS networked-voice flag.
-		StopTalking();
-		HronoCharacter->MicroStatus = false;
-		if (GEngine)
-		{
-			GEngine->AddOnScreenDebugMessage(INDEX_NONE, 8.0f, FColor::Red,
-				TEXT("Microphone unavailable. Check the game session, Steam and Windows microphone permissions."));
-		}
-		HronoVoiceStatus();
-		return;
-	}
-
-	bRadioTransmissionEnabled = !bRadioTransmissionEnabled;
+void AHronoPlayerController::SetRadioTransmissionEnabled(bool bEnabled)
+{
+	if (!IsLocalPlayerController()) return;
+	bRadioTransmissionEnabled = bEnabled && IsValid(Cast<AHronoCharacter>(GetPawn()));
 	ApplyRadioTransmissionState();
-	UE_LOG(LogHrono, Log, TEXT("Radio microphone %s for %s."),
-		bRadioTransmissionEnabled ? TEXT("enabled") : TEXT("disabled"), *GetName());
+}
+
+void AHronoPlayerController::ToggleSpeaking(bool bSpeaking)
+{
+	SetRadioTransmissionEnabled(bSpeaking);
+}
+
+void AHronoPlayerController::ApplyRadioCapture(bool bEnabled)
+{
+	// Bypass our override only here, after validating the canonical request.
+	Super::ToggleSpeaking(bEnabled);
+}
+
+void AHronoPlayerController::NotifyVoiceReceiverReady(APawn* ReadyPawn)
+{
+	if (!IsLocalPlayerController() || !IsValid(ReadyPawn) || ReadyPawn != GetPawn()) return;
+	bVoiceReceiverReady = true;
+	ApplyRadioTransmissionState();
+}
+
+void AHronoPlayerController::ResetRadioRegistration()
+{
+	if (const IOnlineVoicePtr Voice = RegisteredRadioVoice.Pin(); Voice.IsValid() && RegisteredRadioUser >= 0)
+		Voice->StopNetworkedVoice(static_cast<uint8>(RegisteredRadioUser));
+	RegisteredRadioVoice.Reset();
+	RegisteredRadioUser = INDEX_NONE;
 }
 
 void AHronoPlayerController::SetPawn(APawn* InPawn)
 {
+	if (GetPawn() == InPawn) return;
 	if (AHronoCharacter* PreviousCharacter = Cast<AHronoCharacter>(GetPawn()))
 	{
 		PreviousCharacter->MicroStatus = false;
 	}
+	bVoiceReceiverReady = false;
 	Super::SetPawn(InPawn);
+	if (const AHronoCharacter* HronoPawn = Cast<AHronoCharacter>(InPawn))
+		bVoiceReceiverReady = HronoPawn->HasConfiguredVoiceReceiver();
 	if (IsLocalPlayerController())
 	{
 		if (!InPawn)
 		{
-			GetWorldTimerManager().ClearTimer(RadioBootstrapTimer);
 			bRadioTransmissionEnabled = false;
-			StopTalking();
+			ResetRadioRegistration();
 		}
-		else
-		{
-			GetWorldTimerManager().SetTimerForNextTick(this, &ThisClass::ApplyRadioTransmissionState);
-			// Client Blueprint InitVoiceChat is delayed after possession. Reapply
-			// the current switch once it settles, preserving any early V press.
-			GetWorldTimerManager().SetTimer(RadioBootstrapTimer, this,
-				&ThisClass::ApplyRadioTransmissionState, 0.5f, false);
-		}
+		ApplyRadioTransmissionState();
 	}
 }
 
@@ -175,20 +182,20 @@ void AHronoPlayerController::ApplyRadioTransmissionState()
 	{
 		return;
 	}
-	if (AHronoCharacter* HronoCharacter = Cast<AHronoCharacter>(GetPawn()))
+	AHronoCharacter* HronoCharacter = Cast<AHronoCharacter>(GetPawn());
+	// A replica's Controller pointer can arrive after its receiver callback.
+	if (IsValid(HronoCharacter) && HronoCharacter->HasConfiguredVoiceReceiver())
+		bVoiceReceiverReady = true;
+	const bool bReady = IsValid(HronoCharacter) && bVoiceReceiverReady && PrepareRadioVoice();
+	const bool bShouldTransmit = bRadioTransmissionEnabled && bReady;
+	if (bRadioTransmissionActive != bShouldTransmit)
 	{
-		HronoCharacter->MicroStatus = bRadioTransmissionEnabled;
+		bRadioTransmissionActive = bShouldTransmit;
+		ApplyRadioCapture(bShouldTransmit);
+		UE_LOG(LogHrono, Log, TEXT("Radio microphone %s for %s."),
+			bShouldTransmit ? TEXT("enabled") : TEXT("disabled"), *GetName());
 	}
-	if (bRadioTransmissionEnabled)
-	{
-		// RegisterLocalTalker starts processing before assigning the capture owner
-		// in UE 5.8. Start again AFTER registration so capture actually starts.
-		StartTalking();
-	}
-	else
-	{
-		StopTalking();
-	}
+	if (HronoCharacter) HronoCharacter->MicroStatus = bRadioTransmissionActive;
 }
 
 bool AHronoPlayerController::PrepareRadioVoice()
@@ -197,7 +204,7 @@ bool AHronoPlayerController::PrepareRadioVoice()
 	IOnlineSubsystem* Subsystem = Online::GetSubsystem(GetWorld());
 	if (!LocalPlayer || !Subsystem)
 	{
-		UE_LOG(LogHrono, Warning, TEXT("Radio voice: no local player or online subsystem."));
+		ResetRadioRegistration();
 		return false;
 	}
 
@@ -209,22 +216,31 @@ bool AHronoPlayerController::PrepareRadioVoice()
 		|| LocalUserNum < 0 || LocalUserNum > MAX_uint8
 		|| !Identity->GetUniquePlayerId(LocalUserNum).IsValid())
 	{
-		UE_LOG(LogHrono, Warning, TEXT("Radio voice: session or local online identity is not ready (%s, user %d)."),
-			*Subsystem->GetSubsystemName().ToString(), LocalUserNum);
+		ResetRadioRegistration();
 		return false;
 	}
 
 	const IOnlineVoicePtr Voice = Subsystem->GetVoiceInterface();
-	if (!Voice.IsValid() || !Voice->RegisterLocalTalker(LocalUserNum))
+	if (!Voice.IsValid())
 	{
-		UE_LOG(LogHrono, Warning, TEXT("Radio voice: microphone registration failed (%s, user %d). Check the default Windows capture device and microphone access for desktop apps."),
-			*Subsystem->GetSubsystemName().ToString(), LocalUserNum);
+		ResetRadioRegistration();
 		return false;
 	}
-
-	// RegisterLocalTalker implicitly enables transmission. Restore the off state
-	// until ToggleRadioTransmission explicitly starts the registered capture owner.
-	Voice->StopNetworkedVoice(static_cast<uint8>(LocalUserNum));
+	if (RegisteredRadioVoice.Pin() != Voice || RegisteredRadioUser != LocalUserNum)
+	{
+		ResetRadioRegistration();
+		const bool bRegistered = Voice->RegisterLocalTalker(LocalUserNum);
+		// Even a failed registration can enable the networked-voice flag.
+		Voice->StopNetworkedVoice(static_cast<uint8>(LocalUserNum));
+		if (!bRegistered) return false;
+		RegisteredRadioVoice = Voice;
+		RegisteredRadioUser = LocalUserNum;
+		// A newly registered backend needs a fresh Start, even if requested ON
+		// survived a subsystem/session replacement.
+		bRadioTransmissionActive = false;
+		UE_LOG(LogHrono, Log, TEXT("Radio voice ready: subsystem=%s localUser=%d netMode=%d."),
+			*Subsystem->GetSubsystemName().ToString(), LocalUserNum, static_cast<int32>(GetNetMode()));
+	}
 
 	// A client's PlayerStates may arrive after its session's initial voice setup.
 	// Ensure receiving works for both the host and joined clients, keeping mute settings.
@@ -241,9 +257,7 @@ bool AHronoPlayerController::PrepareRadioVoice()
 		}
 	}
 
-	UE_LOG(LogHrono, Log, TEXT("Radio voice ready: subsystem=%s localUser=%d netMode=%d."),
-		*Subsystem->GetSubsystemName().ToString(), LocalUserNum, static_cast<int32>(GetNetMode()));
-	return true;
+	return Voice->IsHeadsetPresent(LocalUserNum);
 }
 
 void AHronoPlayerController::HronoVoiceStatus()
@@ -251,11 +265,12 @@ void AHronoPlayerController::HronoVoiceStatus()
 	IOnlineSubsystem* Subsystem = Online::GetSubsystem(GetWorld());
 	const IOnlineVoicePtr Voice = Subsystem ? Subsystem->GetVoiceInterface() : nullptr;
 	const IOnlineSessionPtr Sessions = Subsystem ? Subsystem->GetSessionInterface() : nullptr;
-	UE_LOG(LogHrono, Warning, TEXT("Radio voice status: subsystem=%s sessions=%d local=%d user=%d requested=%d\n%s"),
+	UE_LOG(LogHrono, Warning, TEXT("Radio voice status: subsystem=%s sessions=%d local=%d user=%d requested=%d active=%d receiverReady=%d\n%s"),
 		Subsystem ? *Subsystem->GetSubsystemName().ToString() : TEXT("None"),
 		Sessions.IsValid() ? Sessions->GetNumSessions() : 0,
 		IsLocalPlayerController(), GetLocalPlayer() ? GetLocalPlayer()->GetControllerId() : INDEX_NONE,
-		bRadioTransmissionEnabled, Voice.IsValid() ? *Voice->GetVoiceDebugState() : TEXT("Voice interface unavailable"));
+		bRadioTransmissionEnabled, bRadioTransmissionActive, bVoiceReceiverReady,
+		Voice.IsValid() ? *Voice->GetVoiceDebugState() : TEXT("Voice interface unavailable"));
 }
 
 bool AHronoPlayerController::ShouldUseTouchControls() const

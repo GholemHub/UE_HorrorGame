@@ -253,6 +253,28 @@ bool ATimelineTransferItem::IsSourceOnCorrectSide(const AHronoCharacter& Charact
 	return bSourceOnPositiveX ? Side > 0.0f : Side < 0.0f;
 }
 
+bool ATimelineTransferItem::IsCharacterNearMirror(const AHronoCharacter& Character) const
+{
+	if (!IsValid(TransferBox) || !FMath::IsFinite(MaxCharacterDistanceToMirror)
+		|| MaxCharacterDistanceToMirror <= 0.0f)
+	{
+		return false;
+	}
+
+	// Measure from the authoritative character position to the actual bounded
+	// mirror plane. The held item's bounds alone can overlap the transfer volume
+	// while its owner is still too far away, especially after a mesh change.
+	const FVector LocalPosition = TransferBox->GetComponentQuat().UnrotateVector(
+		Character.GetActorLocation() - TransferBox->GetComponentLocation());
+	const FVector Extent = TransferBox->GetScaledBoxExtent();
+	const FVector ClosestMirrorPoint(
+		0.0f,
+		FMath::Clamp(LocalPosition.Y, -Extent.Y, Extent.Y),
+		FMath::Clamp(LocalPosition.Z, -Extent.Z, Extent.Z));
+	return FVector::DistSquared(LocalPosition, ClosestMirrorPoint)
+		<= FMath::Square(MaxCharacterDistanceToMirror);
+}
+
 bool ATimelineTransferItem::IsItemInsideTransferVolume(const ABase_Item& Item) const
 {
 	if (!IsValid(TransferBox))
@@ -300,6 +322,7 @@ bool ATimelineTransferItem::IsValidPreviewSource(
 		&& Character.GetTimeline() == TransferTimeline
 		&& (Item.ItemTimeline == EItemTimeline::Both || Item.ItemTimeline == TransferTimeline)
 		&& IsSourceOnCorrectSide(Character)
+		&& IsCharacterNearMirror(Character)
 		&& IsItemInsideTransferVolume(Item);
 }
 
@@ -399,6 +422,7 @@ void ATimelineTransferItem::UpdateActivePreview()
 		|| SourceCharacter->GetTimeline() != TransferTimeline
 		|| ActivePreview->TargetCharacter->GetTimeline() != LinkedTransfer->TransferTimeline
 		|| !IsSourceOnCorrectSide(*SourceCharacter)
+		|| !IsCharacterNearMirror(*SourceCharacter)
 		|| !IsItemInsideTransferVolume(*ActiveItem))
 	{
 		CancelMirrorTransfer(TEXT("source item left or became invalid"));
@@ -457,8 +481,10 @@ bool ATimelineTransferItem::CompleteMirrorTransfer(
 		|| !ActiveItem->bCanTransferThroughMirror
 		|| SourceCharacter->GetTimeline() != TransferTimeline
 		|| !IsSourceOnCorrectSide(*SourceCharacter)
+		|| !IsCharacterNearMirror(*SourceCharacter)
 		|| !IsItemInsideTransferVolume(*ActiveItem)
 		|| TargetCharacter->GetTimeline() != LinkedTransfer->TransferTimeline
+		|| !LinkedTransfer->IsCharacterNearMirror(*TargetCharacter)
 		|| RequestingPreview->GetOwner() != TargetCharacter
 		|| IsValid(TargetCharacter->GetHeldItem())
 		|| FVector::DistSquared(TargetCharacter->GetActorLocation(), RequestingPreview->GetActorLocation())
