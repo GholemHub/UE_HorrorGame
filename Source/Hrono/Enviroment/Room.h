@@ -11,6 +11,7 @@ class ADrag_Item;
 class AHotDot;
 class ARoom;
 class UBoxComponent;
+class UGravityAnomalyComponent;
 class UPrimitiveComponent;
 class USceneComponent;
 
@@ -128,6 +129,10 @@ public:
 	/** Volume used to detect the dropped cursed item. Resize it to cover the room interior. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Room|Components")
 	TObjectPtr<UBoxComponent> RoomVolume;
+
+	/** Optional gravity evidence, driven by this room's cursed state and RoomVolume. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Room|Components")
+	TObjectPtr<UGravityAnomalyComponent> GravityAnomaly;
 
 	/**
 	 * Placed painting actors. Evidence selection reads ABase_Item::ItemTimeline;

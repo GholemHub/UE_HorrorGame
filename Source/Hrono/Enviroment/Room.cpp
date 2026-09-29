@@ -1,6 +1,8 @@
 #include "Enviroment/Room.h"
+#include "HronoCollisionChannels.h"
 
 #include "Components/BoxComponent.h"
+#include "Components/GravityAnomalyComponent.h"
 #include "Components/SceneComponent.h"
 #include "Engine/World.h"
 #include "Items/Base_Item.h"
@@ -58,13 +60,18 @@ ARoom::ARoom()
 	RoomVolume->SetupAttachment(SceneRoot);
 	RoomVolume->SetBoxExtent(FVector(300.0f, 300.0f, 150.0f));
 	RoomVolume->SetCollisionProfileName(TEXT("Trigger"));
+	RoomVolume->SetCollisionResponseToChannel(COLLISION_CHANNEL_ITEM, ECR_Overlap);
 	RoomVolume->SetGenerateOverlapEvents(true);
+	GravityAnomaly = CreateDefaultSubobject<UGravityAnomalyComponent>(TEXT("GravityAnomaly"));
 }
 
 void ARoom::BeginPlay()
 {
 	Super::BeginPlay();
 
+	// Older BP_Rooms component templates may serialize the Trigger profile before
+	// the Item object channel existed. Keep room membership authoritative for pickups.
+	RoomVolume->SetCollisionResponseToChannel(COLLISION_CHANNEL_ITEM, ECR_Overlap);
 	RoomVolume->OnComponentBeginOverlap.AddUniqueDynamic(this, &ARoom::HandleRoomBeginOverlap);
 	RoomVolume->OnComponentEndOverlap.AddUniqueDynamic(this, &ARoom::HandleRoomEndOverlap);
 	BindDoorEvents();

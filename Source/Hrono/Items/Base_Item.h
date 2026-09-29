@@ -17,6 +17,10 @@ class UMeshComponent;
 class USceneCaptureComponent2D;
 class USoundBase;
 class UHeldItemInertiaComponent;
+class ABase_Item;
+
+/** Server-only notification after a successful physical hand drop. */
+DECLARE_MULTICAST_DELEGATE_OneParam(FBaseItemServerDroppedSignature, ABase_Item*);
 
 /** Network-visible lifecycle of an item offered through a bound mirror. */
 UENUM(BlueprintType)
@@ -35,6 +39,7 @@ class HRONO_API ABase_Item : public AActor
 	
 public:	
 	ABase_Item();
+	static FBaseItemServerDroppedSignature OnServerDropped;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	EItemType ItemType = EItemType::None;
@@ -177,6 +182,8 @@ public:
 	virtual bool TryPickUp(AHronoCharacter* Character);
 	/** Whether this item can ever enter a character's hand. World-only items override this. */
 	virtual bool CanBePickedUp() const { return true; }
+	/** Server-side eligibility for temporary room physics; pickup ownership remains authoritative. */
+	bool CanEnterGravityAnomaly() const;
 
 	bool AttachToCharacter();
 
