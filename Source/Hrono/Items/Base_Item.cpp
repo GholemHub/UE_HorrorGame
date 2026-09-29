@@ -2,6 +2,9 @@
 
 
 #include "Items/Base_Item.h"
+#include "Items/Clock.h"
+#include "Items/Drag_Item.h"
+#include "Items/Rune_Item.h"
 #include "Audio/HronoAudioPolicy.h"
 #include "Net/UnrealNetwork.h"
 #include "GameplayTagsManager.h"
@@ -27,6 +30,8 @@ TAutoConsoleVariable<int32> CVarHeldTransformLogging(
 	TEXT("hrono.Debug.HeldTransform"), 0,
 	TEXT("Log detailed held-item transforms during pickup; 0 by default."));
 }
+
+FBaseItemServerDroppedSignature ABase_Item::OnServerDropped;
 
 // Sets default values
 ABase_Item::ABase_Item()
@@ -353,6 +358,16 @@ bool ABase_Item::TryPickUp(AHronoCharacter* Character)
 	return bIsPickedUp && OwningCharacter == Character;
 }
 
+bool ABase_Item::CanEnterGravityAnomaly() const
+{
+	return HasAuthority() && CanBePickedUp() && !IsActorBeingDestroyed()
+		&& !IsA<ADrag_Item>() && !IsA<AClock>() && !IsA<ARune_Item>()
+		&& !IsPlacementLocked() && !IsValid(OwningCharacter) && !bIsPickedUp
+		&& !bFloatingPickupEnabled && MirrorTransferState == EMirrorItemTransferState::None
+		&& IsValid(ItemMesh) && ItemMesh != GetRootComponent()
+		&& ItemMesh->GetStaticMesh() != nullptr;
+}
+
 bool ABase_Item::AttachToCharacter()
 {
 	if (IsPlacementLocked())
@@ -628,6 +643,7 @@ void ABase_Item::Drop()
 	// Blueprint callbacks may reactivate a capture. The native dropped state wins.
 	SetHeldSceneCapturesEnabled(false);
 	ForceNetUpdate();
+	OnServerDropped.Broadcast(this);
 }
 
 bool ABase_Item::ReleaseForPlacement(AHronoCharacter* Character)
