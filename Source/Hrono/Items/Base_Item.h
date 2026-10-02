@@ -204,6 +204,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Item|Performance")
 	bool bOnlyRunSceneCaptureWhileLocallyHeld = true;
 
+	/** Held by the partner to suppress a Mannequin Demon. Opt in only actual monocles. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Item|Monocle")
+	bool bCanRepelMannequin = false;
+
 	/** Optional mesh material slot that displays this item's capture while locally held. -1 disables the swap. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Item|Performance", meta = (ClampMin = "-1"))
 	int32 SceneCaptureDisplayMaterialIndex = INDEX_NONE;

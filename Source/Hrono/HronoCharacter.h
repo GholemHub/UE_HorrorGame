@@ -313,6 +313,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Timeline|Death")
 	EItemTimeline GetDeathOriginalTimeline() const { return DeathOriginalTimeline; }
 
+	UFUNCTION(BlueprintPure, Category = "Timeline|Death")
+	bool IsDeathTimelineTransitionPending() const { return bDeathTimelineTransitionPending; }
+
 
 	/** Immediately refreshes local visibility for every Base_Item timeline actor. */
 	UFUNCTION(BlueprintCallable, Category = "Timeline")
@@ -649,6 +652,7 @@ protected:
 
 	/** Set up input action bindings */
 	virtual void SetupPlayerInputComponent(UInputComponent* InputComponent) override;
+	void ToggleMannequinDebug();
 
 	virtual void BeginPlay() override;
 	virtual void PawnClientRestart() override;

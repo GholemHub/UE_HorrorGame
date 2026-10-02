@@ -1,6 +1,7 @@
 ﻿// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "HronoCharacter.h"
+#include "AI/MannequinDemon.h"
 #include "Audio/HronoAudioPolicy.h"
 #include "PhysicalMaterials/PhysicalMaterial.h"
 #include "Sound/SoundAttenuation.h"
@@ -875,6 +876,14 @@ void AHronoCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 	FInputKeyBinding& TutorialBinding = PlayerInputComponent->BindKey(
 		EKeys::Tab, IE_Pressed, this, &AHronoCharacter::ToggleTutorialMenu);
 	TutorialBinding.bExecuteWhenPaused = true;
+	PlayerInputComponent->BindKey(EKeys::L, IE_Pressed, this, &AHronoCharacter::ToggleMannequinDebug);
+}
+
+void AHronoCharacter::ToggleMannequinDebug()
+{
+	if (!IsLocallyControlled()) return;
+	for (TActorIterator<AMannequinDemon> It(GetWorld()); It; ++It)
+		It->ToggleLocalDebugOverlay();
 }
 
 void AHronoCharacter::DoStandUp()
