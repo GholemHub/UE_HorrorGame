@@ -2,11 +2,13 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "HronoSharedTools.h"
 #include "GravityAnomalyComponent.generated.h"
 
 class ABase_Item;
 class ARoom;
 class UPrimitiveComponent;
+class USoundBase;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FGravityAnomalyActivitySignature, bool, bActive);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(
@@ -45,7 +47,7 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "Gravity Anomaly|Events")
 	FGravityAnomalyActivitySignature OnActivityChanged;
 
-	/** One-shot hook. bReleased=false at start; true when the attempt ends, with or without an impulse. */
+	/** One-shot hook. bReleased=false at start; true when the altered fall ends. */
 	UPROPERTY(BlueprintAssignable, Category = "Gravity Anomaly|Events")
 	FGravityAnomalyPropSignature OnPropPhaseChanged;
 
@@ -62,7 +64,7 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Gravity Anomaly|Settings", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float EventChance = 0.85f;
 
-	/** Start the fall/freeze/sideways impulse sequence when a tagged item is dropped inside the cursed room. */
+	/** Apply altered gravity immediately when a tagged item is dropped inside the cursed room. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Gravity Anomaly|Settings")
 	bool bReactToItemDrop = true;
 
@@ -72,33 +74,36 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Gravity Anomaly|Settings", meta = (ClampMin = "1"))
 	int32 MaxAffectedObjects = 3;
 
-	/** Earliest time after the drop at which a still-falling item can freeze. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Gravity Anomaly|Movement", meta = (ClampMin = "0.0"))
-	float FallBeforePause = 0.2f;
-
-	/** Latest possible freeze time. Each attempt chooses once in this range. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Gravity Anomaly|Movement", meta = (ClampMin = "0.0"))
-	float MaxFallBeforePause = 1.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Gravity Anomaly|Movement", meta = (ClampMin = "0.0"))
-	float PauseDuration = 0.1f;
-
-	/** Sideways velocity change in cm/s when gravity resumes; mass independent. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Gravity Anomaly|Movement", meta = (ClampMin = "0.0"))
-	float SideImpulseSpeed = 180.0f;
-
-	/** Extra downward velocity change in cm/s to make the renewed fall readable. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Gravity Anomaly|Movement", meta = (ClampMin = "0.0"))
-	float DownwardImpulseSpeed = 60.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Gravity Anomaly|Strong Event", meta = (ClampMin = "1.0"))
-	float StrongImpulseMultiplier = 1.5f;
+	/** Stable acceleration for one fall, sampled from one of these two non-normal bands. m/s². */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Gravity Anomaly|Movement", meta = (ClampMin = "8.5", ClampMax = "10.5", Units = "m/s^2"))
+	float MinSlowGravity = 8.5f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Gravity Anomaly|Movement", meta = (ClampMin = "8.5", ClampMax = "10.5", Units = "m/s^2"))
+	float MaxSlowGravity = 8.5f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Gravity Anomaly|Movement", meta = (ClampMin = "8.5", ClampMax = "10.5", Units = "m/s^2"))
+	float MinFastGravity = 10.5f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Gravity Anomaly|Movement", meta = (ClampMin = "8.5", ClampMax = "10.5", Units = "m/s^2"))
+	float MaxFastGravity = 10.5f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Gravity Anomaly|Movement", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float SlowEventChance = 0.5f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Gravity Anomaly|Strong Event", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float StrongEventChance = 0.05f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Gravity Anomaly|Strong Event", meta = (ClampMin = "3", ClampMax = "6"))
 	int32 StrongEventObjectCount = 4;
+
+	/** Rare slow fall may become 10.5 m/s² after a player has seen it and looks away. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Gravity Anomaly|Horror")
+	bool bEnableUnseenDrop = true;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Gravity Anomaly|Horror", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float UnseenDropChance = 0.05f;
+	/** Optional heavy impact. Falls back to the affected item's DropSound if empty. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Gravity Anomaly|Horror")
+	TObjectPtr<USoundBase> UnseenImpactSound;
+
+	/** Server-only diagnostic value; zero means the item is not in an active fall. */
+	UFUNCTION(BlueprintPure, Category = "Gravity Anomaly|Debug")
+	float GetActiveGravityForItem(const ABase_Item* Item) const;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Gravity Anomaly|Eligibility")
 	FName AllowedActorTag = TEXT("GravityAnomaly");
@@ -110,13 +115,14 @@ private:
 	struct FActiveProp
 	{
 		TWeakObjectPtr<ABase_Item> Item;
-		FVector SideDirection = FVector::ForwardVector;
-		float Elapsed = 0.0f;
-		float FallDelay = 0.2f;
+		float TargetGravity = 9.81f;
 		bool bStrong = false;
-		bool bPaused = false;
 		bool bLanded = false;
 		bool bWasFalling = false;
+		bool bHorrorCandidate = false;
+		bool bWasSeen = false;
+		float SeenDuration = 0.0f;
+		bool bUnseenDrop = false;
 		bool bWasNotifyRigidBodyCollision = false;
 	};
 
@@ -150,15 +156,19 @@ private:
 
 	UFUNCTION(NetMulticast, Unreliable)
 	void MulticastPropPhase(ABase_Item* Item, bool bReleased, bool bStrongEvent);
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastUnseenImpact(ABase_Item* Item, EItemTimeline EventTimeline,
+		FVector_NetQuantize Location);
 
 	void RefreshCandidates();
 	void HandleItemDropped(ABase_Item* Item);
 	bool IsInsideRoom(const ABase_Item* Item) const;
 	bool IsEligible(const ABase_Item* Item) const;
+	bool IsWatchedByPlayer(const ABase_Item* Item) const;
 	void ScheduleNextEvent();
 	void TriggerEvent();
 	bool StartProp(ABase_Item* Item, bool bStrong);
-	void ReleaseProp(int32 Index, bool bPreserveMomentum = false);
+	void ReleaseProp(int32 Index);
 	void StopAll();
 	void SyncActivity();
 };
