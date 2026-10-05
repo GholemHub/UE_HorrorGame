@@ -2,12 +2,20 @@
 
 #include "Components/BoxComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Camera/CameraComponent.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/World.h"
 #include "Enviroment/Room.h"
+#include "GameFramework/PlayerController.h"
+#include "Audio/HronoAudioPolicy.h"
+#include "HronoCharacter.h"
+#include "HronoCollisionChannels.h"
 #include "Items/Base_Item.h"
+#include "Kismet/GameplayStatics.h"
 #include "Net/UnrealNetwork.h"
+#include "Sound/SoundBase.h"
 #include "TimerManager.h"
+#include "UObject/ConstructorHelpers.h"
 
 UGravityAnomalyComponent::UGravityAnomalyComponent()
 {
@@ -15,6 +23,9 @@ UGravityAnomalyComponent::UGravityAnomalyComponent()
 	PrimaryComponentTick.bStartWithTickEnabled = false;
 	PrimaryComponentTick.TickGroup = TG_PrePhysics;
 	SetIsReplicatedByDefault(true);
+	static ConstructorHelpers::FObjectFinder<USoundBase> DefaultImpact(
+		TEXT("/Game/_Alex/Sound/DropSound.DropSound"));
+	if (DefaultImpact.Succeeded()) UnseenImpactSound = DefaultImpact.Object;
 }
 
 void UGravityAnomalyComponent::BeginPlay()
@@ -95,6 +106,18 @@ TArray<ABase_Item*> UGravityAnomalyComponent::GetActiveItems() const
 		}
 	}
 	return Result;
+}
+
+float UGravityAnomalyComponent::GetActiveGravityForItem(const ABase_Item* Item) const
+{
+	for (const FActiveProp& Prop : ActiveProps)
+	{
+		if (Prop.Item == Item)
+		{
+			return Prop.TargetGravity;
+		}
+	}
+	return 0.0f;
 }
 
 void UGravityAnomalyComponent::SetEnabled(bool bNewEnabled)
@@ -214,6 +237,34 @@ bool UGravityAnomalyComponent::IsEligible(const ABase_Item* Item) const
 		&& IsInsideRoom(Item);
 }
 
+bool UGravityAnomalyComponent::IsWatchedByPlayer(const ABase_Item* Item) const
+{
+	if (!IsValid(Item) || !IsValid(Item->GetItemMesh())) return false;
+	const FVector Target = Item->GetItemMesh()->GetComponentLocation();
+	for (FConstPlayerControllerIterator It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
+	{
+		const APlayerController* Controller = It->Get();
+		const AHronoCharacter* Viewer = Controller ? Cast<AHronoCharacter>(Controller->GetPawn()) : nullptr;
+		const UCameraComponent* Camera = IsValid(Viewer) ? Viewer->GetFirstPersonCameraComponent() : nullptr;
+		if (!IsValid(Camera) || (Item->ItemTimeline != EItemTimeline::Both
+			&& Item->ItemTimeline != Viewer->GetTimeline())) continue;
+		const FVector From = Camera->GetComponentLocation();
+		const FVector Delta = Target - From;
+		const float Distance = Delta.Size();
+		if (Distance < 1.0f || Distance > 1200.0f
+			|| FVector::DotProduct(Viewer->GetControlRotation().Vector(), Delta / Distance)
+				< FMath::Cos(FMath::DegreesToRadians(35.0f))) continue;
+		FCollisionQueryParams Params(SCENE_QUERY_STAT(GravityAnomalyWatch), false);
+		Params.AddIgnoredActor(Viewer);
+		Params.AddIgnoredActor(Item);
+		Params.AddIgnoredActor(GetOwner()); // The room's overlap volume is not visible geometry.
+		const ECollisionChannel Channel = Viewer->GetTimeline() == EItemTimeline::Past
+			? COLLISION_CHANNEL_PAWN_PAST : COLLISION_CHANNEL_PAWN_FUTURE;
+		if (!GetWorld()->LineTraceTestByChannel(From, Target, Channel, Params)) return true;
+	}
+	return false;
+}
+
 void UGravityAnomalyComponent::HandleItemDropped(ABase_Item* Item)
 {
 	if (!IsValid(Item) || Item->GetWorld() != GetWorld() || !GetOwner()
@@ -239,7 +290,7 @@ void UGravityAnomalyComponent::HandleItemDropped(ABase_Item* Item)
 	{
 		if (ActiveProps[Index].Item == Item)
 		{
-			ReleaseProp(Index, true);
+			ReleaseProp(Index);
 		}
 	}
 	Candidates.Add(Item);
@@ -378,28 +429,28 @@ bool UGravityAnomalyComponent::StartProp(ABase_Item* Item, bool bStrong)
 		}
 		return false;
 	}
-	// Preserve the hand-drop velocity and ordinary gravity until this attempt's
-	// sampled freeze time. A landing before then cancels the attempt.
+	// Chaos has no per-body gravity scale here. Keep native gravity/collisions and
+	// apply only the acceleration difference on each server PrePhysics tick.
 	Mesh->SetEnableGravity(true);
-	const float Angle = FMath::FRandRange(0.0f, 2.0f * PI);
 	FActiveProp& Prop = ActiveProps.AddDefaulted_GetRef();
 	Prop.Item = Item;
-	Prop.SideDirection = FVector(FMath::Cos(Angle), FMath::Sin(Angle), 0.0f);
-	const float MinFall = FMath::Max(0.0f, FallBeforePause);
-	const float MaxFall = FMath::Max(MinFall, MaxFallBeforePause);
-	Prop.FallDelay = FMath::FRandRange(MinFall, MaxFall);
+	const bool bSlow = FMath::FRand() < FMath::Clamp(SlowEventChance, 0.0f, 1.0f);
+	const float Low = bSlow ? FMath::Clamp(MinSlowGravity, 8.5f, 9.4f)
+		: FMath::Clamp(MinFastGravity, 10.1f, 10.5f);
+	const float High = bSlow ? FMath::Clamp(MaxSlowGravity, Low, 9.4f)
+		: FMath::Clamp(MaxFastGravity, Low, 10.5f);
+	Prop.TargetGravity = FMath::FRandRange(Low, High);
 	Prop.bStrong = bStrong;
+	Prop.bHorrorCandidate = bSlow && bEnableUnseenDrop
+		&& FMath::FRand() < FMath::Clamp(UnseenDropChance, 0.0f, 1.0f);
 	Prop.bWasNotifyRigidBodyCollision = Mesh->BodyInstance.bNotifyRigidBodyCollision;
 	Mesh->SetNotifyRigidBodyCollision(true);
 	Mesh->OnComponentHit.AddUniqueDynamic(this, &UGravityAnomalyComponent::HandlePropHit);
 	if (bDebug)
 	{
-		DrawDebugDirectionalArrow(GetWorld(), Mesh->GetComponentLocation(),
-			Mesh->GetComponentLocation() + Prop.SideDirection * 60.0f, 12.0f,
-			FColor::Yellow, false, 5.0f, 0, 2.0f);
-		UE_LOG(LogTemp, Log, TEXT("[GravityAnomaly] Fall %s Side=%s Fall=%.2f Pause=%.2f"),
-			*GetNameSafe(Item), *Prop.SideDirection.ToCompactString(),
-			Prop.FallDelay, FMath::Max(0.0f, PauseDuration));
+		UE_LOG(LogTemp, Log, TEXT("[GravityAnomaly] Fall %s Gravity=%.3f m/s^2 Slow=%d HorrorCandidate=%d"),
+			*GetNameSafe(Item), Prop.TargetGravity, bSlow ? 1 : 0,
+			Prop.bHorrorCandidate ? 1 : 0);
 	}
 	ActiveItems.Add(Item);
 	GetWorld()->GetTimerManager().ClearTimer(NextEventTimer);
@@ -436,69 +487,36 @@ void UGravityAnomalyComponent::TickComponent(float DeltaTime, ELevelTick TickTyp
 		}
 		if (Prop.bLanded)
 		{
-			// A support collision ended the fall. Keep the natural landing/bounce,
-			// but never apply the anomaly impulse from a resting surface.
-			ReleaseProp(Index, true);
+			if (Prop.bUnseenDrop)
+				MulticastUnseenImpact(Item, Item->ItemTimeline, Mesh->GetComponentLocation());
+			ReleaseProp(Index);
 			continue;
 		}
-		Prop.Elapsed += DeltaTime;
-		if (!Prop.bPaused)
+		const float VerticalSpeed = Mesh->GetPhysicsLinearVelocity().Z;
+		if (VerticalSpeed < -5.0f) Prop.bWasFalling = true;
+		else if ((Prop.bWasFalling && VerticalSpeed > -5.0f)
+			|| !Mesh->IsAnyRigidBodyAwake())
 		{
-			const float VerticalSpeed = Mesh->GetPhysicsLinearVelocity().Z;
-			if (VerticalSpeed < -5.0f)
-			{
-				Prop.bWasFalling = true;
-			}
-			else if (Prop.bWasFalling || !Mesh->IsAnyRigidBodyAwake())
-			{
-				// Covers a missed hit callback after landing or physics sleep.
-				ReleaseProp(Index, true);
-				continue;
-			}
-			if (Prop.Elapsed >= Prop.FallDelay)
-			{
-				if (VerticalSpeed >= -5.0f)
-				{
-					// The object has not started descending (for example it was
-					// thrown upward). Wait only until the configured maximum.
-					if (Prop.Elapsed >= FMath::Max(FallBeforePause, MaxFallBeforePause))
-					{
-						ReleaseProp(Index, true);
-					}
-					continue;
-				}
-				Prop.bPaused = true;
-				Mesh->SetEnableGravity(false);
-				Mesh->SetPhysicsLinearVelocity(FVector::ZeroVector);
-				Mesh->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
-				if (bDebug)
-				{
-					UE_LOG(LogTemp, Log, TEXT("[GravityAnomaly] Freeze %s"), *GetNameSafe(Item));
-				}
-			}
-		}
-		if (Prop.bPaused && Prop.Elapsed >= Prop.FallDelay
-			+ FMath::Max(0.0f, PauseDuration))
-		{
-			Mesh->SetEnableGravity(true);
-			const float Strength = Prop.bStrong ? FMath::Max(1.0f, StrongImpulseMultiplier) : 1.0f;
-			const FVector Impulse = Strength * (
-				Prop.SideDirection * FMath::Max(0.0f, SideImpulseSpeed)
-				- FVector::UpVector * FMath::Max(0.0f, DownwardImpulseSpeed));
-			Mesh->AddImpulse(Impulse, NAME_None, true);
-			if (bDebug)
-			{
-				UE_LOG(LogTemp, Log, TEXT("[GravityAnomaly] Impulse %s DeltaV=%s"),
-					*GetNameSafe(Item), *Impulse.ToCompactString());
-			}
-			ReleaseProp(Index, true);
+			// A missed support hit or sleeping body must not keep an active loop.
+			ReleaseProp(Index);
 			continue;
 		}
-		if (Prop.bPaused)
+		if (Prop.bHorrorCandidate && Prop.bWasFalling && !Prop.bUnseenDrop)
 		{
-			Mesh->SetPhysicsLinearVelocity(FVector::ZeroVector);
-			Mesh->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+			const bool bSeen = IsWatchedByPlayer(Item);
+			Prop.SeenDuration = bSeen ? Prop.SeenDuration + DeltaTime : 0.0f;
+			if (Prop.SeenDuration >= 0.15f) Prop.bWasSeen = true;
+			if (Prop.bWasSeen && !bSeen)
+			{
+				Prop.TargetGravity = 10.5f;
+				Prop.bUnseenDrop = true;
+				if (bDebug) UE_LOG(LogTemp, Log,
+					TEXT("[GravityAnomaly] Unseen drop %s Gravity=10.5 m/s^2"), *GetNameSafe(Item));
+			}
 		}
+		const float NativeGravity = -GetWorld()->GetGravityZ();
+		Mesh->AddForce(FVector::UpVector * (NativeGravity - Prop.TargetGravity * 100.0f),
+			NAME_None, true);
 	}
 	if (ActiveProps.IsEmpty())
 	{
@@ -507,14 +525,13 @@ void UGravityAnomalyComponent::TickComponent(float DeltaTime, ELevelTick TickTyp
 	}
 }
 
-void UGravityAnomalyComponent::ReleaseProp(int32 Index, bool bPreserveMomentum)
+void UGravityAnomalyComponent::ReleaseProp(int32 Index)
 {
 	FActiveProp Prop = ActiveProps[Index];
 	if (bDebug)
 	{
-		UE_LOG(LogTemp, Log, TEXT("[GravityAnomaly] Release %s Elapsed=%.2f Strong=%d PreserveMomentum=%d"),
-			*GetNameSafe(Prop.Item.Get()), Prop.Elapsed, Prop.bStrong ? 1 : 0,
-			bPreserveMomentum ? 1 : 0);
+		UE_LOG(LogTemp, Log, TEXT("[GravityAnomaly] Release %s Gravity=%.3f Strong=%d"),
+			*GetNameSafe(Prop.Item.Get()), Prop.TargetGravity, Prop.bStrong ? 1 : 0);
 	}
 	ActiveProps.RemoveAtSwap(Index);
 	ABase_Item* Item = Prop.Item.Get();
@@ -529,11 +546,6 @@ void UGravityAnomalyComponent::ReleaseProp(int32 Index, bool bPreserveMomentum)
 		if (UStaticMeshComponent* Mesh = Item->GetItemMesh();
 			IsValid(Mesh) && Mesh->IsSimulatingPhysics() && Item->CanEnterGravityAnomaly())
 		{
-			if (!bPreserveMomentum)
-			{
-				Mesh->SetPhysicsLinearVelocity(FVector::ZeroVector);
-				Mesh->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
-			}
 			Mesh->SetEnableGravity(true);
 		}
 		Item->ForceNetUpdate();
@@ -541,6 +553,16 @@ void UGravityAnomalyComponent::ReleaseProp(int32 Index, bool bPreserveMomentum)
 	}
 	SyncActivity();
 	GetOwner()->ForceNetUpdate();
+}
+
+void UGravityAnomalyComponent::MulticastUnseenImpact_Implementation(
+	ABase_Item* Item, EItemTimeline EventTimeline, FVector_NetQuantize Location)
+{
+	if (!HronoAudioPolicy::CanHear(this, EventTimeline)) return;
+	USoundBase* Sound = IsValid(UnseenImpactSound) ? UnseenImpactSound.Get()
+		: IsValid(Item) ? Item->DropSound.Get() : nullptr;
+	if (IsValid(Sound))
+		UGameplayStatics::PlaySoundAtLocation(this, Sound, Location, 1.5f);
 }
 
 void UGravityAnomalyComponent::StopAll()

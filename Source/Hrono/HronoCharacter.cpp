@@ -1,6 +1,7 @@
 ﻿// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "HronoCharacter.h"
+#include "AI/MannequinDemon.h"
 #include "Audio/HronoAudioPolicy.h"
 #include "PhysicalMaterials/PhysicalMaterial.h"
 #include "Sound/SoundAttenuation.h"
@@ -875,6 +876,14 @@ void AHronoCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 	FInputKeyBinding& TutorialBinding = PlayerInputComponent->BindKey(
 		EKeys::Tab, IE_Pressed, this, &AHronoCharacter::ToggleTutorialMenu);
 	TutorialBinding.bExecuteWhenPaused = true;
+	PlayerInputComponent->BindKey(EKeys::L, IE_Pressed, this, &AHronoCharacter::ToggleMannequinDebug);
+}
+
+void AHronoCharacter::ToggleMannequinDebug()
+{
+	if (!IsLocallyControlled()) return;
+	for (TActorIterator<AMannequinDemon> It(GetWorld()); It; ++It)
+		It->ToggleLocalDebugOverlay();
 }
 
 void AHronoCharacter::DoStandUp()
@@ -1378,6 +1387,20 @@ void AHronoCharacter::HandleInteraction(const FHitResult& HitResult)
 	{
 		return;
 	}
+	// The offered prop can sit behind the Mannequin's capsule in the centre trace.
+	// Treat hitting that capsule as intent to take only its currently carried item;
+	// the server still validates the real item's timeline, distance and sight line.
+	if (const AMannequinDemon* Mannequin = Cast<AMannequinDemon>(HitActor))
+	{
+		ABase_Item* Offered = Mannequin->Mood == EMannequinMood::Neutral
+			? Mannequin->CarriedItem.Get() : nullptr;
+		if (IsValid(Offered) && Offered->MannequinCarrier == Mannequin)
+		{
+			if (HasAuthority()) PickupItem(Offered);
+			else ServerPickupItem(Offered);
+		}
+		return;
+	}
 
 	if (auto Item = Cast<ABase_Item>(HitActor))
 	{
@@ -1477,6 +1500,12 @@ bool AHronoCharacter::CanInteractWithActorOnServer(const AActor* Target,
 	if (ViewLocation.ContainsNaN() || !FMath::IsFinite(MaximumDistance)) return false;
 
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(ServerInteraction), false, this);
+	if (const ABase_Item* Offered = Cast<ABase_Item>(Target);
+		IsValid(Offered) && IsValid(Offered->MannequinCarrier)
+		&& Offered->MannequinCarrier->Mood == EMannequinMood::Neutral)
+	{
+		Params.AddIgnoredActor(Offered->MannequinCarrier);
+	}
 	if (IsValid(CurrentHeldItem) && CurrentHeldItem != Target)
 	{
 		Params.AddIgnoredActor(CurrentHeldItem);

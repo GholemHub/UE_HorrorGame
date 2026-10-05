@@ -9,6 +9,7 @@
 #include "Net/UnrealNetwork.h"
 #include "GameplayTagsManager.h"
 #include "HronoCharacter.h"
+#include "AI/MannequinDemon.h"
 #include "Ritual/TableRitualGate.h"
 #include "Camera/CameraComponent.h"
 #include "Components/MeshComponent.h"
@@ -202,6 +203,7 @@ void ABase_Item::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifeti
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 
 	DOREPLIFETIME(ABase_Item, OwningCharacter);
+	DOREPLIFETIME(ABase_Item, MannequinCarrier);
 	DOREPLIFETIME(ABase_Item, ItemTimeline);
 	DOREPLIFETIME(ABase_Item, MirrorTransferState);
 	DOREPLIFETIME(ABase_Item, bDroppedPhysicsEnabled);
@@ -310,7 +312,17 @@ void ABase_Item::UpdateMeshForLocalPlayer()
 
 void ABase_Item::UpdateVisibilityForLocalPlayer(EItemTimeline ViewerTimeline)
 {
-	const bool bShouldBeVisible = (ItemTimeline == EItemTimeline::Both || ItemTimeline == ViewerTimeline);
+	const AHronoCharacter* Viewer = nullptr;
+	if (const APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr)
+		Viewer = Cast<AHronoCharacter>(PC->GetPawn());
+	const ABase_Item* ViewerHeld = IsValid(Viewer) ? Viewer->GetHeldItem() : nullptr;
+	const bool bThroughMannequinLens = IsValid(MannequinCarrier) && IsValid(Viewer)
+		&& ViewerTimeline != MannequinCarrier->MannequinTimeline && IsValid(ViewerHeld)
+		&& ViewerHeld->bCanRepelMannequin && ViewerHeld->OwningCharacter == Viewer
+		&& ViewerHeld->bIsPickedUp
+		&& ViewerHeld->FindComponentByClass<USceneCaptureComponent2D>();
+	const bool bShouldBeVisible = (ItemTimeline == EItemTimeline::Both || ItemTimeline == ViewerTimeline)
+		|| bThroughMannequinLens;
 
 	// Do not rely on root propagation here. A primitive that starts with physics
 	// enabled can be detached from the scene root, and Blueprint item classes can
@@ -322,10 +334,14 @@ void ABase_Item::UpdateVisibilityForLocalPlayer(EItemTimeline ViewerTimeline)
 		if (IsValid(SceneComponent))
 		{
 			SceneComponent->SetVisibility(bShouldBeVisible, /*bPropagateToChildren=*/false);
+			if (IsValid(MannequinCarrier) || bLastMannequinCarryPresentation)
+				if (UPrimitiveComponent* Primitive = Cast<UPrimitiveComponent>(SceneComponent))
+					Primitive->SetVisibleInSceneCaptureOnly(bThroughMannequinLens);
 		}
 	}
 
 	CurrentCachedTimeline = ViewerTimeline;
+	bLastMannequinCarryPresentation = IsValid(MannequinCarrier);
 }
 
 bool ABase_Item::TryPickUp(AHronoCharacter* Character)
@@ -352,17 +368,99 @@ bool ABase_Item::TryPickUp(AHronoCharacter* Character)
 	{
 		return false;
 	}
+	if (IsValid(MannequinCarrier))
+	{
+		DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+		MannequinCarrier = nullptr;
+		CurrentCachedTimeline = EItemTimeline::Both;
+		bDroppedPhysicsEnabled = false;
+		SetReplicateMovement(true);
+	}
 
 	OnPickedUp(Character);
+	if (!bIsPickedUp && !IsValid(OwningCharacter))
+	{
+		bDroppedPhysicsEnabled = true;
+		ApplyWorldItemState();
+	}
 
 	return bIsPickedUp && OwningCharacter == Character;
+}
+
+bool ABase_Item::TryCarryByMannequin(AMannequinDemon* Carrier, USceneComponent* HandPoint)
+{
+	if (!HasAuthority() || !IsValid(Carrier) || !IsValid(HandPoint) || !CanBePickedUp()
+		|| Carrier->State == EMannequinState::Dormant || Carrier->State == EMannequinState::Disabled
+		|| IsValid(Carrier->CarriedItem)
+		|| IsActorBeingDestroyed() || IsPlacementLocked() || bIsPickedUp
+		|| IsValid(OwningCharacter) || IsValid(MannequinCarrier)
+		|| MirrorTransferState != EMirrorItemTransferState::None
+		|| (ItemTimeline != EItemTimeline::Both && ItemTimeline != Carrier->MannequinTimeline)) return false;
+	MannequinCarrier = Carrier;
+	bDroppedPhysicsEnabled = false;
+	bFloatingPickupEnabled = false;
+	if (ItemTimeline == EItemTimeline::Both) SetItemTimeline(Carrier->MannequinTimeline);
+	ApplyMannequinCarryState();
+	if (GetAttachParentActor() != Carrier)
+	{
+		MannequinCarrier = nullptr;
+		bDroppedPhysicsEnabled = true;
+		ApplyWorldItemState();
+		return false;
+	}
+	ForceNetUpdate();
+	return true;
+}
+
+void ABase_Item::DropFromMannequin(const FVector& ThrowVelocity)
+{
+	if (!HasAuthority() || !IsValid(MannequinCarrier)) return;
+	DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+	MannequinCarrier = nullptr;
+	CurrentCachedTimeline = EItemTimeline::Both;
+	bDroppedPhysicsEnabled = true;
+	SetReplicateMovement(true);
+	ApplyWorldItemState();
+	if (IsValid(ItemMesh) && ItemMesh->IsSimulatingPhysics() && !ThrowVelocity.IsNearlyZero())
+	{
+		ItemMesh->AddImpulse(ThrowVelocity * ItemMesh->GetMass());
+	}
+	ForceNetUpdate();
+}
+
+void ABase_Item::OnRep_MannequinCarrier()
+{
+	CurrentCachedTimeline = EItemTimeline::Both;
+	ApplyWorldItemState();
+}
+
+void ABase_Item::ApplyMannequinCarryState()
+{
+	if (!IsValid(MannequinCarrier) || IsPlacementLocked()) return;
+	USceneComponent* HandPoint = MannequinCarrier->ItemHandPoint;
+	if (!IsValid(HandPoint)) return;
+	if (IsValid(ItemMesh))
+	{
+		ItemMesh->SetSimulatePhysics(false);
+		RestoreItemMeshAttachment();
+		ItemMesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+		ConfigureDroppedCollision(ItemMesh);
+	}
+	SetActorEnableCollision(true);
+	SetReplicateMovement(false);
+	AttachToComponent(HandPoint, FAttachmentTransformRules::SnapToTargetNotIncludingScale);
+	SetActorHiddenInGame(false);
+	SetHeldSceneCapturesEnabled(false);
+	RefreshItemTickEnabled(false);
+	CurrentCachedTimeline = EItemTimeline::Both;
+	UpdateMeshForLocalPlayer();
 }
 
 bool ABase_Item::CanEnterGravityAnomaly() const
 {
 	return HasAuthority() && CanBePickedUp() && !IsActorBeingDestroyed()
 		&& !IsA<ADrag_Item>() && !IsA<AClock>() && !IsA<ARune_Item>()
-		&& !IsPlacementLocked() && !IsValid(OwningCharacter) && !bIsPickedUp
+		&& !IsPlacementLocked() && !IsValid(OwningCharacter) && !IsValid(MannequinCarrier) && !bIsPickedUp
 		&& !bFloatingPickupEnabled && MirrorTransferState == EMirrorItemTransferState::None
 		&& IsValid(ItemMesh) && ItemMesh != GetRootComponent()
 		&& ItemMesh->GetStaticMesh() != nullptr;
@@ -849,6 +947,11 @@ void ABase_Item::ApplyWorldItemState()
 		}
 		RestoreItemMeshAttachment();
 		SetHeldSceneCapturesEnabled(false);
+	}
+	else if (IsValid(MannequinCarrier))
+	{
+		ApplyMannequinCarryState();
+		return;
 	}
 	else if (IsValid(OwningCharacter) || bIsPickedUp)
 	{

@@ -4,11 +4,13 @@
 #include "Components/GravityAnomalyComponent.h"
 #include "Components/BoxComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Camera/CameraComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/StaticMeshActor.h"
 #include "Engine/World.h"
 #include "Enviroment/Room.h"
+#include "GameFramework/PlayerController.h"
 #include "GameFramework/WorldSettings.h"
 #include "HronoCharacter.h"
 #include "Items/Base_Item.h"
@@ -18,36 +20,60 @@
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGravityAnomalyRoomTest,
 	"Hrono.Rooms.GravityAnomaly", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
-
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGravityAnomalyLandingTest,
 	"Hrono.Rooms.GravityAnomalyLanding", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
+namespace
+{
+	UWorld* MakePhysicsWorld()
+	{
+		const auto Settings = UWorld::InitializationValues().AllowAudioPlayback(false)
+			.CreatePhysicsScene(true).CreateNavigation(false).CreateAISystem(false)
+			.ShouldSimulatePhysics(true).SetTransactional(false);
+		UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, NAME_None, nullptr, true,
+			ERHIFeatureLevel::Num, &Settings);
+		GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World);
+		World->InitializeActorsForPlay(FURL());
+		World->BeginPlay();
+		World->GetWorldSettings()->NotifyBeginPlay();
+		return World;
+	}
+
+	void TickPhysics(UWorld* World, int32 Frames, uint64& SimulatedFrame)
+	{
+		TGuardValue<uint64> RestoreFrameCounter(GFrameCounter, GFrameCounter);
+		for (int32 Frame = 0; Frame < Frames; ++Frame)
+		{
+			GFrameCounter = ++SimulatedFrame;
+			World->Tick(LEVELTICK_All, 1.0f / 60.0f);
+		}
+	}
+
+	void DestroyPhysicsWorld(UWorld* World)
+	{
+		World->EndPlay(EEndPlayReason::Quit);
+		World->DestroyWorld(false);
+		GEngine->DestroyWorldContext(World);
+	}
+}
+
 bool FGravityAnomalyRoomTest::RunTest(const FString& Parameters)
 {
-	const auto Settings = UWorld::InitializationValues().AllowAudioPlayback(false)
-		.CreatePhysicsScene(true).CreateNavigation(false).CreateAISystem(false)
-		.ShouldSimulatePhysics(true).SetTransactional(false);
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, NAME_None, nullptr, true,
-		ERHIFeatureLevel::Num, &Settings);
-	GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World);
-	World->InitializeActorsForPlay(FURL());
-	World->BeginPlay();
-	World->GetWorldSettings()->NotifyBeginPlay();
-
-	FActorSpawnParameters SpawnParams;
-	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	UWorld* World = MakePhysicsWorld();
+	uint64 SimulatedFrame = GFrameCounter;
+	FActorSpawnParameters Params;
+	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 	ARoom* Room = World->SpawnActor<ARoom>(ARoom::StaticClass(), FVector(0, 0, 500),
-		FRotator::ZeroRotator, SpawnParams);
+		FRotator::ZeroRotator, Params);
 	UGravityAnomalyComponent* Anomaly = Room->GravityAnomaly;
-	TestNotNull(TEXT("Room owns native gravity anomaly component"), Anomaly);
+	TestNotNull(TEXT("Room owns gravity anomaly"), Anomaly);
 	Anomaly->MinEventInterval = 0.1f;
 	Anomaly->MaxEventInterval = 0.1f;
 	Anomaly->EventChance = 1.0f;
-	Anomaly->FallBeforePause = 0.2f;
-	Anomaly->MaxFallBeforePause = 0.2f;
-	Anomaly->PauseDuration = 0.1f;
-	Anomaly->SideImpulseSpeed = 180.0f;
-	Anomaly->DownwardImpulseSpeed = 60.0f;
+	Anomaly->SlowEventChance = 1.0f;
+	Anomaly->MinSlowGravity = 8.5f;
+	Anomaly->MaxSlowGravity = 8.5f;
+	Anomaly->bEnableUnseenDrop = false;
 	Anomaly->StrongEventChance = 0.0f;
 	Anomaly->MinAffectedObjects = 1;
 	Anomaly->MaxAffectedObjects = 1;
@@ -59,10 +85,7 @@ bool FGravityAnomalyRoomTest::RunTest(const FString& Parameters)
 			ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
 		Item->ItemMesh->SetStaticMesh(LoadObject<UStaticMesh>(nullptr,
 			TEXT("/Engine/BasicShapes/Cube.Cube")));
-		if (bTagged)
-		{
-			Item->Tags.Add(TEXT("GravityAnomaly"));
-		}
+		if (bTagged) Item->Tags.Add(TEXT("GravityAnomaly"));
 		Item->FinishSpawning(FTransform(Location));
 		return Item;
 	};
@@ -70,273 +93,202 @@ bool FGravityAnomalyRoomTest::RunTest(const FString& Parameters)
 	ABase_Item* Untagged = SpawnItem(FVector(220, 0, 500), false);
 	ABase_Item* Held = SpawnItem(FVector(-220, 0, 500), true);
 	Held->bIsPickedUp = true;
-	TestTrue(TEXT("Tagged loose prop passes item state policy"), Tagged->CanEnterGravityAnomaly());
-	TestTrue(TEXT("Room volume overlaps tagged prop"), Room->RoomVolume->IsOverlappingActor(Tagged));
-	TestFalse(TEXT("Held item is not eligible"), Held->CanEnterGravityAnomaly());
+	TestTrue(TEXT("Tagged loose item is eligible"), Tagged->CanEnterGravityAnomaly());
+	TestTrue(TEXT("Tagged item overlaps room"), Room->RoomVolume->IsOverlappingActor(Tagged));
+	TestFalse(TEXT("Held item is ineligible"), Held->CanEnterGravityAnomaly());
 	TestFalse(TEXT("Ordinary room is inactive"), Anomaly->IsAnomalyActive());
-
 	Room->SetCursed(true);
-	{
-		TGuardValue<uint64> RestoreFrameCounter(GFrameCounter, GFrameCounter);
-		for (int32 Frame = 0; Frame < 15 && !Anomaly->IsAnomalyActive(); ++Frame)
-		{
-			++GFrameCounter;
-			World->Tick(LEVELTICK_All, 1.0f / 60.0f);
-		}
-	}
-	TestTrue(TEXT("Cursed room starts an event for tagged loose prop"), Anomaly->IsAnomalyActive());
-	TestTrue(TEXT("Tagged prop enters server physics"), Tagged->ItemMesh->IsSimulatingPhysics());
-	TestTrue(TEXT("Tagged prop initially falls under gravity"), Tagged->ItemMesh->IsGravityEnabled());
-	TestFalse(TEXT("Untagged prop remains unaffected"), Untagged->ItemMesh->IsSimulatingPhysics());
-	TestFalse(TEXT("Held prop remains unaffected"), Held->ItemMesh->IsSimulatingPhysics());
-	const FVector StartLocation = Tagged->ItemMesh->GetComponentLocation();
-	{
-		TGuardValue<uint64> RestoreFrameCounter(GFrameCounter, GFrameCounter);
-		for (int32 Frame = 0; Frame < 6; ++Frame)
-		{
-			++GFrameCounter;
-			World->Tick(LEVELTICK_All, 1.0f / 60.0f);
-		}
-	}
-	TestTrue(TEXT("Prop drops during first 0.2 seconds"),
-		Tagged->ItemMesh->GetComponentLocation().Z < StartLocation.Z - 1.0f);
-	{
-		TGuardValue<uint64> RestoreFrameCounter(GFrameCounter, GFrameCounter);
-		for (int32 Frame = 0; Frame < 9; ++Frame)
-		{
-			++GFrameCounter;
-			World->Tick(LEVELTICK_All, 1.0f / 60.0f);
-		}
-	}
-	TestTrue(TEXT("Prop is still active during the freeze"), Anomaly->IsAnomalyActive());
-	TestFalse(TEXT("Gravity is disabled during 0.1 second freeze"),
+	for (int32 Frame = 0; Frame < 15 && !Anomaly->IsAnomalyActive(); ++Frame)
+		TickPhysics(World, 1, SimulatedFrame);
+	TestTrue(TEXT("Cursed room starts a fall for tagged item"), Anomaly->IsAnomalyActive());
+	TestTrue(TEXT("Tagged item simulates physics"), Tagged->ItemMesh->IsSimulatingPhysics());
+	TestTrue(TEXT("Native gravity remains enabled"), Tagged->ItemMesh->IsGravityEnabled());
+	TestEqual(TEXT("Selected slow acceleration is stable"),
+		Anomaly->GetActiveGravityForItem(Tagged), 8.5f);
+	TestFalse(TEXT("Untagged item is unaffected"), Untagged->ItemMesh->IsSimulatingPhysics());
+	TestFalse(TEXT("Held item is unaffected"), Held->ItemMesh->IsSimulatingPhysics());
+	Tagged->ItemMesh->SetLinearDamping(0.0f);
+	Tagged->ItemMesh->SetPhysicsLinearVelocity(FVector::ZeroVector);
+	const float StartZ = Tagged->ItemMesh->GetComponentLocation().Z;
+	TickPhysics(World, 12, SimulatedFrame);
+	const float VerticalSpeed = Tagged->ItemMesh->GetPhysicsLinearVelocity().Z;
+	const float MeasuredGravity = -VerticalSpeed / 20.0f; // 12 frames / 60 Hz, cm to m.
+	AddInfo(FString::Printf(TEXT("Slow gravity: chosen=%.2f measured=%.2f m/s^2 speed=%.1f cm/s"),
+		Anomaly->GetActiveGravityForItem(Tagged), MeasuredGravity, VerticalSpeed));
+	TestTrue(TEXT("Item continuously descends without a pause"),
+		Tagged->ItemMesh->GetComponentLocation().Z < StartZ - 1.0f && VerticalSpeed < -100.0f);
+	TestTrue(TEXT("Measured acceleration follows the selected slow value"),
+		FMath::Abs(MeasuredGravity - 8.5f) < 1.0f);
+	TestTrue(TEXT("No sideways impulse is applied"),
+		Tagged->ItemMesh->GetPhysicsLinearVelocity().Size2D() < 10.0f);
+	TestTrue(TEXT("Gravity stays enabled throughout the anomaly"),
 		Tagged->ItemMesh->IsGravityEnabled());
-	TestTrue(TEXT("Freeze clears linear velocity"),
-		Tagged->ItemMesh->GetPhysicsLinearVelocity().IsNearlyZero(1.0f));
-	{
-		TGuardValue<uint64> RestoreFrameCounter(GFrameCounter, GFrameCounter);
-		for (int32 Frame = 0; Frame < 5; ++Frame)
-		{
-			++GFrameCounter;
-			World->Tick(LEVELTICK_All, 1.0f / 60.0f);
-		}
-	}
-	TestFalse(TEXT("Impulse completes the anomaly"), Anomaly->IsAnomalyActive());
-	TestTrue(TEXT("Sideways impulse survives release"),
-		Tagged->ItemMesh->GetPhysicsLinearVelocity().Size2D() > 50.0f);
-	TestTrue(TEXT("Prop resumes downward motion"),
-		Tagged->ItemMesh->GetPhysicsLinearVelocity().Z < 0.0f);
-
 	Room->SetCursed(false);
-	TestTrue(TEXT("Release restores ordinary gravity"), Tagged->ItemMesh->IsGravityEnabled());
+	TestFalse(TEXT("Uncursing clears active fall"), Anomaly->IsAnomalyActive());
+	TestTrue(TEXT("Cleanup retains native gravity"), Tagged->ItemMesh->IsGravityEnabled());
+	TestTrue(TEXT("Cleanup preserves momentum"), Tagged->ItemMesh->GetPhysicsLinearVelocity().Z < -100.0f);
 	TestFalse(TEXT("Inactive component does not tick"), Anomaly->IsComponentTickEnabled());
 
-	// A hand drop must react before the prop has time to hit the floor. BP_Item2
-	// is an explicitly opted-in mug, despite its legacy TableRitual category.
+	// Actual authored BP_Item2 must still react immediately to a server drop.
 	Anomaly->MinEventInterval = 100.0f;
 	Anomaly->MaxEventInterval = 100.0f;
 	Room->SetCursed(true);
 	UClass* MugClass = LoadClass<ABase_Item>(nullptr,
 		TEXT("/Game/_Alex/Pickable/BP_Item2.BP_Item2_C"));
-	if (TestNotNull(TEXT("BP_Item2 class exists"), MugClass))
+	UClass* CharacterClass = LoadClass<AHronoCharacter>(nullptr,
+		TEXT("/Game/_Alex/HE_CharacterHrono1.HE_CharacterHrono1_C"));
+	if (TestNotNull(TEXT("BP_Item2 exists"), MugClass)
+		&& TestNotNull(TEXT("Player Blueprint exists"), CharacterClass))
 	{
-		TestTrue(TEXT("BP_Item2 explicitly opts in"),
+		TestTrue(TEXT("BP_Item2 opts into gravity anomaly"),
 			MugClass->GetDefaultObject<ABase_Item>()->ActorHasTag(TEXT("GravityAnomaly")));
-		UClass* CharacterClass = LoadClass<AHronoCharacter>(nullptr,
-			TEXT("/Game/_Alex/HE_CharacterHrono1.HE_CharacterHrono1_C"));
-		AHronoCharacter* Player = CharacterClass
-			? World->SpawnActor<AHronoCharacter>(CharacterClass, FVector(0, 0, 500),
-				FRotator::ZeroRotator, SpawnParams) : nullptr;
+		AHronoCharacter* Player = World->SpawnActor<AHronoCharacter>(CharacterClass,
+			FVector(0, 0, 500), FRotator::ZeroRotator, Params);
 		ABase_Item* Mug = World->SpawnActor<ABase_Item>(MugClass,
-			FVector(0, 0, 500), FRotator::ZeroRotator, SpawnParams);
-		if (TestNotNull(TEXT("Test player"), Player) && TestNotNull(TEXT("BP_Item2 mug"), Mug))
+			FVector(0, 0, 500), FRotator::ZeroRotator, Params);
+		if (TestNotNull(TEXT("Player"), Player) && TestNotNull(TEXT("Mug"), Mug))
 		{
-			// A freshly loaded project mesh may still be compiling in commandlet;
-			// that temporarily suppresses its physics state, unlike a ready game asset.
 #if WITH_EDITOR
 			FStaticMeshCompilingManager::Get().FinishCompilation({Mug->ItemMesh->GetStaticMesh()});
 #endif
 			Mug->ItemTimeline = EItemTimeline::Both;
-			if (!TestTrue(TEXT("Actual BP_Item2 pickup succeeds"), Mug->TryPickUp(Player)))
-			{
-				Room->SetCursed(false);
-			}
-			else
+			if (TestTrue(TEXT("Pickup succeeds"), Mug->TryPickUp(Player)))
 			{
 				Mug->Drop();
-				TestFalse(TEXT("Drop leaves held state"), Mug->bIsPickedUp);
-				TestTrue(TEXT("Dropped mug passes gravity item policy"),
-					Mug->CanEnterGravityAnomaly());
-				TestTrue(TEXT("Server drop starts anomaly immediately"), Anomaly->IsAnomalyActive());
-				TestTrue(TEXT("Dropped mug remains simulated"), Mug->ItemMesh->IsSimulatingPhysics());
-				TestTrue(TEXT("Dropped mug falls before freezing"), Mug->ItemMesh->IsGravityEnabled());
-				{
-					TGuardValue<uint64> RestoreFrameCounter(GFrameCounter, GFrameCounter);
-					for (int32 Frame = 0; Frame < 14; ++Frame)
-					{
-						++GFrameCounter;
-						World->Tick(LEVELTICK_All, 1.0f / 60.0f);
-					}
-				}
-				TestFalse(TEXT("Dropped mug freezes after 0.2 seconds"),
-					Mug->ItemMesh->IsGravityEnabled());
+				TestTrue(TEXT("Drop starts anomaly immediately"), Anomaly->IsAnomalyActive());
+				TestTrue(TEXT("Dropped mug keeps gravity"), Mug->ItemMesh->IsGravityEnabled());
+				TestTrue(TEXT("Dropped mug has selected gravity"),
+					Anomaly->GetActiveGravityForItem(Mug) >= 8.5f);
 				Room->SetCursed(false);
-				TestFalse(TEXT("Uncursing stops the active event"), Anomaly->IsAnomalyActive());
-				TestTrue(TEXT("Uncursing restores dropped mug gravity"), Mug->ItemMesh->IsGravityEnabled());
+				TestFalse(TEXT("Uncursing clears dropped mug"), Anomaly->IsAnomalyActive());
 				if (TestTrue(TEXT("Mug can be picked up again"), Mug->TryPickUp(Player)))
 				{
 					Mug->Drop();
-					TestFalse(TEXT("Drop in ordinary room does not start anomaly"),
-						Anomaly->IsAnomalyActive());
-					TestTrue(TEXT("Ordinary drop retains gravity"), Mug->ItemMesh->IsGravityEnabled());
+					TestFalse(TEXT("Ordinary room drop has no anomaly"), Anomaly->IsAnomalyActive());
 				}
 			}
 		}
 	}
-	World->EndPlay(EEndPlayReason::Quit);
-	World->DestroyWorld(false);
-	GEngine->DestroyWorldContext(World);
+	DestroyPhysicsWorld(World);
 	return true;
 }
 
 bool FGravityAnomalyLandingTest::RunTest(const FString& Parameters)
 {
-	const auto Settings = UWorld::InitializationValues().AllowAudioPlayback(false)
-		.CreatePhysicsScene(true).CreateNavigation(false).CreateAISystem(false)
-		.ShouldSimulatePhysics(true).SetTransactional(false);
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, NAME_None, nullptr, true,
-		ERHIFeatureLevel::Num, &Settings);
-	GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World);
-	World->InitializeActorsForPlay(FURL());
-	World->BeginPlay();
-	World->GetWorldSettings()->NotifyBeginPlay();
-
-	FActorSpawnParameters SpawnParams;
-	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	UWorld* World = MakePhysicsWorld();
+	uint64 SimulatedFrame = GFrameCounter;
+	FActorSpawnParameters Params;
+	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 	ARoom* Room = World->SpawnActor<ARoom>(ARoom::StaticClass(), FVector(0, 0, 500),
-		FRotator::ZeroRotator, SpawnParams);
+		FRotator::ZeroRotator, Params);
 	Room->RoomVolume->SetBoxExtent(FVector(500, 500, 500));
 	UGravityAnomalyComponent* Anomaly = Room->GravityAnomaly;
 	Anomaly->EventChance = 1.0f;
 	Anomaly->MinEventInterval = 100.0f;
 	Anomaly->MaxEventInterval = 100.0f;
-	Anomaly->FallBeforePause = 1.0f;
-	Anomaly->MaxFallBeforePause = 1.0f;
+	Anomaly->SlowEventChance = 0.0f;
+	Anomaly->MinFastGravity = 10.5f;
+	Anomaly->MaxFastGravity = 10.5f;
 	Room->SetCursed(true);
-
 	UClass* MugClass = LoadClass<ABase_Item>(nullptr,
 		TEXT("/Game/_Alex/Pickable/BP_Item2.BP_Item2_C"));
 	UClass* CharacterClass = LoadClass<AHronoCharacter>(nullptr,
 		TEXT("/Game/_Alex/HE_CharacterHrono1.HE_CharacterHrono1_C"));
-	AHronoCharacter* Player = CharacterClass
-		? World->SpawnActor<AHronoCharacter>(CharacterClass, FVector(0, 0, 550),
-			FRotator::ZeroRotator, SpawnParams) : nullptr;
-	ABase_Item* Mug = MugClass
-		? World->SpawnActor<ABase_Item>(MugClass, FVector(0, 0, 550),
-			FRotator::ZeroRotator, SpawnParams) : nullptr;
-	if (TestNotNull(TEXT("Landing test player"), Player)
-		&& TestNotNull(TEXT("Landing test BP_Item2"), Mug))
+	AHronoCharacter* Player = CharacterClass ? World->SpawnActor<AHronoCharacter>(CharacterClass,
+		FVector(0, 0, 550), FRotator::ZeroRotator, Params) : nullptr;
+	ABase_Item* Mug = MugClass ? World->SpawnActor<ABase_Item>(MugClass,
+		FVector(0, 0, 550), FRotator::ZeroRotator, Params) : nullptr;
+	if (TestNotNull(TEXT("Landing player"), Player) && TestNotNull(TEXT("Landing BP_Item2"), Mug))
 	{
 #if WITH_EDITOR
 		FStaticMeshCompilingManager::Get().FinishCompilation({Mug->ItemMesh->GetStaticMesh()});
 #endif
 		Mug->ItemTimeline = EItemTimeline::Both;
-		if (TestTrue(TEXT("Pickup before landing test"), Mug->TryPickUp(Player)))
+		if (TestTrue(TEXT("Pickup before landing"), Mug->TryPickUp(Player)))
 		{
 			Mug->Drop();
-			TestTrue(TEXT("First throw starts an anomaly attempt"), Anomaly->IsAnomalyActive());
+			TestTrue(TEXT("First throw starts anomaly"), Anomaly->IsAnomalyActive());
+			TestEqual(TEXT("Fast fall uses 10.5 m/s²"),
+				Anomaly->GetActiveGravityForItem(Mug), 10.5f);
 			const FVector DropLocation = Mug->ItemMesh->GetComponentLocation();
 			AStaticMeshActor* Floor = World->SpawnActor<AStaticMeshActor>(
-				AStaticMeshActor::StaticClass(), DropLocation - FVector(0, 0, 125),
-				FRotator::ZeroRotator, SpawnParams);
+				DropLocation - FVector(0, 0, 125), FRotator::ZeroRotator, Params);
 			Floor->GetStaticMeshComponent()->SetMobility(EComponentMobility::Movable);
 			Floor->GetStaticMeshComponent()->SetStaticMesh(LoadObject<UStaticMesh>(nullptr,
 				TEXT("/Engine/BasicShapes/Cube.Cube")));
 			Floor->GetStaticMeshComponent()->SetWorldScale3D(FVector(5, 5, 1));
 			Floor->GetStaticMeshComponent()->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
-			uint64 SimulatedFrame = GFrameCounter;
-			auto TickFrames = [&World, &SimulatedFrame](int32 Count)
-			{
-				TGuardValue<uint64> RestoreFrameCounter(GFrameCounter, GFrameCounter);
-				for (int32 Frame = 0; Frame < Count; ++Frame)
-				{
-					GFrameCounter = ++SimulatedFrame;
-					World->Tick(LEVELTICK_All, 1.0f / 60.0f);
-				}
-			};
-			TickFrames(90);
-			AddInfo(FString::Printf(TEXT("Landing pose: start=%s end=%s velocity=%s"),
-				*DropLocation.ToCompactString(),
-				*Mug->ItemMesh->GetComponentLocation().ToCompactString(),
-				*Mug->ItemMesh->GetPhysicsLinearVelocity().ToCompactString()));
-			TestFalse(TEXT("Landing cancels the pending impulse"), Anomaly->IsAnomalyActive());
-			TestTrue(TEXT("Landed prop keeps ordinary gravity"), Mug->ItemMesh->IsGravityEnabled());
-			TestTrue(TEXT("Prop reached the floor before its one-second trigger"),
-				Mug->ItemMesh->GetComponentLocation().Z < DropLocation.Z - 35.0f
-				&& Mug->ItemMesh->GetComponentLocation().Z > DropLocation.Z - 100.0f);
-			TestTrue(TEXT("Landing did not add a sideways impulse"),
+			TickPhysics(World, 90, SimulatedFrame);
+			TestFalse(TEXT("Landing ends the altered fall"), Anomaly->IsAnomalyActive());
+			TestTrue(TEXT("Landed prop retains normal gravity"), Mug->ItemMesh->IsGravityEnabled());
+			TestTrue(TEXT("Prop reached floor"),
+				Mug->ItemMesh->GetComponentLocation().Z < DropLocation.Z - 35.0f);
+			TestTrue(TEXT("Landing did not introduce sideways impulse"),
 				Mug->ItemMesh->GetPhysicsLinearVelocity().Size2D() < 30.0f);
-
 			Anomaly->SetEnabled(false);
 			Anomaly->MinEventInterval = 0.1f;
 			Anomaly->MaxEventInterval = 0.1f;
 			Anomaly->SetEnabled(true);
-			TickFrames(20);
-			TestFalse(TEXT("Periodic timer cannot re-arm the grounded prop"),
-				Anomaly->IsAnomalyActive());
-
+			TickPhysics(World, 20, SimulatedFrame);
+			TestFalse(TEXT("Timer cannot re-arm grounded prop"), Anomaly->IsAnomalyActive());
 			Anomaly->SetEnabled(false);
 			Anomaly->MinEventInterval = 100.0f;
 			Anomaly->MaxEventInterval = 100.0f;
-			Anomaly->FallBeforePause = 0.2f;
-			Anomaly->MaxFallBeforePause = 0.2f;
 			Anomaly->SetEnabled(true);
 			if (TestTrue(TEXT("Grounded mug can be picked up again"), Mug->TryPickUp(Player)))
 			{
 				Mug->Drop();
-				TestTrue(TEXT("New throw starts a new anomaly attempt"), Anomaly->IsAnomalyActive());
-				TickFrames(15);
-				TestFalse(TEXT("Second throw freezes while still airborne"),
-					Mug->ItemMesh->IsGravityEnabled());
-				TickFrames(4);
-				TestTrue(TEXT("Second throw gets a sideways impulse"),
-					Mug->ItemMesh->GetPhysicsLinearVelocity().Size2D() > 50.0f);
-
-				// Without a floor, the sampled pause must begin inside the 0.2-1.0 s
-				// window rather than always at the old fixed 0.2 s point.
+				TestTrue(TEXT("New throw gets a new gravity sample"), Anomaly->IsAnomalyActive());
+				TestEqual(TEXT("Repeated fast fall remains within cap"),
+					Anomaly->GetActiveGravityForItem(Mug), 10.5f);
+				TickPhysics(World, 15, SimulatedFrame);
+				TestTrue(TEXT("Repeated fall never pauses gravity"), Mug->ItemMesh->IsGravityEnabled());
+				// The rare horror variant is a continuous slow fall until an observer
+				// looks away, then a capped fast fall; no impulse or teleport.
 				Floor->SetActorEnableCollision(false);
 				Floor->Destroy();
-				TickFrames(1);
-				Anomaly->FallBeforePause = 0.2f;
-				Anomaly->MaxFallBeforePause = 1.0f;
-				if (TestTrue(TEXT("Mug can be thrown for a third attempt"), Mug->TryPickUp(Player)))
+				TickPhysics(World, 1, SimulatedFrame);
+				Anomaly->SetEnabled(false);
+				Anomaly->SlowEventChance = 1.0f;
+				Anomaly->MinSlowGravity = 8.5f;
+				Anomaly->MaxSlowGravity = 8.5f;
+				Anomaly->bEnableUnseenDrop = true;
+				Anomaly->UnseenDropChance = 1.0f;
+				Anomaly->bDebug = true;
+				Anomaly->SetEnabled(true);
+				APlayerController* Controller = World->SpawnActor<APlayerController>();
+				if (TestNotNull(TEXT("Horror observer controller"), Controller)
+					&& TestTrue(TEXT("Mug can be picked up for unseen drop"), Mug->TryPickUp(Player)))
 				{
+					Controller->Possess(Player);
 					Mug->Drop();
-					TickFrames(11);
-					TestTrue(TEXT("Random delay never freezes before 0.2 seconds"),
-						Anomaly->IsAnomalyActive() && Mug->ItemMesh->IsGravityEnabled());
-					int32 FallFrames = 11;
-					while (FallFrames < 65 && Anomaly->IsAnomalyActive()
-						&& Mug->ItemMesh->IsGravityEnabled())
-					{
-						TickFrames(1);
-						++FallFrames;
-					}
-					AddInfo(FString::Printf(TEXT("Random delay: frames=%d active=%d gravity=%d pose=%s velocity=%s"),
-						FallFrames, Anomaly->IsAnomalyActive() ? 1 : 0,
-						Mug->ItemMesh->IsGravityEnabled() ? 1 : 0,
-						*Mug->ItemMesh->GetComponentLocation().ToCompactString(),
-						*Mug->ItemMesh->GetPhysicsLinearVelocity().ToCompactString()));
-					TestTrue(TEXT("Random delay freezes a falling item by one second"),
-						Anomaly->IsAnomalyActive() && !Mug->ItemMesh->IsGravityEnabled()
-						&& FallFrames >= 12 && FallFrames <= 62);
+					TestEqual(TEXT("Unseen variant begins slow"),
+						Anomaly->GetActiveGravityForItem(Mug), 8.5f);
+					const FVector Target = Mug->ItemMesh->GetComponentLocation();
+					Player->SetActorLocation(Target - FVector(350, 0, 0));
+					const UCameraComponent* Camera = Player->GetFirstPersonCameraComponent();
+					Controller->SetControlRotation((Target - Camera->GetComponentLocation()).Rotation());
+					TickPhysics(World, 12, SimulatedFrame);
+					AddInfo(FString::Printf(TEXT("Horror sight: eye=%s target=%s control=%s velocity=%s active=%.2f"),
+						*Camera->GetComponentLocation().ToCompactString(), *Target.ToCompactString(),
+						*Player->GetControlRotation().ToCompactString(),
+						*Mug->ItemMesh->GetPhysicsLinearVelocity().ToCompactString(),
+						Anomaly->GetActiveGravityForItem(Mug)));
+					TestEqual(TEXT("Looking at slow fall keeps stable acceleration"),
+						Anomaly->GetActiveGravityForItem(Mug), 8.5f);
+					FRotator Away = Controller->GetControlRotation();
+					Away.Yaw += 180.0f;
+					Controller->SetControlRotation(Away);
+					TickPhysics(World, 3, SimulatedFrame);
+					TestEqual(TEXT("Looking away switches only to capped 10.5 m/s²"),
+						Anomaly->GetActiveGravityForItem(Mug), 10.5f);
+					TestTrue(TEXT("Unseen drop still uses native gravity"),
+						Mug->ItemMesh->IsGravityEnabled());
 				}
 			}
 		}
 	}
-	World->EndPlay(EEndPlayReason::Quit);
-	World->DestroyWorld(false);
-	GEngine->DestroyWorldContext(World);
+	DestroyPhysicsWorld(World);
 	return true;
 }
 
