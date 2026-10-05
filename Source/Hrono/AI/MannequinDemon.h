@@ -9,21 +9,33 @@
 class AHronoCharacter;
 class AScareDirector;
 class ADrag_Item;
-class USkeletalMeshComponent;
+class ABase_Item;
+class UStaticMesh;
+class UStaticMeshComponent;
+class USceneComponent;
 struct FHitResult;
+
+UENUM(BlueprintType)
+enum class EMannequinMood : uint8
+{
+	Sad, Neutral, Happy
+};
 
 UENUM(BlueprintType)
 enum class EMannequinState : uint8
 {
 	Dormant, Spawned, Observing, Stalking, Approaching, BehindPlayer,
 	GrabWarning, Grab, Repelled, Contained, SubmissiveToBabai, Disabled,
-	ApproachingDoor, WaitingAtDoor
+	ApproachingDoor, WaitingAtDoor, SeekingItem, OfferingItem, HappyChase, GameOver
 };
 
 UENUM(BlueprintType)
 enum class EMannequinObserver : uint8
 {
-	None, FutureDirect, PastMonocle, Both
+	None,
+	FutureDirect UMETA(DisplayName="Direct camera"),
+	PastMonocle UMETA(DisplayName="Opposite timeline monocle"),
+	Both
 };
 
 UENUM(BlueprintType)
@@ -41,6 +53,7 @@ class HRONO_API AMannequinDemon : public ACharacter
 
 public:
 	AMannequinDemon();
+	virtual void OnConstruction(const FTransform& Transform) override;
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
@@ -53,11 +66,50 @@ public:
 	TObjectPtr<AHronoCharacter> CurrentPartner;
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, ReplicatedUsing=OnRep_Targets, Category="Mannequin")
 	EItemTimeline MannequinTimeline = EItemTimeline::Future;
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, ReplicatedUsing=OnRep_Mood, Category="Mannequin|Mood")
+	EMannequinMood Mood = EMannequinMood::Sad;
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, ReplicatedUsing=OnRep_CarriedItem, Category="Mannequin|Mood")
+	TObjectPtr<ABase_Item> CarriedItem;
+	/** Position for a carried item. Set its socket/relative pose on BP_MannequinDemon. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Mannequin|Mood")
+	TObjectPtr<USceneComponent> ItemHandPoint;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Mannequin|Mood")
+	TObjectPtr<UStaticMeshComponent> MaskComponent;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Mannequin|Mood")
+	TObjectPtr<UStaticMesh> SadMaskMesh;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Mannequin|Mood")
+	TObjectPtr<UStaticMesh> NeutralMaskMesh;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Mannequin|Mood")
+	TObjectPtr<UStaticMesh> HappyMaskMesh;
+	/** Skeletal bone or socket for MoodMask; defaults to the head bone. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mannequin|Mood")
+	FName MaskSocketName = TEXT("head");
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Mannequin|Mood")
+	FName ItemHandSocketName = TEXT("hand_r");
+	/** Eligible item classes configured on BP_MannequinDemon. Empty lists allow no items. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mannequin|Mood|Items")
+	TArray<TSubclassOf<ABase_Item>> AllowedPickupClasses;
+	/** Optional exact level actors configured on a placed mannequin instance. */
+	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category="Mannequin|Mood|Items")
+	TArray<TObjectPtr<ABase_Item>> AllowedPickupActors;
+	bool IsMoodItemAllowed(const ABase_Item* Item) const;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mannequin|Mood", meta=(ClampMin="0", Units="cm"))
+	float ItemSearchDistance = 2000.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mannequin|Mood", meta=(ClampMin="0", Units="cm"))
+	float ItemSearchTriggerDistance = 600.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mannequin|Mood", meta=(ClampMin="0", Units="cm"))
+	float ItemPickupDistance = 110.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mannequin|Mood", meta=(ClampMin="0", Units="cm"))
+	float OfferDistance = 300.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mannequin|Mood", meta=(ClampMin="0.1", Units="s"))
+	float OfferWaitSeconds = 60.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mannequin|Mood", meta=(ClampMin="0", Units="cm"))
+	float HappyKillDistance = 100.0f;
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Replicated, Category="Mannequin|Observation")
 	EMannequinObserver Observer = EMannequinObserver::None;
-	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Replicated, Category="Mannequin|Observation")
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Replicated, Category="Mannequin|Observation", meta=(DisplayName="Direct sight"))
 	EMannequinSight FutureSight = EMannequinSight::NotEvaluated;
-	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Replicated, Category="Mannequin|Observation")
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Replicated, Category="Mannequin|Observation", meta=(DisplayName="Opposite timeline lens sight"))
 	EMannequinSight PastMonocleSight = EMannequinSight::NotEvaluated;
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Replicated, Category="Mannequin|Observation")
 	FName FutureSightBlocker = NAME_None;
@@ -65,10 +117,6 @@ public:
 	FName PastSightBlocker = NAME_None;
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Replicated, Category="Mannequin|Stalking")
 	TObjectPtr<ADrag_Item> BlockingDoor;
-
-	/** Assign a matching mesh/material in the BP. This component renders only in scene captures. */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Mannequin|Visual")
-	TObjectPtr<USkeletalMeshComponent> MonocleVisual;
 
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category="Mannequin|Control")
 	bool ActivateMannequin();
@@ -83,6 +131,9 @@ public:
 	bool WakeMannequin();
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category="Mannequin|Control")
 	bool ForceTarget(AHronoCharacter* NewTarget);
+	/** QA control for server PIE; requires bDebugEnabled and an active mannequin. */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category="Mannequin|Debug")
+	bool ForceMoodForTesting(EMannequinMood NewMood);
 	/** Server-only entry point for a trusted interaction (item remains owned by the caller). */
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category="Mannequin|Containment")
 	bool TryContainMannequin(AActor* ContainmentItem);
@@ -198,13 +249,20 @@ public:
 	virtual bool ApplyCapturePunishment_Implementation(AHronoCharacter* CapturedPlayer);
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mannequin|Capture")
 	bool bTransferCapturedPlayerToOppositeTimeline = true;
+	UFUNCTION(BlueprintImplementableEvent, Category="Mannequin|Mood")
+	void OnMoodSnapshotApplied(EMannequinMood NewMood);
+	UFUNCTION(BlueprintImplementableEvent, Category="Mannequin|Mood")
+	void OnMannequinGameOver(AHronoCharacter* Victim);
 
 private:
 	UFUNCTION() void OnRep_State();
 	UFUNCTION() void OnRep_Targets();
+	UFUNCTION() void OnRep_Mood();
+	UFUNCTION() void OnRep_CarriedItem();
 	UFUNCTION() void HandleHuntStateChanged(EGhostHuntState OldState, EGhostHuntState NewState);
 	UFUNCTION(NetMulticast, Reliable) void MulticastMoment(EMannequinState Moment, AHronoCharacter* CapturedPlayer);
 	UFUNCTION(NetMulticast, Reliable) void MulticastSpecialEvent(uint8 EventCode);
+	UFUNCTION(NetMulticast, Reliable) void MulticastGameOver(AHronoCharacter* Victim);
 	void Evaluate();
 	void RefreshLocalPresentation();
 	void ApplyPhysicalState();
@@ -234,6 +292,12 @@ private:
 	void EnterBabaiSubmissive();
 	void ResumeAfterBabai();
 	void EndContainment();
+	void SetMood(EMannequinMood NewMood);
+	void RefreshMask();
+	void EvaluateMood(float Now);
+	ABase_Item* FindMoodItem() const;
+	bool IsOutsideTargetRoom() const;
+	void FinishHappyKill();
 
 	TWeakObjectPtr<AScareDirector> Director;
 	FTimerHandle EvaluationTimer;
@@ -255,6 +319,13 @@ private:
 	float LastApproachAt = -10000.0f;
 	float NextTargetSwitchAt = 0.0f;
 	float NextPartnerCheckAt = 0.0f;
+	UPROPERTY(Replicated)
+	float OfferStartedAt = -1.0f;
+	float NextMoodPathAt = 0.0f;
+	UPROPERTY()
+	TObjectPtr<ABase_Item> DesiredItem;
+	bool bMannequinGameOver = false;
+	bool bLocalGameOverControlsApplied = false;
 	UPROPERTY(Replicated)
 	float WarningStartedAt = 0.0f;
 	UPROPERTY(Replicated)

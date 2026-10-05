@@ -12,6 +12,7 @@
 #include "Base_Item.generated.h"
 
 class AHronoCharacter;
+class AMannequinDemon;
 class UMaterialInterface;
 class UMeshComponent;
 class USceneCaptureComponent2D;
@@ -180,6 +181,11 @@ public:
 	virtual void UpdateMeshForLocalPlayer();
 
 	virtual bool TryPickUp(AHronoCharacter* Character);
+	/** Server-only temporary AI carry; does not claim a player's inventory slot. */
+	bool TryCarryByMannequin(AMannequinDemon* Carrier, USceneComponent* HandPoint);
+	void DropFromMannequin(const FVector& ThrowVelocity = FVector::ZeroVector);
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, ReplicatedUsing=OnRep_MannequinCarrier, Category="Item|Mannequin")
+	TObjectPtr<AMannequinDemon> MannequinCarrier;
 	/** Whether this item can ever enter a character's hand. World-only items override this. */
 	virtual bool CanBePickedUp() const { return true; }
 	/** Server-side eligibility for temporary room physics; pickup ownership remains authoritative. */
@@ -224,6 +230,7 @@ public:
 
 	UFUNCTION()
 	virtual void OnRep_OwningCharacter(AHronoCharacter* PreviousOwningCharacter);
+	UFUNCTION() void OnRep_MannequinCarrier();
 
 	UFUNCTION(BlueprintCallable, Category = "Item")
 	virtual void Drop();
@@ -291,6 +298,7 @@ protected:
 	void ApplyFloatingPickupState();
 	/** Resolves independent replication notifications: Placed > Held > Floating > Dropped. */
 	void ApplyWorldItemState();
+	void ApplyMannequinCarryState();
 	virtual bool IsPlacementLocked() const { return false; }
 	void RestoreItemMeshAttachment();
 	bool NeedsDroppedPhysicsTracking() const;
@@ -314,6 +322,7 @@ protected:
 
 	// Tracks what mesh state is currently visible to avoid spamming updates
 	EItemTimeline CurrentCachedTimeline = EItemTimeline::Both;
+	bool bLastMannequinCarryPresentation = false;
 
 	UPROPERTY(ReplicatedUsing = OnRep_DroppedPhysicsEnabled)
 	bool bDroppedPhysicsEnabled = false;

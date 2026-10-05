@@ -1387,6 +1387,20 @@ void AHronoCharacter::HandleInteraction(const FHitResult& HitResult)
 	{
 		return;
 	}
+	// The offered prop can sit behind the Mannequin's capsule in the centre trace.
+	// Treat hitting that capsule as intent to take only its currently carried item;
+	// the server still validates the real item's timeline, distance and sight line.
+	if (const AMannequinDemon* Mannequin = Cast<AMannequinDemon>(HitActor))
+	{
+		ABase_Item* Offered = Mannequin->Mood == EMannequinMood::Neutral
+			? Mannequin->CarriedItem.Get() : nullptr;
+		if (IsValid(Offered) && Offered->MannequinCarrier == Mannequin)
+		{
+			if (HasAuthority()) PickupItem(Offered);
+			else ServerPickupItem(Offered);
+		}
+		return;
+	}
 
 	if (auto Item = Cast<ABase_Item>(HitActor))
 	{
@@ -1486,6 +1500,12 @@ bool AHronoCharacter::CanInteractWithActorOnServer(const AActor* Target,
 	if (ViewLocation.ContainsNaN() || !FMath::IsFinite(MaximumDistance)) return false;
 
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(ServerInteraction), false, this);
+	if (const ABase_Item* Offered = Cast<ABase_Item>(Target);
+		IsValid(Offered) && IsValid(Offered->MannequinCarrier)
+		&& Offered->MannequinCarrier->Mood == EMannequinMood::Neutral)
+	{
+		Params.AddIgnoredActor(Offered->MannequinCarrier);
+	}
 	if (IsValid(CurrentHeldItem) && CurrentHeldItem != Target)
 	{
 		Params.AddIgnoredActor(CurrentHeldItem);

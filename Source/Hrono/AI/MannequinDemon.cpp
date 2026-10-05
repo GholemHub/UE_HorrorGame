@@ -5,6 +5,9 @@
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/SceneCaptureComponent2D.h"
+#include "Components/SceneComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "Components/BoxComponent.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/Engine.h"
@@ -14,7 +17,9 @@
 #include "GameFramework/GameStateBase.h"
 #include "GameFramework/PlayerState.h"
 #include "HronoCharacter.h"
+#include "HronoGameMode.h"
 #include "HronoCollisionChannels.h"
+#include "Enviroment/Room.h"
 #include "Items/Base_Item.h"
 #include "Items/Drag_Item.h"
 #include "NavigationPath.h"
@@ -64,13 +69,28 @@ AMannequinDemon::AMannequinDemon()
 	AutoPossessAI = EAutoPossessAI::PlacedInWorldOrSpawned;
 	GetCharacterMovement()->MaxWalkSpeed = StalkingSpeed;
 	GetCapsuleComponent()->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	GetCapsuleComponent()->SetCollisionResponseToChannel(COLLISION_CHANNEL_ITEM, ECR_Ignore);
+	GetMesh()->SetCollisionResponseToChannel(COLLISION_CHANNEL_ITEM, ECR_Ignore);
+	MaskComponent = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("MoodMask"));
+	MaskComponent->SetupAttachment(GetMesh(), MaskSocketName);
+	MaskComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	MaskComponent->SetGenerateOverlapEvents(false);
+	ItemHandPoint = CreateDefaultSubobject<USceneComponent>(TEXT("MannequinItemHand"));
+	ItemHandPoint->SetupAttachment(GetMesh());
 	GetCharacterMovement()->DisableMovement();
-	MonocleVisual = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("MonocleVisual"));
-	MonocleVisual->SetupAttachment(GetCapsuleComponent());
-	MonocleVisual->SetRelativeTransform(GetMesh()->GetRelativeTransform());
-	MonocleVisual->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	MonocleVisual->SetVisibleInSceneCaptureOnly(true);
-	MonocleVisual->SetVisibility(false);
+}
+
+void AMannequinDemon::OnConstruction(const FTransform& Transform)
+{
+	Super::OnConstruction(Transform);
+	if (GetMesh()->GetSkeletalMeshAsset() && GetMesh()->DoesSocketExist(MaskSocketName)
+		&& (MaskComponent->GetAttachParent() != GetMesh()
+			|| MaskComponent->GetAttachSocketName() != MaskSocketName))
+	{
+		// Preserve the designer's relative offset while moving the mask to the selected bone.
+		MaskComponent->AttachToComponent(GetMesh(), FAttachmentTransformRules::KeepRelativeTransform, MaskSocketName);
+	}
+	RefreshMask();
 }
 
 AMannequinDemon* AMannequinDemon::SpawnAndActivateMannequin(const UObject* WorldContextObject,
@@ -96,9 +116,15 @@ void AMannequinDemon::BeginPlay()
 {
 	Super::BeginPlay();
 	if (HasAuthority()) MannequinTimeline = EItemTimeline::Future;
-	// Blueprint defaults are applied after the native constructor. Keep the
-	// capture-only body aligned with the authored physical body in placed BPs.
-	MonocleVisual->SetRelativeTransform(GetMesh()->GetRelativeTransform());
+	if (GetMesh()->GetSkeletalMeshAsset())
+	{
+		if (GetMesh()->DoesSocketExist(MaskSocketName)
+			&& MaskComponent->GetAttachSocketName() != MaskSocketName)
+			MaskComponent->AttachToComponent(GetMesh(), FAttachmentTransformRules::KeepRelativeTransform, MaskSocketName);
+		ItemHandPoint->AttachToComponent(GetMesh(), FAttachmentTransformRules::KeepRelativeTransform, ItemHandSocketName);
+	}
+	MaskComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	RefreshMask();
 	ApplyPhysicalState();
 	if (HasAuthority())
 	{
@@ -114,11 +140,26 @@ void AMannequinDemon::BeginPlay()
 	GetWorldTimerManager().SetTimer(LocalPresentationTimer, this, &AMannequinDemon::RefreshLocalPresentation, 0.2f, true);
 	RefreshLocalPresentation();
 	OnStateSnapshotApplied(State);
+	OnMoodSnapshotApplied(Mood);
 }
 
 void AMannequinDemon::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	if (bLocalGameOverControlsApplied && GetWorld())
+	{
+		for (FConstPlayerControllerIterator It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
+		{
+			APlayerController* PC = It->Get();
+			if (PC && PC->IsLocalController())
+			{
+				PC->SetIgnoreMoveInput(false);
+				PC->SetIgnoreLookInput(false);
+			}
+		}
+	}
 	if (Director.IsValid()) Director->OnHuntStateChanged.RemoveDynamic(this, &AMannequinDemon::HandleHuntStateChanged);
+	if (HasAuthority() && IsValid(CarriedItem) && CarriedItem->MannequinCarrier == this)
+		CarriedItem->DropFromMannequin();
 	GetWorldTimerManager().ClearAllTimersForObject(this);
 	Super::EndPlay(EndPlayReason);
 }
@@ -130,6 +171,9 @@ void AMannequinDemon::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutL
 	DOREPLIFETIME(AMannequinDemon, CurrentTarget);
 	DOREPLIFETIME(AMannequinDemon, CurrentPartner);
 	DOREPLIFETIME(AMannequinDemon, MannequinTimeline);
+	DOREPLIFETIME(AMannequinDemon, Mood);
+	DOREPLIFETIME(AMannequinDemon, CarriedItem);
+	DOREPLIFETIME(AMannequinDemon, OfferStartedAt);
 	DOREPLIFETIME(AMannequinDemon, Observer);
 	DOREPLIFETIME(AMannequinDemon, FutureSight);
 	DOREPLIFETIME(AMannequinDemon, PastMonocleSight);
@@ -158,14 +202,24 @@ void AMannequinDemon::ApplyPhysicalState()
 	GetCapsuleComponent()->SetCollisionEnabled(bActive
 		? ECollisionEnabled::QueryAndPhysics : ECollisionEnabled::NoCollision);
 	GetMesh()->SetCollisionEnabled(bActive ? AuthoredMeshCollision : ECollisionEnabled::NoCollision);
+	// BP collision defaults can override the native constructor. Item is an object
+	// channel for both held and dropped Base_Item meshes; neither body may push us.
+	GetCapsuleComponent()->SetCollisionResponseToChannel(COLLISION_CHANNEL_ITEM, ECR_Ignore);
+	GetMesh()->SetCollisionResponseToChannel(COLLISION_CHANNEL_ITEM, ECR_Ignore);
+	MaskComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	if (bActive)
 	{
-		GetCapsuleComponent()->SetCollisionObjectType(COLLISION_CHANNEL_PAWN_FUTURE);
-		GetCapsuleComponent()->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_FUTURE, ECR_Block);
-		GetCapsuleComponent()->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_PAST, ECR_Ignore);
+		GetCapsuleComponent()->SetCollisionObjectType(MannequinTimeline == EItemTimeline::Past
+			? COLLISION_CHANNEL_PAWN_PAST : COLLISION_CHANNEL_PAWN_FUTURE);
+		GetCapsuleComponent()->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_FUTURE,
+			MannequinTimeline == EItemTimeline::Future ? ECR_Block : ECR_Ignore);
+		GetCapsuleComponent()->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_PAST,
+			MannequinTimeline == EItemTimeline::Past ? ECR_Block : ECR_Ignore);
 	}
 	if (!bActive || (State != EMannequinState::Spawned && State != EMannequinState::Stalking
-		&& State != EMannequinState::Approaching && State != EMannequinState::ApproachingDoor))
+		&& State != EMannequinState::Approaching && State != EMannequinState::ApproachingDoor
+		&& State != EMannequinState::SeekingItem && State != EMannequinState::OfferingItem
+		&& State != EMannequinState::HappyChase))
 	{
 		StopMotion();
 	}
@@ -180,6 +234,25 @@ void AMannequinDemon::OnRep_Targets()
 	ApplyPhysicalState();
 	RefreshLocalPresentation();
 	OnTargetChanged(CurrentTarget, CurrentPartner);
+}
+
+void AMannequinDemon::OnRep_Mood()
+{
+	RefreshMask();
+	OnMoodSnapshotApplied(Mood);
+}
+
+void AMannequinDemon::OnRep_CarriedItem()
+{
+	RefreshLocalPresentation();
+}
+
+void AMannequinDemon::RefreshMask()
+{
+	if (!IsValid(MaskComponent)) return;
+	UStaticMesh* SelectedMask = Mood == EMannequinMood::Sad ? SadMaskMesh.Get()
+		: Mood == EMannequinMood::Neutral ? NeutralMaskMesh.Get() : HappyMaskMesh.Get();
+	MaskComponent->SetStaticMesh(SelectedMask);
 }
 
 void AMannequinDemon::RefreshLocalPresentation()
@@ -202,18 +275,30 @@ void AMannequinDemon::RefreshLocalPresentation()
 			Viewer = PC ? Cast<AHronoCharacter>(PC->GetPawn()) : nullptr;
 		}
 	}
-	const bool bPhysical = Viewer && Viewer->GetTimeline() == EItemTimeline::Future;
+	const bool bPhysical = Viewer && Viewer->GetTimeline() == MannequinTimeline;
+	if (State == EMannequinState::GameOver && !bLocalGameOverControlsApplied && IsValid(Viewer))
+	{
+		if (APlayerController* LocalController = Cast<APlayerController>(Viewer->GetController()))
+		{
+			LocalController->SetIgnoreMoveInput(true);
+			LocalController->SetIgnoreLookInput(true);
+			bLocalGameOverControlsApplied = true;
+		}
+	}
 	const ABase_Item* Held = Viewer ? Viewer->GetHeldItem() : nullptr;
-	const bool bThroughMonocle = Viewer && Viewer->GetTimeline() == EItemTimeline::Past && IsValid(Held)
+	const bool bThroughMonocle = Viewer && Viewer->GetTimeline() != MannequinTimeline && IsValid(Held)
 		&& Held->bCanRepelMannequin && Held->OwningCharacter == Viewer && Held->bIsPickedUp
 		&& Held->FindComponentByClass<USceneCaptureComponent2D>();
 	SetActorHiddenInGame(false);
 	GetMesh()->SetHiddenInGame(false);
-	GetMesh()->SetVisibleInSceneCaptureOnly(false);
-	GetMesh()->SetVisibility(bPhysical);
-	MonocleVisual->SetHiddenInGame(false);
-	MonocleVisual->SetVisibleInSceneCaptureOnly(true);
-	MonocleVisual->SetVisibility(bThroughMonocle);
+	// One skeletal mesh serves both views. Past renders this same pose only through
+	// the locally held monocle's capture, while Future renders it in the main view.
+	GetMesh()->SetVisibleInSceneCaptureOnly(bThroughMonocle);
+	GetMesh()->SetVisibility(bPhysical || bThroughMonocle);
+	MaskComponent->SetVisibleInSceneCaptureOnly(bThroughMonocle);
+	MaskComponent->SetVisibility(bPhysical || bThroughMonocle);
+	if (IsValid(CarriedItem) && CarriedItem->MannequinCarrier == this && Viewer)
+		CarriedItem->UpdateVisibilityForLocalPlayer(Viewer->GetTimeline());
 	if (bLocalDebugOverlay) DrawLocalDebug(Viewer);
 	if (State == EMannequinState::GrabWarning) OnGrabWarningProgress(GetGrabWarningProgress());
 }
@@ -230,7 +315,7 @@ bool AMannequinDemon::IsEligibleTarget(const AHronoCharacter* Player) const
 {
 	return IsValid(Player) && !Player->IsActorBeingDestroyed() && !Player->IsSafeInHidingWardrobe()
 		&& !Player->IsDeathTimelineTransitionPending()
-		&& Player->GetTimeline() == EItemTimeline::Future
+		&& Player->GetTimeline() == MannequinTimeline
 		&& IsValid(Player->GetController());
 }
 
@@ -275,7 +360,7 @@ bool AMannequinDemon::SelectTarget(AHronoCharacter* Preferred)
 		for (APlayerState* PS : GS->PlayerArray)
 		{
 			AHronoCharacter* Candidate = PS ? Cast<AHronoCharacter>(PS->GetPawn()) : nullptr;
-			if (Candidate && Candidate != Chosen && Candidate->GetTimeline() == EItemTimeline::Past
+			if (Candidate && Candidate != Chosen && Candidate->GetTimeline() != MannequinTimeline
 				&& IsValid(Candidate->GetController())) { CurrentPartner = Candidate; break; }
 		}
 	}
@@ -283,7 +368,7 @@ bool AMannequinDemon::SelectTarget(AHronoCharacter* Preferred)
 	{
 		for (TActorIterator<AHronoCharacter> It(GetWorld()); It; ++It)
 		{
-			if (*It != Chosen && It->GetTimeline() == EItemTimeline::Past && IsValid(It->GetController()))
+			if (*It != Chosen && It->GetTimeline() != MannequinTimeline && IsValid(It->GetController()))
 			{ CurrentPartner = *It; break; }
 		}
 	}
@@ -315,6 +400,15 @@ bool AMannequinDemon::ForceTarget(AHronoCharacter* NewTarget)
 	return true;
 }
 
+bool AMannequinDemon::ForceMoodForTesting(EMannequinMood NewMood)
+{
+	if (!HasAuthority() || !bDebugEnabled || bMannequinGameOver
+		|| State == EMannequinState::Dormant || State == EMannequinState::Disabled
+		|| Mood == NewMood) return false;
+	SetMood(NewMood);
+	return Mood == NewMood;
+}
+
 bool AMannequinDemon::ActivateMannequin()
 {
 	const auto FailActivation = [this](const TCHAR* Reason)
@@ -330,6 +424,8 @@ bool AMannequinDemon::ActivateMannequin()
 	for (TActorIterator<AMannequinDemon> It(GetWorld()); It; ++It)
 		if (*It != this && It->State != EMannequinState::Dormant && It->State != EMannequinState::Disabled)
 			return FailActivation(TEXT("Another Mannequin is already active"));
+	MannequinTimeline = EItemTimeline::Future;
+	Mood = EMannequinMood::Sad;
 	if (!SelectTarget()) return FailActivation(TEXT("No eligible player target with a controller"));
 	UNavigationSystemV1* Nav = FNavigationSystem::GetCurrent<UNavigationSystemV1>(GetWorld());
 	if (!Nav || !Nav->GetDefaultNavDataInstance())
@@ -366,6 +462,10 @@ bool AMannequinDemon::ActivateMannequin()
 	SetActorLocation(SpawnLocation, false, nullptr, ETeleportType::TeleportPhysics);
 	bFactorySpawnPending = false;
 	ActivatedAt = GetWorld()->GetTimeSeconds();
+	Mood = EMannequinMood::Sad;
+	RefreshMask();
+	OfferStartedAt = -1.0f;
+	DesiredItem = nullptr;
 	CompletedStalkSteps = 0;
 	LastActivationFailure.Reset();
 	SetState(EMannequinState::Spawned);
@@ -375,7 +475,11 @@ bool AMannequinDemon::ActivateMannequin()
 
 void AMannequinDemon::DeactivateMannequin()
 {
-	if (!HasAuthority()) return;
+	if (!HasAuthority() || bMannequinGameOver) return;
+	if (IsValid(CarriedItem) && CarriedItem->MannequinCarrier == this) CarriedItem->DropFromMannequin();
+	CarriedItem = nullptr;
+	DesiredItem = nullptr;
+	OfferStartedAt = -1.0f;
 	if (State == EMannequinState::GrabWarning || State == EMannequinState::Grab)
 		MulticastSpecialEvent(1);
 	StopMotion();
@@ -384,6 +488,9 @@ void AMannequinDemon::DeactivateMannequin()
 	GetWorldTimerManager().ClearTimer(BabaiTimer);
 	CurrentTarget = nullptr;
 	CurrentPartner = nullptr;
+	MannequinTimeline = EItemTimeline::Future;
+	Mood = EMannequinMood::Sad;
+	RefreshMask();
 	BlockingDoor = nullptr;
 	UpdateObservationSnapshot(EMannequinSight::NotEvaluated, EMannequinSight::NotEvaluated,
 		NAME_None, NAME_None);
@@ -406,9 +513,9 @@ EMannequinSight AMannequinDemon::EvaluateSight(const AHronoCharacter* Player,
 {
 	OutBlocker = NAME_None;
 	if (!IsValid(Player)) return EMannequinSight::NoViewer;
-	if (bRequireMonocle && (Player != CurrentPartner || Player->GetTimeline() != EItemTimeline::Past))
+	if (bRequireMonocle && (Player != CurrentPartner || Player->GetTimeline() == MannequinTimeline))
 		return EMannequinSight::WrongTimeline;
-	if (!bRequireMonocle && (Player != CurrentTarget || Player->GetTimeline() != EItemTimeline::Future))
+	if (!bRequireMonocle && (Player != CurrentTarget || Player->GetTimeline() != MannequinTimeline))
 		return EMannequinSight::WrongTimeline;
 	const UCameraComponent* Camera = Player->GetFirstPersonCameraComponent();
 	const USceneCaptureComponent2D* Capture = nullptr;
@@ -431,6 +538,7 @@ EMannequinSight AMannequinDemon::EvaluateSight(const AHronoCharacter* Player,
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(MannequinObservation), false);
 	Params.AddIgnoredActor(Player);
 	Params.AddIgnoredActor(this);
+	if (IsValid(CarriedItem)) Params.AddIgnoredActor(CarriedItem);
 	if (const ABase_Item* Held = Player->GetHeldItem()) Params.AddIgnoredActor(Held);
 	bool bInRange = false;
 	bool bInView = false;
@@ -457,7 +565,8 @@ EMannequinSight AMannequinDemon::EvaluateSight(const AHronoCharacter* Player,
 		bInView = true;
 		FHitResult Hit;
 		if (!GetWorld()->LineTraceSingleByChannel(Hit, From, Point,
-			COLLISION_CHANNEL_PAWN_FUTURE, Params))
+			MannequinTimeline == EItemTimeline::Past ? COLLISION_CHANNEL_PAWN_PAST
+				: COLLISION_CHANNEL_PAWN_FUTURE, Params))
 			return EMannequinSight::Visible;
 		if (OutBlocker.IsNone())
 		{
@@ -524,7 +633,7 @@ void AMannequinDemon::DrawLocalDebug(const AHronoCharacter* Viewer)
 {
 	if (!GEngine || !IsValid(Viewer)) return;
 	FName LocalBlocker;
-	const bool bLens = Viewer->GetTimeline() == EItemTimeline::Past;
+	const bool bLens = Viewer->GetTimeline() != MannequinTimeline;
 	const EMannequinSight LocalSight = EvaluateSight(Viewer, bLens, LocalBlocker);
 	const UCameraComponent* Camera = Viewer->GetFirstPersonCameraComponent();
 	const ABase_Item* Held = Viewer->GetHeldItem();
@@ -561,19 +670,25 @@ void AMannequinDemon::DrawLocalDebug(const AHronoCharacter* Viewer)
 	DrawDebugDirectionalArrow(GetWorld(), From, From + Direction * 400.0f, 25.0f,
 		RayColor, false, 0.25f, 0, 2.0f);
 	const FString Message = FString::Printf(
-		TEXT("MANNEQUIN [L] %s | observer=%s | target=%s | door=%s\n")
-		TEXT("SERVER: Future camera=%s blocker=%s | Past lens=%s blocker=%s\n")
+		TEXT("MANNEQUIN [L] mood=%s timeline=%s state=%s item=%s offer=%.1fs | observer=%s\n")
+		TEXT("TARGET: %s door=%s | direct=%s blocker=%s | lens=%s blocker=%s\n")
 		TEXT("LOCAL: %s %s blocker=%s | aim error=%.1f deg distance=%.0f cm\n")
 		TEXT("Camera: origin=%s forward=%s\n")
 		TEXT("Capture: origin=%s forward=%s | FOV=%.1f circle=%.2f/%.2f"),
+		*StaticEnum<EMannequinMood>()->GetNameStringByValue(static_cast<int64>(Mood)),
+		*StaticEnum<EItemTimeline>()->GetNameStringByValue(static_cast<int64>(MannequinTimeline)),
 		*StaticEnum<EMannequinState>()->GetNameStringByValue(static_cast<int64>(State)),
+		*GetNameSafe(CarriedItem),
+		OfferStartedAt >= 0.0f ? FMath::Max(0.0f, OfferWaitSeconds
+			- ((GetWorld()->GetGameState() ? GetWorld()->GetGameState()->GetServerWorldTimeSeconds()
+				: GetWorld()->GetTimeSeconds()) - OfferStartedAt)) : 0.0f,
 		*StaticEnum<EMannequinObserver>()->GetNameStringByValue(static_cast<int64>(Observer)),
 		*GetNameSafe(CurrentTarget), *GetNameSafe(BlockingDoor),
 		*StaticEnum<EMannequinSight>()->GetNameStringByValue(static_cast<int64>(FutureSight)),
 		*FutureSightBlocker.ToString(),
 		*StaticEnum<EMannequinSight>()->GetNameStringByValue(static_cast<int64>(PastMonocleSight)),
 		*PastSightBlocker.ToString(),
-		bLens ? TEXT("Past lens") : TEXT("Future camera"),
+		bLens ? TEXT("Opposite-timeline lens") : TEXT("Direct camera"),
 		*StaticEnum<EMannequinSight>()->GetNameStringByValue(static_cast<int64>(LocalSight)),
 		*LocalBlocker.ToString(), AimError, FVector::Dist(From, GetActorLocation()),
 		*CameraFrom.ToCompactString(), *CameraDirection.ToCompactString(),
@@ -676,16 +791,18 @@ ADrag_Item* AMannequinDemon::FindClosedDoorBetweenTarget(FHitResult& OutHit) con
 	if (!IsValid(CurrentTarget)) return nullptr;
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(MannequinDoor), false, this);
 	Params.AddIgnoredActor(CurrentTarget);
+	if (IsValid(CarriedItem)) Params.AddIgnoredActor(CarriedItem);
 	for (const float Height : { -30.0f, 20.0f, VisibilitySampleHeight })
 	{
 		const FVector From = GetActorLocation() + FVector(0, 0, Height);
 		const FVector To = CurrentTarget->GetActorLocation() + FVector(0, 0, Height);
 		FHitResult Hit;
 		if (!GetWorld()->LineTraceSingleByChannel(Hit, From, To,
-			COLLISION_CHANNEL_PAWN_FUTURE, Params)) continue;
+			MannequinTimeline == EItemTimeline::Past ? COLLISION_CHANNEL_PAWN_PAST
+				: COLLISION_CHANNEL_PAWN_FUTURE, Params)) continue;
 		ADrag_Item* Door = Cast<ADrag_Item>(Hit.GetActor());
 		if (IsValid(Door) && Door->bIsClosed
-			&& (Door->ItemTimeline == EItemTimeline::Future || Door->ItemTimeline == EItemTimeline::Both))
+			&& (Door->ItemTimeline == MannequinTimeline || Door->ItemTimeline == EItemTimeline::Both))
 		{
 			OutHit = Hit;
 			return Door;
@@ -780,6 +897,252 @@ void AMannequinDemon::SetState(EMannequinState NewState, bool bEmitMoment)
 		*GetName(), static_cast<int32>(State), *GetNameSafe(CurrentTarget), *GetNameSafe(CurrentPartner));
 }
 
+void AMannequinDemon::SetMood(EMannequinMood NewMood)
+{
+	if (!HasAuthority() || Mood == NewMood || bMannequinGameOver) return;
+	StopMotion();
+	Mood = NewMood;
+	MannequinTimeline = MannequinTimeline == EItemTimeline::Future
+		? EItemTimeline::Past : EItemTimeline::Future;
+	OfferStartedAt = -1.0f;
+	DesiredItem = nullptr;
+	BlockingDoor = nullptr;
+	CurrentTarget = nullptr;
+	CurrentPartner = nullptr;
+	SelectTarget();
+	if (IsValid(CarriedItem) && CarriedItem->MannequinCarrier == this)
+	{
+		CarriedItem->SetItemTimeline(MannequinTimeline);
+		if (NewMood == EMannequinMood::Happy)
+		{
+			const FVector ThrowDirection = IsValid(CurrentTarget)
+				? (CurrentTarget->GetActorLocation() - GetActorLocation()).GetSafeNormal2D()
+				: GetActorForwardVector();
+			CarriedItem->DropFromMannequin(ThrowDirection * 350.0f + FVector(0, 0, 120.0f));
+			CarriedItem = nullptr;
+		}
+	}
+	else CarriedItem = nullptr;
+	ApplyPhysicalState();
+	RefreshMask();
+	RefreshLocalPresentation();
+	OnMoodSnapshotApplied(Mood);
+	SetState(EMannequinState::Spawned, false);
+	ForceNetUpdate();
+	UE_LOG(LogTemp, Log, TEXT("[MannequinMood] %s mood=%s timeline=%s target=%s item=%s"),
+		*GetName(), *StaticEnum<EMannequinMood>()->GetNameStringByValue(static_cast<int64>(Mood)),
+		*StaticEnum<EItemTimeline>()->GetNameStringByValue(static_cast<int64>(MannequinTimeline)),
+		*GetNameSafe(CurrentTarget), *GetNameSafe(CarriedItem));
+}
+
+bool AMannequinDemon::IsOutsideTargetRoom() const
+{
+	if (!IsValid(CurrentTarget)) return false;
+	const auto FindRoom = [this](const FVector& Position) -> const ARoom*
+	{
+		for (TActorIterator<ARoom> It(GetWorld()); It; ++It)
+		{
+			const ARoom* Room = *It;
+			if (!IsValid(Room) || !IsValid(Room->RoomVolume)) continue;
+			const FVector Local = Room->RoomVolume->GetComponentTransform().InverseTransformPosition(Position);
+			const FVector Extent = Room->RoomVolume->GetUnscaledBoxExtent();
+			if (FMath::Abs(Local.X) <= Extent.X && FMath::Abs(Local.Y) <= Extent.Y
+				&& FMath::Abs(Local.Z) <= Extent.Z) return Room;
+		}
+		return nullptr;
+	};
+	const ARoom* MyRoom = FindRoom(GetActorLocation());
+	const ARoom* TargetRoom = FindRoom(CurrentTarget->GetActorLocation());
+	if (!MyRoom && !TargetRoom) return false;
+	if (MyRoom == TargetRoom || FVector::Dist2D(GetActorLocation(),
+		CurrentTarget->GetActorLocation()) <= ItemSearchTriggerDistance) return false;
+	if (IsValid(CurrentPartner) && CurrentPartner->GetTimeline() != MannequinTimeline
+		&& (FindRoom(CurrentPartner->GetActorLocation()) == MyRoom
+			|| FVector::Dist2D(GetActorLocation(), CurrentPartner->GetActorLocation())
+				<= ItemSearchTriggerDistance)) return false;
+	return true;
+}
+
+bool AMannequinDemon::IsMoodItemAllowed(const ABase_Item* Item) const
+{
+	if (!IsValid(Item)) return false;
+	if (AllowedPickupActors.Contains(Item)) return true;
+	for (const TSubclassOf<ABase_Item>& AllowedClass : AllowedPickupClasses)
+		if (AllowedClass && Item->IsA(AllowedClass)) return true;
+	return false;
+}
+
+ABase_Item* AMannequinDemon::FindMoodItem() const
+{
+	if (AllowedPickupClasses.IsEmpty() && AllowedPickupActors.IsEmpty()) return nullptr;
+	UNavigationSystemV1* Nav = FNavigationSystem::GetCurrent<UNavigationSystemV1>(GetWorld());
+	if (!Nav) return nullptr;
+	ABase_Item* BestItem = nullptr;
+	float BestDistanceSq = FMath::Square(ItemSearchDistance);
+	for (TActorIterator<ABase_Item> It(GetWorld()); It; ++It)
+	{
+		ABase_Item* Item = *It;
+		if (!IsMoodItemAllowed(Item) || Item->IsActorBeingDestroyed() || !Item->CanBePickedUp()
+			|| Item->bIsPickedUp || IsValid(Item->OwningCharacter) || IsValid(Item->MannequinCarrier)
+			|| Item->MirrorTransferState != EMirrorItemTransferState::None
+			|| !IsValid(Item->ItemMesh) || !IsValid(Item->ItemMesh->GetStaticMesh())
+			|| (Item->ItemTimeline != EItemTimeline::Both && Item->ItemTimeline != MannequinTimeline)) continue;
+		const float DistanceSq = FVector::DistSquared2D(GetActorLocation(), Item->GetActorLocation());
+		if (DistanceSq >= BestDistanceSq) continue;
+		UNavigationPath* Path = Nav->FindPathToLocationSynchronously(GetWorld(),
+			GetActorLocation(), Item->GetActorLocation());
+		if (!Path || !Path->IsValid() || Path->IsPartial()) continue;
+		BestItem = Item;
+		BestDistanceSq = DistanceSq;
+	}
+	return BestItem;
+}
+
+void AMannequinDemon::EvaluateMood(float Now)
+{
+	if (bMannequinGameOver || !IsValid(CurrentTarget)) return;
+	if (Mood == EMannequinMood::Neutral
+		&& (!IsValid(CarriedItem) || CarriedItem->MannequinCarrier != this))
+	{
+		CarriedItem = nullptr;
+		SetMood(EMannequinMood::Sad); // Taking the offered item starts another cycle.
+		return;
+	}
+	if (Mood == EMannequinMood::Neutral && OfferStartedAt < 0.0f
+		&& FVector::Dist2D(GetActorLocation(), CurrentTarget->GetActorLocation()) <= OfferDistance)
+		OfferStartedAt = Now;
+	if (Mood == EMannequinMood::Neutral && OfferStartedAt >= 0.0f)
+	{
+		if (Now - OfferStartedAt >= OfferWaitSeconds) SetMood(EMannequinMood::Happy);
+		else
+		{
+			StopMotion();
+			SetState(EMannequinState::OfferingItem, false);
+		}
+		return;
+	}
+	if (Mood == EMannequinMood::Happy
+		&& FVector::Dist2D(GetActorLocation(), CurrentTarget->GetActorLocation()) <= HappyKillDistance)
+	{
+		FCollisionQueryParams Params(SCENE_QUERY_STAT(MannequinKill), false, this);
+		Params.AddIgnoredActor(CurrentTarget);
+		if (!GetWorld()->LineTraceTestByChannel(GetActorLocation(), CurrentTarget->GetActorLocation(),
+			MannequinTimeline == EItemTimeline::Past ? COLLISION_CHANNEL_PAWN_PAST
+				: COLLISION_CHANNEL_PAWN_FUTURE, Params)) FinishHappyKill();
+		return;
+	}
+	if (bTargetObserved || bPartnerObservingThroughMonocle
+		|| Now - LastObservedAt < ObservationGraceTime)
+	{
+		if (State != EMannequinState::Observing)
+		{
+			StopMotion();
+			SetState(EMannequinState::Observing, !bPartnerObservingThroughMonocle);
+		}
+		return;
+	}
+	if (Mood == EMannequinMood::Sad)
+	{
+		if (!IsValid(DesiredItem) && Now >= NextMoodPathAt && IsOutsideTargetRoom())
+		{
+			DesiredItem = FindMoodItem();
+			NextMoodPathAt = Now + 0.5f;
+		}
+		if (IsValid(DesiredItem))
+		{
+			if (!IsMoodItemAllowed(DesiredItem) || DesiredItem->bIsPickedUp || IsValid(DesiredItem->OwningCharacter)
+				|| IsValid(DesiredItem->MannequinCarrier)) DesiredItem = nullptr;
+			else if (FVector::Dist2D(GetActorLocation(), DesiredItem->GetActorLocation()) <= ItemPickupDistance)
+			{
+				if (DesiredItem->TryCarryByMannequin(this, ItemHandPoint))
+				{
+					CarriedItem = DesiredItem;
+					SetMood(EMannequinMood::Neutral);
+					return;
+				}
+				DesiredItem = nullptr;
+			}
+			else if (Now >= NextMoodPathAt)
+			{
+				StartMove(DesiredItem->GetActorLocation(), EMannequinState::SeekingItem);
+				NextMoodPathAt = Now + 0.5f;
+				return;
+			}
+			else return;
+		}
+	}
+	FHitResult DoorHit;
+	if (ADrag_Item* Door = FindClosedDoorBetweenTarget(DoorHit))
+	{
+		if (BlockingDoor != Door)
+		{
+			StopMotion();
+			BlockingDoor = Door;
+			NextMoodPathAt = 0.0f;
+		}
+		if (Now >= NextMoodPathAt)
+		{
+			FVector Approach;
+			if (!FindDoorApproachLocation(DoorHit, Approach)
+				|| !StartMove(Approach, EMannequinState::ApproachingDoor))
+			{
+				StopMotion();
+				SetState(EMannequinState::WaitingAtDoor, false);
+			}
+			NextMoodPathAt = Now + 0.5f;
+		}
+		return;
+	}
+	BlockingDoor = nullptr;
+	if (Now < NextMoodPathAt) return;
+	const EMannequinState MoveState = Mood == EMannequinMood::Sad
+		? EMannequinState::Stalking : Mood == EMannequinMood::Neutral
+			? EMannequinState::OfferingItem : EMannequinState::HappyChase;
+	StartMove(CurrentTarget->GetActorLocation(), MoveState);
+	NextMoodPathAt = Now + 0.5f;
+}
+
+void AMannequinDemon::FinishHappyKill()
+{
+	if (!HasAuthority() || Mood != EMannequinMood::Happy || bMannequinGameOver) return;
+	bMannequinGameOver = true;
+	StopMotion();
+	if (IsValid(CurrentTarget))
+	{
+		CurrentTarget->GetCharacterMovement()->StopMovementImmediately();
+		CurrentTarget->GetCharacterMovement()->DisableMovement();
+	}
+	SetState(EMannequinState::GameOver, false);
+	MulticastGameOver(CurrentTarget);
+	if (AGameModeBase* Mode = GetWorld()->GetAuthGameMode())
+	{
+		FTimerHandle GameOverTravelTimer;
+		GetWorldTimerManager().SetTimer(GameOverTravelTimer,
+			FTimerDelegate::CreateWeakLambda(Mode, [Mode]() { Mode->ReturnToMainMenuHost(); }),
+			3.0f, false);
+	}
+}
+
+void AMannequinDemon::MulticastGameOver_Implementation(AHronoCharacter* Victim)
+{
+	if (UWorld* World = GetWorld())
+	{
+		for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
+		{
+			APlayerController* PC = It->Get();
+			if (PC && PC->IsLocalController() && !bLocalGameOverControlsApplied)
+			{
+				PC->SetIgnoreMoveInput(true);
+				PC->SetIgnoreLookInput(true);
+				bLocalGameOverControlsApplied = true;
+			}
+		}
+	}
+	OnMannequinGameOver(Victim);
+	if (GEngine) GEngine->AddOnScreenDebugMessage(-1, 3.0f, FColor::Red,
+		TEXT("The Mannequin caught a player. Game over."));
+}
+
 void AMannequinDemon::MulticastMoment_Implementation(EMannequinState Moment, AHronoCharacter* CapturedPlayer)
 {
 	// The server already ran these events in its multicast call; OnRep handles snapshots separately.
@@ -816,6 +1179,7 @@ void AMannequinDemon::MulticastSpecialEvent_Implementation(uint8 EventCode)
 void AMannequinDemon::Evaluate()
 {
 	if (!HasAuthority()) return;
+	if (bMannequinGameOver) return;
 	const float Now = GetWorld()->GetTimeSeconds();
 	if (bDebugEnabled)
 	{
@@ -834,7 +1198,7 @@ void AMannequinDemon::Evaluate()
 			EMannequinSight::NotEvaluated, NAME_None, NAME_None);
 		return;
 	}
-	if (!IsEligibleTarget(CurrentTarget) || CurrentTarget->GetTimeline() != MannequinTimeline)
+	if (!IsEligibleTarget(CurrentTarget))
 	{
 		if (State == EMannequinState::GrabWarning || State == EMannequinState::Grab)
 			MulticastSpecialEvent(1);
@@ -844,10 +1208,19 @@ void AMannequinDemon::Evaluate()
 			CompletedStalkSteps = 0;
 			SetState(EMannequinState::Spawned);
 		}
-		else DeactivateMannequin();
+		else
+		{
+			StopMotion();
+			CurrentTarget = nullptr;
+			CurrentPartner = nullptr;
+			UpdateObservationSnapshot(EMannequinSight::NoViewer,
+				EMannequinSight::NoViewer, NAME_None, NAME_None);
+			ForceNetUpdate();
+		}
 		return;
 	}
-	if ((!IsValid(CurrentPartner) || CurrentPartner == CurrentTarget || !IsValid(CurrentPartner->GetController()))
+	if ((!IsValid(CurrentPartner) || CurrentPartner == CurrentTarget || !IsValid(CurrentPartner->GetController())
+		|| CurrentPartner->GetTimeline() == MannequinTimeline)
 		&& Now >= NextPartnerCheckAt)
 	{
 		SelectTarget(CurrentTarget);
@@ -861,119 +1234,7 @@ void AMannequinDemon::Evaluate()
 	bTargetObserved = NewFuture == EMannequinSight::Visible;
 	bPartnerObservingThroughMonocle = NewPast == EMannequinSight::Visible;
 	if (bTargetObserved || bPartnerObservingThroughMonocle) LastObservedAt = Now;
-	// A door closed during the warning or rescue window must cancel the grab;
-	// otherwise the pending timer could capture a player through the panel.
-	if (State == EMannequinState::GrabWarning || State == EMannequinState::Grab)
-	{
-		FHitResult DoorHit;
-		if (FindClosedDoorBetweenTarget(DoorHit))
-		{
-			MulticastSpecialEvent(1);
-			StopMotion();
-			WarningStartedAt = 0.0f;
-			WarningEndsAt = 0.0f;
-			SetState(EMannequinState::Spawned, false);
-		}
-	}
-	if (bPartnerObservingThroughMonocle &&
-		(State == EMannequinState::BehindPlayer || State == EMannequinState::GrabWarning
-			|| State == EMannequinState::Grab))
-	{
-		Repel(true);
-		return;
-	}
-	if (State == EMannequinState::GrabWarning)
-	{
-		if (bTargetObserved && bSeeingMannequinDuringGrabWarningTriggersFinalGrab) BeginFinalGrabWindow();
-		else if (Now >= WarningEndsAt) BeginFinalGrabWindow();
-		return;
-	}
-	if (State == EMannequinState::Grab)
-	{
-		if (Now >= WarningEndsAt) CompleteGrab();
-		return;
-	}
-	if (State == EMannequinState::Repelled) return;
-	if (bTargetObserved || bPartnerObservingThroughMonocle
-		|| Now - LastObservedAt < ObservationGraceTime)
-	{
-		if (State != EMannequinState::Observing)
-		{
-			StopMotion();
-			SetState(EMannequinState::Observing, !bPartnerObservingThroughMonocle);
-			if (bPartnerObservingThroughMonocle) MulticastSpecialEvent(6);
-		}
-		return;
-	}
-	if (State == EMannequinState::Observing)
-	{
-		GetCharacterMovement()->SetMovementMode(MOVE_Walking);
-		SetState(EMannequinState::Spawned, false);
-	}
-	FHitResult DoorHit;
-	ADrag_Item* Door = FindClosedDoorBetweenTarget(DoorHit);
-	if (Door)
-	{
-		if (State == EMannequinState::WaitingAtDoor && BlockingDoor == Door) return;
-		if (State == EMannequinState::ApproachingDoor && BlockingDoor == Door)
-		{
-			if (const AAIController* AI = Cast<AAIController>(GetController());
-				AI && AI->GetMoveStatus() == EPathFollowingStatus::Moving) return;
-			StopMotion();
-			SetState(EMannequinState::WaitingAtDoor, false);
-			return;
-		}
-		StopMotion();
-		BlockingDoor = Door;
-		FVector DoorApproach;
-		if (FindDoorApproachLocation(DoorHit, DoorApproach)
-			&& StartMove(DoorApproach, EMannequinState::ApproachingDoor)) return;
-		SetState(EMannequinState::WaitingAtDoor, false);
-		return;
-	}
-	if (BlockingDoor || State == EMannequinState::WaitingAtDoor
-		|| State == EMannequinState::ApproachingDoor)
-	{
-		BlockingDoor = nullptr;
-		StopMotion();
-		SetState(EMannequinState::Spawned, false);
-	}
-	if (State == EMannequinState::Approaching || State == EMannequinState::Stalking)
-	{
-		const bool bStalking = State == EMannequinState::Stalking;
-		const float GoalDistance = bStalking && IsValid(CurrentTarget)
-			? FVector::Dist2D(GetActorLocation(), CurrentTarget->GetActorLocation())
-			: FVector::Dist2D(GetActorLocation(), MoveDestination);
-		const bool bReached = bHasMoveDestination && GoalDistance <=
-			(bStalking ? GetCloseApproachCenterDistance() + 10.0f : 12.0f);
-		const AAIController* AI = Cast<AAIController>(GetController());
-		// Let path following finish its 10 cm surface-clearance request before
-		// considering the step complete; a looser distance check stopped it early.
-		if (bHasMoveDestination && AI && AI->GetMoveStatus() == EPathFollowingStatus::Moving)
-			return;
-		StopMotion();
-		if (bReached && !bStalking)
-		{
-			EnterWarning();
-			return;
-		}
-		if (bReached && bStalking)
-			++CompletedStalkSteps;
-		SetState(EMannequinState::Spawned, false);
-		return;
-	}
-	if (Now - LastApproachAt < ApproachCooldown) return;
-	if (CompletedStalkSteps >= RequiredStalkStepsBeforeGrab && Now - ActivatedAt >= MinTimeBeforeGrabAttempt)
-	{
-		FVector Behind;
-		if (FindBehindLocation(Behind) && StartMove(Behind, EMannequinState::Approaching))
-		{
-			LastApproachAt = Now;
-			return;
-		}
-	}
-	StartMove(CurrentTarget->GetActorLocation(), EMannequinState::Stalking);
-	LastApproachAt = Now;
+	EvaluateMood(Now);
 }
 
 void AMannequinDemon::EnterWarning()

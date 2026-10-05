@@ -9,6 +9,7 @@
 #include "Components/SceneCaptureComponent2D.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/WorldSettings.h"
@@ -40,16 +41,27 @@ bool FMannequinContractTest::RunTest(const FString& Parameters)
 	if (Demon)
 	{
 		TestEqual(TEXT("Dormant by default"), Demon->State, EMannequinState::Dormant);
-		TestEqual(TEXT("Mannequin is fixed to Future"), Demon->MannequinTimeline, EItemTimeline::Future);
+		TestEqual(TEXT("Initial Sad mannequin starts in Future"), Demon->MannequinTimeline, EItemTimeline::Future);
 		TestEqual(TEXT("Observation begins empty"), Demon->Observer, EMannequinObserver::None);
 		TestFalse(TEXT("Legacy dormant visibility flag defaults off"), Demon->bShowDormantMeshForTesting);
 		TestFalse(TEXT("No local viewer does not select physical audience"), Demon->GetMesh()->IsVisible());
-		TestFalse(TEXT("Capture-only duplicate stays hidden"), Demon->MonocleVisual->IsVisible());
 		TestEqual(TEXT("Approach clearance is 10 cm"), Demon->ApproachClearance, 10.0f);
+		TestEqual(TEXT("Sad is the initial mood"), Demon->Mood, EMannequinMood::Sad);
+		TestEqual(TEXT("Neutral offer lasts one minute by default"), Demon->OfferWaitSeconds, 60.0f);
+		TestTrue(TEXT("Native item allowlists start empty"), Demon->AllowedPickupClasses.IsEmpty()
+			&& Demon->AllowedPickupActors.IsEmpty());
+		TestNotNull(TEXT("Separate mask component exists"), Demon->MaskComponent.Get());
+		TestNotNull(TEXT("Item hand point exists"), Demon->ItemHandPoint.Get());
+		TestEqual(TEXT("Mask cannot physically push the mannequin"),
+			Demon->MaskComponent->GetCollisionEnabled(), ECollisionEnabled::NoCollision);
 		TestEqual(TEXT("Dormant capsule does not collide"),
 			Demon->GetCapsuleComponent()->GetCollisionEnabled(), ECollisionEnabled::NoCollision);
 		TestEqual(TEXT("Dormant physical mesh does not collide"),
 			Demon->GetMesh()->GetCollisionEnabled(), ECollisionEnabled::NoCollision);
+		TestEqual(TEXT("Capsule ignores the Base_Item object channel even while dormant"),
+			Demon->GetCapsuleComponent()->GetCollisionResponseToChannel(COLLISION_CHANNEL_ITEM), ECR_Ignore);
+		TestEqual(TEXT("Mesh ignores the Base_Item object channel even while dormant"),
+			Demon->GetMesh()->GetCollisionResponseToChannel(COLLISION_CHANNEL_ITEM), ECR_Ignore);
 		TestEqual(TEXT("Dormant movement is disabled"),
 			Demon->GetCharacterMovement()->MovementMode, MOVE_None);
 		const FVector DormantLocation = Demon->GetActorLocation();
@@ -69,6 +81,20 @@ bool FMannequinContractTest::RunTest(const FString& Parameters)
 		TestFalse(TEXT("No local viewer still has no physical audience"), Demon->GetMesh()->IsVisible());
 		TestEqual(TEXT("Active capsule collides"), Demon->GetCapsuleComponent()->GetCollisionEnabled(),
 			ECollisionEnabled::QueryAndPhysics);
+		TestEqual(TEXT("Active capsule still ignores held and dropped items"),
+			Demon->GetCapsuleComponent()->GetCollisionResponseToChannel(COLLISION_CHANNEL_ITEM), ECR_Ignore);
+		TestEqual(TEXT("Active skeletal mesh still ignores held and dropped items"),
+			Demon->GetMesh()->GetCollisionResponseToChannel(COLLISION_CHANNEL_ITEM), ECR_Ignore);
+		TestFalse(TEXT("Mood cannot be forced outside QA mode"), Demon->ForceMoodForTesting(EMannequinMood::Neutral));
+		Demon->bDebugEnabled = true;
+		TestTrue(TEXT("Sad to Neutral changes dimension"), Demon->ForceMoodForTesting(EMannequinMood::Neutral));
+		TestEqual(TEXT("Neutral mood is replicated gameplay state"), Demon->Mood, EMannequinMood::Neutral);
+		TestEqual(TEXT("Neutral occupies Past"), Demon->MannequinTimeline, EItemTimeline::Past);
+		TestEqual(TEXT("Past capsule uses Past channel"),
+			Demon->GetCapsuleComponent()->GetCollisionObjectType(), COLLISION_CHANNEL_PAWN_PAST);
+		TestTrue(TEXT("Neutral to Sad changes dimension again"), Demon->ForceMoodForTesting(EMannequinMood::Sad));
+		TestEqual(TEXT("Returned Sad occupies Future"), Demon->MannequinTimeline, EItemTimeline::Future);
+		Demon->bDebugEnabled = false;
 		Demon->State = EMannequinState::Observing;
 		Demon->ProcessEvent(StateRepFunction, nullptr);
 		TestFalse(TEXT("Observed mannequin has no viewer in this world"), Demon->GetMesh()->IsVisible());
@@ -103,8 +129,8 @@ bool FMannequinContractTest::RunTest(const FString& Parameters)
 				Demon->ProcessEvent(Demon->FindFunctionChecked(TEXT("OnRep_Targets")), nullptr);
 				TestTrue(TEXT("Future viewer sees physical mesh while dormant"),
 					Demon->GetMesh()->IsVisible());
-				TestFalse(TEXT("Future viewer does not see spectral mesh"),
-					Demon->MonocleVisual->IsVisible());
+				TestFalse(TEXT("Future uses the main render pass"),
+					Demon->GetMesh()->bVisibleInSceneCaptureOnly != 0);
 				Demon->State = EMannequinState::Spawned;
 				Demon->ProcessEvent(StateRepFunction, nullptr);
 				TestTrue(TEXT("Future viewer sees active physical mesh"),
@@ -117,10 +143,8 @@ bool FMannequinContractTest::RunTest(const FString& Parameters)
 				TestFalse(TEXT("Past player cannot become physical target"), Demon->ForceTarget(Viewer));
 				TestEqual(TEXT("Target rejection cannot swap the mannequin timeline"),
 					Demon->MannequinTimeline, EItemTimeline::Future);
-				TestFalse(TEXT("Without held monocle spectral mesh is hidden"),
-					Demon->MonocleVisual->IsVisible());
-				TestTrue(TEXT("Spectral mesh is capture-only"),
-					Demon->MonocleVisual->bVisibleInSceneCaptureOnly != 0);
+				TestFalse(TEXT("Without held monocle the single mesh is hidden"),
+					Demon->GetMesh()->IsVisible());
 			}
 		}
 	}
@@ -148,10 +172,10 @@ bool FMannequinContractTest::RunTest(const FString& Parameters)
 			if (TestEqual(TEXT("Viewer legitimately holds authored monocle"), Viewer->GetHeldItem(), Monocle))
 			{
 				Demon->ProcessEvent(Demon->FindFunctionChecked(TEXT("OnRep_Targets")), nullptr);
-				TestFalse(TEXT("Opposite-timeline physical mesh stays hidden with monocle"),
+				TestTrue(TEXT("Held monocle enables the only mesh"),
 					Demon->GetMesh()->IsVisible());
-				TestTrue(TEXT("Held monocle enables capture-only spectral mesh"),
-					Demon->MonocleVisual->IsVisible());
+				TestTrue(TEXT("Past presentation uses capture-only rendering"),
+					Demon->GetMesh()->bVisibleInSceneCaptureOnly != 0);
 				UClass* PlayerClass = Viewer->GetClass();
 				AHronoCharacter* FuturePlayer = World->SpawnActor<AHronoCharacter>(PlayerClass,
 					FVector(0, -300, 150), FRotator(0, 90, 0), Params);
@@ -189,6 +213,7 @@ bool FMannequinContractTest::RunTest(const FString& Parameters)
 						FVector(0, 150, 150), FRotator::ZeroRotator, Params);
 					if (TestNotNull(TEXT("Sight blocker exists"), Wall))
 					{
+						Wall->GetStaticMeshComponent()->SetMobility(EComponentMobility::Movable);
 						Wall->GetStaticMeshComponent()->SetStaticMesh(LoadObject<UStaticMesh>(nullptr,
 							TEXT("/Engine/BasicShapes/Cube.Cube")));
 						Wall->SetActorScale3D(FVector(0.2f, 2.0f, 2.0f));
@@ -201,8 +226,8 @@ bool FMannequinContractTest::RunTest(const FString& Parameters)
 				}
 				Viewer->ProcessEvent(Viewer->FindFunctionChecked(TEXT("ServerDropCurrentItem")), nullptr);
 				Demon->ProcessEvent(Demon->FindFunctionChecked(TEXT("OnRep_Targets")), nullptr);
-				TestFalse(TEXT("Dropping monocle disables spectral mesh"),
-					Demon->MonocleVisual->IsVisible());
+				TestFalse(TEXT("Dropping monocle hides the single mesh"),
+					Demon->GetMesh()->IsVisible());
 			}
 		}
 	}
@@ -214,9 +239,52 @@ bool FMannequinContractTest::RunTest(const FString& Parameters)
 			AuthoredMannequinClass, FVector(400, 0, 150), FRotator::ZeroRotator, Params);
 		if (TestNotNull(TEXT("Authored mannequin spawns"), AuthoredDemon))
 		{
-			TestTrue(TEXT("Capture-only model aligns with authored physical model"),
-				AuthoredDemon->MonocleVisual->GetRelativeTransform().Equals(
-					AuthoredDemon->GetMesh()->GetRelativeTransform(), 0.1f));
+			TArray<USkeletalMeshComponent*> SkeletalMeshes;
+			AuthoredDemon->GetComponents(SkeletalMeshes);
+			TestEqual(TEXT("Authored Mannequin has exactly one skeletal mesh"), SkeletalMeshes.Num(), 1);
+			TestNotNull(TEXT("Single mesh preserves the authored model"),
+				AuthoredDemon->GetMesh()->GetSkeletalMeshAsset());
+			TestEqual(TEXT("Authored mask follows configured head bone"),
+				AuthoredDemon->MaskComponent->GetAttachSocketName(), AuthoredDemon->MaskSocketName);
+			TestEqual(TEXT("Authored capsule ignores Base_Item after Blueprint defaults"),
+				AuthoredDemon->GetCapsuleComponent()->GetCollisionResponseToChannel(COLLISION_CHANNEL_ITEM),
+				ECR_Ignore);
+			TestEqual(TEXT("Authored mesh ignores Base_Item after Blueprint defaults"),
+				AuthoredDemon->GetMesh()->GetCollisionResponseToChannel(COLLISION_CHANNEL_ITEM),
+				ECR_Ignore);
+		}
+	}
+	if (Demon)
+	{
+		Demon->State = EMannequinState::Spawned;
+		Demon->ProcessEvent(Demon->FindFunctionChecked(TEXT("OnRep_State")), nullptr);
+		Demon->bDebugEnabled = true;
+		ABase_Item* Prop = World->SpawnActor<ABase_Item>(ABase_Item::StaticClass(),
+			Demon->GetActorLocation() + FVector(50, 0, 0), FRotator::ZeroRotator, Params);
+		if (TestNotNull(TEXT("Offer prop exists"), Prop))
+		{
+			TestFalse(TEXT("Unlisted prop is not eligible"), Demon->IsMoodItemAllowed(Prop));
+			Demon->AllowedPickupActors.Add(Prop);
+			TestTrue(TEXT("Exact actor allowlist accepts selected prop"), Demon->IsMoodItemAllowed(Prop));
+			Demon->AllowedPickupActors.Reset();
+			Demon->AllowedPickupClasses.Add(ABase_Item::StaticClass());
+			TestTrue(TEXT("Class allowlist accepts matching item"), Demon->IsMoodItemAllowed(Prop));
+			Prop->ItemMesh->SetStaticMesh(LoadObject<UStaticMesh>(nullptr,
+				TEXT("/Engine/BasicShapes/Cube.Cube")));
+			TestTrue(TEXT("Sad mannequin carries a free Base_Item"),
+				Prop->TryCarryByMannequin(Demon, Demon->ItemHandPoint));
+			TestEqual(TEXT("AI carry does not claim player inventory"), Prop->OwningCharacter,
+				static_cast<AHronoCharacter*>(nullptr));
+			Demon->CarriedItem = Prop;
+			TestTrue(TEXT("Pickup changes Sad to Neutral"),
+				Demon->ForceMoodForTesting(EMannequinMood::Neutral));
+			TestEqual(TEXT("Carried prop follows Neutral to Past"), Prop->ItemTimeline, EItemTimeline::Past);
+			TestTrue(TEXT("Timeout changes Neutral to Happy"),
+				Demon->ForceMoodForTesting(EMannequinMood::Happy));
+			TestNull(TEXT("Happy drops the prop"), Prop->MannequinCarrier.Get());
+			TestNull(TEXT("Mannequin releases the prop reference"), Demon->CarriedItem.Get());
+			TestTrue(TEXT("Dropped prop is again a world actor"), Prop->GetAttachParentActor() != Demon);
+			TestEqual(TEXT("Thrown prop follows Happy to Future"), Prop->ItemTimeline, EItemTimeline::Future);
 		}
 	}
 	World->EndPlay(EEndPlayReason::Quit);
