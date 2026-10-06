@@ -11,6 +11,7 @@ actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem).get_all_level_
 pentagrams = [a for a in actors if isinstance(a, unreal.RunePentagram)]
 transfers = [a for a in actors if isinstance(a, unreal.TimelineTransferItem)]
 managers = [a for a in actors if isinstance(a, unreal.RuneSpawnManager)]
+door_gates = [a for a in actors if isinstance(a, unreal.DoorLockTrigger)]
 issues = []
 records = []
 
@@ -54,9 +55,26 @@ for actor in managers:
                     'spawn_points': len(points), 'runes_to_spawn': target,
                     'unique_points': unique})
 
+for actor in door_gates:
+    if not actor.get_editor_property('lock_until_all_players_present'):
+        continue
+    # The entrance gate is a session-admission lock, never a death/scare trigger.
+    # Its Blueprint On Triggered event routes Is DeathTrigger into OnBackToRitual.
+    try:
+        death_trigger = bool(actor.get_editor_property('Is DeathTrigger'))
+    except Exception:
+        issues.append(f'{actor.get_actor_label()}: cannot inspect session-gate death flag')
+        continue
+    if death_trigger:
+        issues.append(f'{actor.get_actor_label()}: session entrance gate enables death scare')
+    records.append({'actor': actor.get_actor_label(), 'kind': 'session_entrance_gate',
+                    'death_trigger': death_trigger,
+                    'doors': [door.get_name() for door in actor.get_editor_property('doors') if door]})
+
 report = {'map': '/Game/_Alex/DemoMap1', 'actor_count': len(actors),
           'pentagrams': len(pentagrams), 'transfers': len(transfers),
-          'rune_spawn_managers': len(managers), 'records': records, 'issues': issues,
+          'rune_spawn_managers': len(managers), 'door_gates': len(door_gates),
+          'records': records, 'issues': issues,
           'scope': 'Placed actor data only; no PIE, runtime spawn or cook.'}
 out = Path(unreal.Paths.project_saved_dir())/'Tests/Optimization/map_validation.json'
 out.parent.mkdir(parents=True, exist_ok=True)

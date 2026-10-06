@@ -377,6 +377,30 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Timeline|Mirror")
 	float GetMirrorAmount() const { return MirrorAmount; }
 
+	/** Local visual-only preview. Does not request or change a timeline. */
+	UFUNCTION(BlueprintCallable, Category = "Timeline|Emboss Preview")
+	void PlayEmbossPreview();
+
+	/** Material instance used for the local camera's transition preview. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Timeline|Emboss Preview")
+	TObjectPtr<UMaterialInterface> EmbossPostProcessMaterial;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Timeline|Emboss Preview")
+	FName EmbossIntensityParameterName = TEXT("Emboss Intensity");
+
+	/** Seconds from pressing 1 until the effect reaches maximum strength. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Timeline|Emboss Preview",
+		meta = (ClampMin = "0.01", Units = "s"))
+	float EmbossRiseSeconds = 1.25f;
+
+	/** Total time from pressing 1 until the effect snaps back to zero. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Timeline|Emboss Preview",
+		meta = (ClampMin = "0.01", Units = "s"))
+	float EmbossPreviewSeconds = 1.5f;
+
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Timeline|Emboss Preview")
+	float EmbossCurrentIntensity = 0.0f;
+
 	/** Horizontal scale for screen-relative interactions: -1 while mirrored, otherwise +1. */
 	UFUNCTION(BlueprintPure, Category = "Timeline|Mirror|Input")
 	float GetMirroredHorizontalInputScale() const;
@@ -531,11 +555,21 @@ protected:
 	UFUNCTION(Client, Reliable)
 	void ClientApplyTimelineMirror(EItemTimeline NewTimeline);
 
+	/** One-shot only for a completed server timeline transition. */
+	UFUNCTION(Client, Reliable)
+	void ClientPlayTimelineEmboss();
+
 	void ApplyTimelineCollision();
 	bool ApplyPlayerTimelineOnAuthority(EItemTimeline NewTimeline);
 	void MoveCarriedItemsToTimeline(EItemTimeline NewTimeline);
 	void RefreshHeldItemsInteractionPoint();
 	bool EnsureMirrorPostProcessInstance();
+	bool EnsureEmbossPostProcessInstance();
+	void UpdateEmbossPreview(float DeltaTime);
+	void UpdateDoorEmboss(float DeltaTime);
+	void RefreshEmbossIntensity();
+	void ResetEmbossPreview();
+	void SetEmbossPreviewIntensity(float NewIntensity);
 
 	/** Replicated mirror state kept in sync with CharacterTimeline: Past=true, Future=false. */
 	UPROPERTY(ReplicatedUsing = OnRep_TimelineMirrorRequested)
@@ -557,6 +591,16 @@ protected:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UMaterialInstanceDynamic> MirrorPostProcessInstance;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInstanceDynamic> EmbossPostProcessInstance;
+	FTimerHandle EmbossPreviewResetTimer;
+	float EmbossRiseStartIntensity = 0.0f;
+	float EmbossRiseElapsedSeconds = 0.0f;
+	float EmbossPulseIntensity = 0.0f;
+	float EmbossDoorIntensity = 0.0f;
+	float EmbossDoorScanElapsedSeconds = 0.0f;
+	bool bEmbossRising = false;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UHronoFpsWidget> FpsCounterWidget;

@@ -249,6 +249,9 @@ AHronoCharacter::AHronoCharacter()
 	NativeSurfaceFootstepFallbacks.Add(SurfaceType5, CarpetStep.Object);
 	MovementSoundAttenuation = GeneralAttenuation.Object;
 	TutorialGameStageText = NSLOCTEXT("HronoTutorial", "CharacterDefaultStage", "STAGE  •  INVESTIGATION");
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> EmbossMaterial(
+		TEXT("/Game/Bodycam_VHS_Effect/Materials/Instances/PostProcess/MI_Emboss.MI_Emboss"));
+	EmbossPostProcessMaterial = EmbossMaterial.Object;
 
 	// Set size for collision capsule
 	GetCapsuleComponent()->InitCapsuleSize(55.f, 96.0f);
@@ -436,6 +439,11 @@ void AHronoCharacter::ClientApplyTimelineMirror_Implementation(EItemTimeline New
 	SetMirroredViewEnabled(NewTimeline == EItemTimeline::Past);
 }
 
+void AHronoCharacter::ClientPlayTimelineEmboss_Implementation()
+{
+	PlayEmbossPreview();
+}
+
 bool AHronoCharacter::ApplyPlayerTimelineOnAuthority(EItemTimeline NewTimeline)
 {
 	if (!HasAuthority() || bApplyingTimelineTransition || (NewTimeline != EItemTimeline::Past && NewTimeline != EItemTimeline::Future))
@@ -469,6 +477,9 @@ bool AHronoCharacter::ApplyPlayerTimelineOnAuthority(EItemTimeline NewTimeline)
 	OnRep_TimelineMirrorRequested();
 	ClientApplyTimelineMirror(NewTimeline);
 	RefreshTimelineVisibilityForLocalPlayer();
+	// The replicated timeline is persistent state, not a one-shot visual event.
+	if (IsLocallyControlled()) PlayEmbossPreview();
+	else ClientPlayTimelineEmboss();
 
 	if (PreviousTimeline != CharacterTimeline)
 	{
@@ -728,6 +739,97 @@ bool AHronoCharacter::EnsureMirrorPostProcessInstance()
 	return true;
 }
 
+bool AHronoCharacter::EnsureEmbossPostProcessInstance()
+{
+	if (!IsLocallyControlled() || !IsValid(FirstPersonCameraComponent)
+		|| !IsValid(EmbossPostProcessMaterial)) return false;
+
+	if (!EmbossPostProcessInstance)
+	{
+		EmbossPostProcessInstance = UMaterialInstanceDynamic::Create(
+			EmbossPostProcessMaterial, this, TEXT("EmbossPostProcessInstance"));
+		if (!EmbossPostProcessInstance) return false;
+		EmbossCurrentIntensity = 0.0f;
+		EmbossPostProcessInstance->SetScalarParameterValue(EmbossIntensityParameterName, 0.0f);
+	}
+
+	// The Blueprint camera already contains MI_Emboss. Replace that pass instead
+	// of rendering the constant instance and the local dynamic instance twice.
+	FirstPersonCameraComponent->RemoveBlendable(EmbossPostProcessMaterial);
+	FirstPersonCameraComponent->AddOrUpdateBlendable(EmbossPostProcessInstance, 1.0f);
+	return true;
+}
+
+void AHronoCharacter::SetEmbossPreviewIntensity(float NewIntensity)
+{
+	EmbossCurrentIntensity = FMath::Max(0.0f, NewIntensity);
+	if (EmbossPostProcessInstance)
+		EmbossPostProcessInstance->SetScalarParameterValue(
+			EmbossIntensityParameterName, EmbossCurrentIntensity);
+}
+
+void AHronoCharacter::RefreshEmbossIntensity()
+{
+	SetEmbossPreviewIntensity(FMath::Max(EmbossPulseIntensity, EmbossDoorIntensity));
+}
+
+void AHronoCharacter::PlayEmbossPreview()
+{
+	if (!EnsureEmbossPostProcessInstance() || !GetWorld()) return;
+
+	GetWorldTimerManager().ClearTimer(EmbossPreviewResetTimer);
+	EmbossRiseStartIntensity = EmbossPulseIntensity;
+	EmbossRiseElapsedSeconds = 0.0f;
+	bEmbossRising = true;
+	GetWorldTimerManager().SetTimer(EmbossPreviewResetTimer, this,
+		&AHronoCharacter::ResetEmbossPreview, FMath::Max(0.01f, EmbossPreviewSeconds), false);
+	UE_LOG(LogHrono, Log, TEXT("[EmbossPreview] %s started; rise=%.2fs duration=%.2fs"),
+		*GetNameSafe(this), EmbossRiseSeconds, EmbossPreviewSeconds);
+}
+
+void AHronoCharacter::UpdateEmbossPreview(float DeltaTime)
+{
+	if (!bEmbossRising) return;
+	const float RiseDuration = FMath::Max(0.01f,
+		FMath::Min(EmbossRiseSeconds, EmbossPreviewSeconds));
+	EmbossRiseElapsedSeconds += FMath::Max(0.0f, DeltaTime);
+	const float Alpha = FMath::Clamp(EmbossRiseElapsedSeconds / RiseDuration, 0.0f, 1.0f);
+	EmbossPulseIntensity = FMath::InterpEaseInOut(
+		EmbossRiseStartIntensity, 100.0f, Alpha, 2.0f);
+	RefreshEmbossIntensity();
+	if (Alpha >= 1.0f) bEmbossRising = false;
+}
+
+void AHronoCharacter::UpdateDoorEmboss(float DeltaTime)
+{
+	if (!GetWorld() || !IsValid(FirstPersonCameraComponent)) return;
+	EmbossDoorScanElapsedSeconds += FMath::Max(0.0f, DeltaTime);
+	if (EmbossDoorScanElapsedSeconds < 0.05f) return;
+	EmbossDoorScanElapsedSeconds = 0.0f;
+
+	float NewIntensity = 0.0f;
+	const FVector ViewerLocation = FirstPersonCameraComponent->GetComponentLocation();
+	for (TActorIterator<ADrag_Item> It(GetWorld()); It; ++It)
+	{
+		if (!IsValid(*It)) continue;
+		NewIntensity = FMath::Max(NewIntensity, It->GetEmbossIntensityAtLocation(ViewerLocation));
+	}
+	if (!FMath::IsNearlyEqual(NewIntensity, EmbossDoorIntensity))
+	{
+		EmbossDoorIntensity = NewIntensity;
+		RefreshEmbossIntensity();
+	}
+}
+
+void AHronoCharacter::ResetEmbossPreview()
+{
+	bEmbossRising = false;
+	EmbossRiseElapsedSeconds = 0.0f;
+	EmbossPulseIntensity = 0.0f;
+	RefreshEmbossIntensity();
+	UE_LOG(LogHrono, Log, TEXT("[EmbossPreview] %s reset to zero"), *GetNameSafe(this));
+}
+
 void AHronoCharacter::SetMirroredViewEnabled(bool bEnabled)
 {
 	SetMirrorAmount(bEnabled ? 1.0f : 0.0f);
@@ -877,6 +979,7 @@ void AHronoCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
 		EKeys::Tab, IE_Pressed, this, &AHronoCharacter::ToggleTutorialMenu);
 	TutorialBinding.bExecuteWhenPaused = true;
 	PlayerInputComponent->BindKey(EKeys::L, IE_Pressed, this, &AHronoCharacter::ToggleMannequinDebug);
+	PlayerInputComponent->BindKey(EKeys::One, IE_Pressed, this, &AHronoCharacter::PlayEmbossPreview);
 }
 
 void AHronoCharacter::ToggleMannequinDebug()
@@ -960,6 +1063,7 @@ void AHronoCharacter::BeginPlay()
 	// Past always renders as the mirror world, including the initial spawn.
 	bTimelineMirrorRequested = CharacterTimeline == EItemTimeline::Past;
 	OnRep_TimelineMirrorRequested();
+	EnsureEmbossPostProcessInstance();
 	RefreshTimelineVisibilityForLocalPlayer();
 	ApplySprintMovementSpeed();
 	LoadLocalPlayerSettings();
@@ -977,6 +1081,7 @@ void AHronoCharacter::PawnClientRestart()
 	// Possession can become local after BeginPlay. Reapply the local-only camera
 	// material here so an initially Past client is always mirrored.
 	ApplyMirrorFromCharacterTimeline();
+	EnsureEmbossPostProcessInstance();
 	RefreshHeldItemsInteractionPoint();
 	RefreshTimelineVisibilityForLocalPlayer();
 	LoadLocalPlayerSettings();
@@ -987,6 +1092,13 @@ void AHronoCharacter::PawnClientRestart()
 
 void AHronoCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	GetWorldTimerManager().ClearTimer(EmbossPreviewResetTimer);
+	bEmbossRising = false;
+	EmbossPulseIntensity = 0.0f;
+	EmbossDoorIntensity = 0.0f;
+	SetEmbossPreviewIntensity(0.0f);
+	if (IsValid(FirstPersonCameraComponent) && EmbossPostProcessInstance)
+		FirstPersonCameraComponent->RemoveBlendable(EmbossPostProcessInstance);
 	for (const TWeakObjectPtr<AHidingWardrobe>& Source : WardrobeSafetySources)
 		if (Source.IsValid()) Source->OnDestroyed.RemoveDynamic(this, &AHronoCharacter::OnWardrobeSafetySourceDestroyed);
 	WardrobeSafetySources.Empty();
@@ -1040,6 +1152,8 @@ void AHronoCharacter::Tick(float DeltaTime)
 
 	if (IsLocallyControlled())
 	{
+		UpdateEmbossPreview(DeltaTime);
+		UpdateDoorEmboss(DeltaTime);
 		UpdateInteractionHighlight();
 		UpdateRitualChairGuidance(DeltaTime);
 		UpdateTutorialPaintingLook(DeltaTime);
