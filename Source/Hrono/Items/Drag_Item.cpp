@@ -55,6 +55,17 @@ ADrag_Item::ADrag_Item()
 	MoveAudioComponent->bStopWhenOwnerDestroyed = true;
 }
 
+float ADrag_Item::GetEmbossIntensityAtLocation(FVector ViewerLocation) const
+{
+	if (!bEnableEmbossProximity || EmbossMaxIntensity <= 0.0f) return 0.0f;
+	const FVector Center = GetActorTransform().TransformPosition(EmbossCenterOffset);
+	const float InnerRadius = FMath::Max(0.0f, EmbossInnerRadius);
+	const float OuterRadius = FMath::Max(InnerRadius + 1.0f, EmbossOuterRadius);
+	const float Distance = FVector::Dist(ViewerLocation, Center);
+	const float Strength = FMath::Clamp((OuterRadius - Distance) / (OuterRadius - InnerRadius), 0.0f, 1.0f);
+	return EmbossMaxIntensity * Strength;
+}
+
 void ADrag_Item::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);

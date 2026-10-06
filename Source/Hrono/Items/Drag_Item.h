@@ -62,6 +62,27 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Components")
 	UStaticMeshComponent* FrameMesh;
 
+	/** Local visual cue at this doorway. Evaluated by each player's own camera. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Door|Emboss")
+	bool bEnableEmbossProximity = false;
+
+	/** Offset from the actor origin to the center of the effect (cm). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Door|Emboss", meta = (EditCondition = "bEnableEmbossProximity"))
+	FVector EmbossCenterOffset = FVector::ZeroVector;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Door|Emboss", meta = (EditCondition = "bEnableEmbossProximity", ClampMin = "0.0", Units = "cm"))
+	float EmbossInnerRadius = 100.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Door|Emboss", meta = (EditCondition = "bEnableEmbossProximity", ClampMin = "1.0", Units = "cm"))
+	float EmbossOuterRadius = 500.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Door|Emboss", meta = (EditCondition = "bEnableEmbossProximity", ClampMin = "0.0"))
+	float EmbossMaxIntensity = 50.0f;
+
+	/** Returns only a local post-process intensity; never changes the player's timeline. */
+	UFUNCTION(BlueprintPure, Category = "Door|Emboss")
+	float GetEmbossIntensityAtLocation(FVector ViewerLocation) const;
+
 	/*UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Components")
 	UStaticMeshComponent* DoorMesh;*/
 
