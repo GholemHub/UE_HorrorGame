@@ -9,6 +9,12 @@
 #include "Items/ThreeDrawerCabinet.h"
 #include "Components/HeldItemInertiaComponent.h"
 #include "Components/RitualCandleComponent.h"
+#include "Ritual/RitualCandleActor.h"
+#include "Ritual/TableRitualManager.h"
+#include "Enviroment/OuijaBoard.h"
+#include "Items/Chair.h"
+#include "Items/RitualBottle.h"
+#include "Ritual/TableRitualGate.h"
 #include "Items/RunePentagram.h"
 #include "Camera/CameraComponent.h"
 #include "HronoCollisionChannels.h"
@@ -22,6 +28,7 @@
 #include "Components/CapsuleComponent.h"
 #include "Particles/ParticleSystemComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "GameFramework/PlayerController.h"
 #include "Tests/WardrobeSafetyTestObserver.h"
 #include "Engine/Engine.h"
 #include "Engine/StaticMesh.h"
@@ -152,21 +159,25 @@ bool FRitualCandleStateTest::RunTest(const FString& Parameters)
 {
 	using namespace ItemWorldTests;
 	FWorldScope Scope;
-	UClass* CandleClass = LoadClass<AActor>(nullptr,
+	UClass* CandleClass = LoadClass<ARitualCandleActor>(nullptr,
 		TEXT("/Game/_Alex/Pickable/BP_Item_Candle.BP_Item_Candle_C"));
 	if (!TestNotNull(TEXT("Ritual candle Blueprint"), CandleClass))
 	{
 		return false;
 	}
-	AActor* Candle = Scope.World->SpawnActor<AActor>(CandleClass);
-	URitualCandleComponent* State = IsValid(Candle)
-		? Candle->FindComponentByClass<URitualCandleComponent>() : nullptr;
+	ARitualCandleActor* Candle = Scope.World->SpawnActor<ARitualCandleActor>(CandleClass);
+	URitualCandleComponent* State = IsValid(Candle) ? Candle->RitualCandle : nullptr;
 	if (!TestNotNull(TEXT("Replicated ritual candle state component"), State))
 	{
 		return false;
 	}
 	TestTrue(TEXT("Candle actor replicates"), Candle->GetIsReplicated());
 	TestTrue(TEXT("Candle component replicates"), State->GetIsReplicated());
+	TArray<URitualCandleComponent*> StateComponents;
+	Candle->GetComponents<URitualCandleComponent>(StateComponents);
+	TestEqual(TEXT("Exactly one native ritual candle component"), StateComponents.Num(), 1);
+	TestTrue(TEXT("Native actor owns the replicated component"),
+		StateComponents.Num() == 1 && StateComponents[0] == State);
 	TestEqual(TEXT("Candle starts unlit"), State->GetLitMask(), uint8(0));
 	if (!TestEqual(TEXT("Three configured candle flames"), State->FlameComponentNames.Num(), 3))
 	{
@@ -192,7 +203,7 @@ bool FRitualCandleStateTest::RunTest(const FString& Parameters)
 		return nullptr;
 	};
 
-	URitualCandleComponent::StartLightingForActor(Candle);
+	Candle->StartRitualLighting();
 	{
 		TGuardValue<uint64> RestoreFrameCounter(GFrameCounter, GFrameCounter);
 		++GFrameCounter;
@@ -219,7 +230,7 @@ bool FRitualCandleStateTest::RunTest(const FString& Parameters)
 			}
 		}
 	}
-	URitualCandleComponent::ReportMistakeForActor(Candle);
+	Candle->ReportRitualMistake();
 	TestEqual(TEXT("First mistake extinguishes first flame"), State->GetLitMask(), uint8(6));
 	TestEqual(TEXT("First candle body hides as in the authored Blueprint"),
 		State->GetHiddenBodyMask(), uint8(1));
@@ -227,12 +238,175 @@ bool FRitualCandleStateTest::RunTest(const FString& Parameters)
 	{
 		TestFalse(TEXT("First candle body is hidden"), FirstFlame->GetAttachParent()->IsVisible());
 	}
-	URitualCandleComponent::ReportMistakeForActor(Candle);
+	Candle->ReportRitualMistake();
 	TestEqual(TEXT("Second mistake extinguishes second flame"), State->GetLitMask(), uint8(4));
 	TestEqual(TEXT("Second candle body hides"), State->GetHiddenBodyMask(), uint8(3));
-	URitualCandleComponent::ReportMistakeForActor(Candle);
+	Candle->ReportRitualMistake();
 	TestEqual(TEXT("Third mistake extinguishes all flames"), State->GetLitMask(), uint8(0));
 	TestEqual(TEXT("All candle bodies hide"), State->GetHiddenBodyMask(), uint8(7));
+	Candle->ReportRitualMistake();
+	TestEqual(TEXT("Extra mistake cannot corrupt the completed state"),
+		State->GetHiddenBodyMask(), uint8(7));
+	Candle->StartRitualLighting();
+	TestEqual(TEXT("Restart clears old flame state"), State->GetLitMask(), uint8(0));
+	TestEqual(TEXT("Restart restores candle bodies"), State->GetHiddenBodyMask(), uint8(0));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTableRitualStateTest,
+	"Hrono.Items.TableRitualState", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FTableRitualStateTest::RunTest(const FString& Parameters)
+{
+	using namespace ItemWorldTests;
+	FWorldScope Scope;
+	UClass* ManagerClass = LoadClass<ATableRitualManager>(nullptr,
+		TEXT("/Game/_Alex/Room/BP_TableRitualManager.BP_TableRitualManager_C"));
+	if (!TestNotNull(TEXT("Native table manager Blueprint"), ManagerClass)) return false;
+
+	AOuijaBoard* Board = Scope.World->SpawnActor<AOuijaBoard>();
+	AChair* Sliding = Spawn<AChair>(Scope.World);
+	if (!TestNotNull(TEXT("Ouija board"), Board)
+		|| !TestNotNull(TEXT("Sliding chair test actor"), Sliding)) return false;
+
+	const FTransform Pose(FVector(0.0f, 0.0f, 200.0f));
+	ATableRitualManager* Manager = Scope.World->SpawnActorDeferred<ATableRitualManager>(
+		ManagerClass, Pose);
+	if (!TestNotNull(TEXT("Table manager"), Manager)) return false;
+	Manager->OuijaBoard = Board;
+	Manager->SlidingChair = Sliding;
+	Manager->FinishSpawning(Pose);
+	TestTrue(TEXT("Manager replicates its snapshot"), Manager->GetIsReplicated());
+	TestTrue(TEXT("Manager stays relevant for late join"), Manager->bAlwaysRelevant);
+	TestTrue(TEXT("Board starts hidden before a victim is chosen"), Board->IsHidden());
+	TestFalse(TEXT("Cannot start without two seated players and dependencies"),
+		Manager->TryStartTableRitual());
+	TestEqual(TEXT("Rejected start leaves attempts unchanged"),
+		Manager->RitualState.AttemptsRemaining, 3);
+	TestEqual(TEXT("Rejected start leaves phase idle"),
+		Manager->RitualState.Phase, ETableRitualPhase::Idle);
+	TestFalse(TEXT("Only the chosen victim can finish an attempt"),
+		Manager->CompleteVictimReturn(nullptr));
+
+	Manager->RitualState.bBoardVisible = true;
+	Manager->RitualState.BoardYaw = 180.0f;
+	Manager->RitualState.ChairSlideDuration = 1.0f;
+	Manager->RitualState.ChairTarget = FVector(250.0f, -80.0f, 500.0f);
+	Manager->RitualState.Phase = ETableRitualPhase::Exhausted;
+	UFunction* RepNotify = Manager->FindFunction(TEXT("OnRep_RitualState"));
+	if (!TestNotNull(TEXT("Table snapshot rep-notify"), RepNotify)) return false;
+	Manager->ProcessEvent(RepNotify, nullptr);
+	TestFalse(TEXT("Late snapshot reveals the board"), Board->IsHidden());
+	TestTrue(TEXT("Late snapshot restores chosen board orientation"),
+		FMath::IsNearlyEqual(Board->GetActorRotation().Yaw, 180.0f));
+	TestTrue(TEXT("Late snapshot restores final sliding chair pose"),
+		Sliding->GetActorLocation().Equals(Manager->RitualState.ChairTarget));
+
+	Sliding->SetRitualStarted(true);
+	TestTrue(TEXT("A ritual chair becomes replicated"), Sliding->GetIsReplicated());
+	TestTrue(TEXT("Its ritual state is server-owned"), Sliding->IsRitualStarted);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTableRitualFlowTest,
+	"Hrono.Items.TableRitualFlow", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FTableRitualFlowTest::RunTest(const FString& Parameters)
+{
+	using namespace ItemWorldTests;
+	FWorldScope Scope;
+	AChair* ChairA = Spawn<AChair>(Scope.World);
+	AChair* ChairB = Spawn<AChair>(Scope.World);
+	AChair* Sliding = Spawn<AChair>(Scope.World);
+	AChair* RitualPoint = Spawn<AChair>(Scope.World);
+	AOuijaBoard* Board = Scope.World->SpawnActor<AOuijaBoard>();
+	ARitualBottle* Bottle = Scope.World->SpawnActor<ARitualBottle>();
+	ARitualCandleActor* Candle = Scope.World->SpawnActor<ARitualCandleActor>();
+	FActorSpawnParameters Params;
+	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	UClass* CharacterClass = LoadClass<AHronoCharacter>(nullptr,
+		TEXT("/Game/_Alex/HE_CharacterHrono1.HE_CharacterHrono1_C"));
+	if (!TestNotNull(TEXT("Playable character class"), CharacterClass)) return false;
+	AHronoCharacter* PlayerA = Scope.World->SpawnActor<AHronoCharacter>(
+		CharacterClass, FVector(0.0f, 0.0f, 200.0f), FRotator::ZeroRotator, Params);
+	AHronoCharacter* PlayerB = Scope.World->SpawnActor<AHronoCharacter>(
+		CharacterClass, FVector(200.0f, 0.0f, 200.0f), FRotator::ZeroRotator, Params);
+	APlayerController* ControllerA = Scope.World->SpawnActor<APlayerController>(
+		APlayerController::StaticClass(), FVector(400.0f, 0.0f, 200.0f), FRotator::ZeroRotator, Params);
+	APlayerController* ControllerB = Scope.World->SpawnActor<APlayerController>(
+		APlayerController::StaticClass(), FVector(600.0f, 0.0f, 200.0f), FRotator::ZeroRotator, Params);
+	if (!TestNotNull(TEXT("Table chair A"), ChairA)
+		|| !TestNotNull(TEXT("Table chair B"), ChairB)
+		|| !TestNotNull(TEXT("Bottle"), Bottle)
+		|| !TestNotNull(TEXT("Candle"), Candle)
+		|| !TestNotNull(TEXT("Two characters"), PlayerA)
+		|| !TestNotNull(TEXT("Second character"), PlayerB)
+		|| !TestNotNull(TEXT("Two controllers"), ControllerA)
+		|| !TestNotNull(TEXT("Second controller"), ControllerB)) return false;
+	ControllerA->Possess(PlayerA);
+	ControllerB->Possess(PlayerB);
+	Bottle->SpinDuration = 0.2f;
+	const FTransform Pose(FVector(0.0f, 0.0f, 200.0f));
+	ATableRitualManager* Manager = Scope.World->SpawnActorDeferred<ATableRitualManager>(
+		ATableRitualManager::StaticClass(), Pose);
+	if (!TestNotNull(TEXT("Server table manager"), Manager)) return false;
+	Manager->TableChairA = ChairA;
+	Manager->TableChairB = ChairB;
+	Manager->SlidingChair = Sliding;
+	Manager->RitualBottle = Bottle;
+	Manager->RitualCandle = Candle;
+	Manager->OuijaBoard = Board;
+	Manager->VictimRitualPoint = RitualPoint;
+	Manager->ChairSlideDuration = 0.1f;
+	Manager->FinishSpawning(Pose);
+
+	UClass* ImageClass = LoadClass<ABase_Item>(nullptr,
+		TEXT("/Game/_Alex/Paints/BP_CursedImage_Item.BP_CursedImage_Item_C"));
+	if (!TestNotNull(TEXT("Cursed image unlock asset"), ImageClass)) return false;
+	ABase_Item* Image = Scope.World->SpawnActor<ABase_Item>(ImageClass);
+	if (!TestNotNull(TEXT("Cursed image"), Image)) return false;
+	Image->OwningCharacter = PlayerA;
+	Image->bIsPickedUp = true;
+	TableRitualGate::NotifySuccessfulPickup(*Image, *PlayerA);
+	TestTrue(TEXT("Pickup unlocks configured table chairs"),
+		ChairA->IsRitualGuidanceUnlocked() && ChairB->IsRitualGuidanceUnlocked());
+	TestFalse(TEXT("One player cannot start the table ritual"), Manager->TryStartTableRitual());
+	if (!TestTrue(TEXT("First player sits"), PlayerA->ForceSitOnChair(ChairA))) return false;
+	TestEqual(TEXT("Still idle with only one sitter"),
+		Manager->RitualState.Phase, ETableRitualPhase::Idle);
+	if (!TestTrue(TEXT("Second player sits"), PlayerB->ForceSitOnChair(ChairB))) return false;
+	TestEqual(TEXT("Server starts exactly one ritual sequence"),
+		Manager->RitualState.Phase, ETableRitualPhase::Preparing);
+	TestFalse(TEXT("Duplicate start is rejected"), Manager->TryStartTableRitual());
+
+	TGuardValue<uint64> RestoreFrameCounter(GFrameCounter, GFrameCounter);
+	auto TickUntilVictim = [&]()
+	{
+		for (int32 Frame = 0; Frame < 220
+			&& Manager->RitualState.Phase != ETableRitualPhase::VictimChosen; ++Frame)
+		{
+			++GFrameCounter;
+			Scope.World->Tick(LEVELTICK_All, 0.1f);
+		}
+		return Manager->RitualState.Phase == ETableRitualPhase::VictimChosen;
+	};
+	for (int32 Remaining = 2; Remaining >= 0; --Remaining)
+	{
+		if (!TestTrue(TEXT("Bottle reaches a selected victim"), TickUntilVictim())) return false;
+		AHronoCharacter* Victim = Manager->RitualState.Victim;
+		TestTrue(TEXT("Selected victim belongs to a configured chair"),
+			Victim == PlayerA || Victim == PlayerB);
+		TestTrue(TEXT("Chosen player moves to the ritual point"), Victim->bIsAtRitualPoint);
+		TestFalse(TEXT("Ouija board is visible after selection"), Board->IsHidden());
+		if (!TestTrue(TEXT("Selected victim can return once"),
+			Manager->CompleteVictimReturn(Victim))) return false;
+		TestEqual(TEXT("One attempt consumed on server"),
+			Manager->RitualState.AttemptsRemaining, Remaining);
+		TestFalse(TEXT("Duplicate return cannot consume another attempt"),
+			Manager->CompleteVictimReturn(Victim));
+	}
+	TestEqual(TEXT("Third failure ends the ritual"),
+		Manager->RitualState.Phase, ETableRitualPhase::Exhausted);
 	return true;
 }
 

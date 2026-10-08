@@ -50,34 +50,58 @@ receiver/session/device; UI показує застосований стан. [�
 Локальна перевірка NULL-підсистеми та успішна компіляція не замінюють
 перевірку чутності між двома Steam-користувачами.
 
-## Автоматична локальна перевірка
+## Чинна перевірка (2026-10-07)
 
-`Scripts/test_radio_voice.ps1` запускає два packaged Development-процеси
-із NULL-підсистемою, IP-з'єднанням та реальним Windows-мікрофоном.
-Потрібен staged Development package; стандартний каталог —
-`Saved/RadioVoiceTestBuild/Windows`. Можна передати інший `-StageDirectory`.
-Тест триває приблизно 35 секунд і перевіряє початковий вимкнений стан,
-чотири послідовні перемикання (ON → OFF → ON → OFF), захоплення, отримання
-голосу іншого процесу, відсутність mute та повне вимкнення запису/передачі.
-Пороги відсікання тиші знижуються лише для цих тестових процесів,
-щоб мережеві пакети можна було перевірити без розмови біля мікрофона.
+У `HE_CharacterHrono1` голос рації раніше був прикріплений до капсули та
+використовував `SA_Voip`: 400 см повної гучності й 3600 см falloff. Отже,
+отримані мережеві пакети могли бути нечутними за межами приблизно 40 м.
+Активний `Make Voice Settings` тепер залишає `ComponentToAttachTo` і
+`AttenuationSettings` порожніми: для V/B це 2D-голос без залежності від
+відстані/позиції гравців. Сам `SA_Voip` не видалений; інші його користувачі
+не змінені. `BP_Radio` керує власним звуковим ефектом і не передає мікрофон:
+голос належить локальному `AHronoPlayerController` і йде через OSS voice
+channels `NetDriver`, а не через реплікований bool актора рації.
 
-Результат на 2026-09-18:
+`Scripts/test_audio_voice_assets.py` тепер перевіряє ці два активні Blueprint
+піни та CDO `BP_Radio` (`replicates=true`, `replicate_movement=true`). Перед
+виправленням тест упав з `Radio VOIP has no world-space attachment`.
+Після нього пройшов усі 5013 перевірок. Також перевірені з'єднання
+`RegisterWithPlayerState → Set Settings → NotifyVoiceReceiverReady` і компіляція BP.
 
-- Host: PASS; початковий OFF та цикл ON → OFF → ON → OFF; 517 голосових пакетів.
-- Client: PASS; початковий OFF та цикл ON → OFF → ON → OFF; 508 голосових пакетів.
-- В обох процесах під час передачі: `IsRecording: 1`, `Registered: 1`,
-  `Networked: 1`, remote `Talking: 1`, `Muted: 0`.
-- Після вимкнення в обох процесах: `IsRecording: 0`, `Networked: 0`.
-- Початковий стан клієнта повторно синхронізується після запізнілого
-  Blueprint `InitVoiceChat`; цей крок зберігає вже зроблені натискання V.
-- Логи: `Saved/Logs/RadioVoiceNetHost.log`, `Saved/Logs/RadioVoiceNetClient.log`.
-- Без сесії: `sessions=0`, `requested=0`, `IsRecording: 0`, `Networked: 0`;
-  лог `Saved/Logs/RadioVoiceNoSession.log`.
+`Scripts/test_radio_voice.ps1` за замовчуванням запускає **поточний**
+`UnrealEditor.exe -game` як два окремі процеси: listen host і remote client.
+Необов'язковий `-StageDirectory <свіжий Development package>` запускає staged
+збірку. Тест використовує локальне IP-з'єднання, `-nosteam` і тимчасові
+NULL LAN sessions; команди заплановані після типового входу клієнта, а
+перевірки падають, якщо session/possession ще не готові.
+На кожному процесі перевіряє OFF → ON → OFF → ON → OFF, `IsRecording`,
+`Registered`, `Networked`, remote `Talking: 1` і `Muted: 0`. Пороги тиші
+знижені лише в тестових процесах. Логи поточного прогону:
+`Saved/Logs/RadioVoiceCurrentHost.log` і `Saved/Logs/RadioVoiceCurrentClient.log`.
+Після міграції обидва процеси пройшли тест. Старий package й логи від
+2026-09-18 не є доказом чинного стану.
 
-Окремий Shipping package з цим виправленням:
-`Saved/RadioVoiceFixedBuild/Windows/Hrono.exe`.
+Автоматичний прогін доводить захоплення та доставку голосових пакетів у NULL
+LAN, а Blueprint тест виключає дистанційне затухання для V/B. Він не доводить
+фактичну чутність у Steam або рівень гучності колонок. Для повного acceptance:
 
-Для тестового package використано наявний cooked content. Нові зміни Blueprint
-або мап потребують нового cook. Автоматичний тест перевіряє голосові дані та
-мережевий шлях, але не суб'єктивну якість/гучність голосу на двох Steam-ПК.
+1. Зробити новий Development package після Blueprint-міграції. Два ПК,
+   різні Steam-акаунти, однаковий build; створити сесію через меню й
+   приєднатися через меню. Встановити Master=1. На обох виконати
+   `HronoVoiceStatus`: очікуються `subsystem=STEAM`, `sessions>0`,
+   `receiverReady=1` і зареєстрований віддалений мовець.
+2. У межах 2 м host натискає V і говорить 5 с: client чує. На client під час
+   розмови виконується `HronoVoiceStatus`: remote `Talking: 1`, `Muted: 0`.
+   Host натискає V знову: client більше не чує. Повторити client → host та B.
+3. Розійтися більше ніж на 40 м (і в різні timeline), повторити обидва
+   напрямки. Гучність рації не має зникати через відстань. Перевірити, що
+   Music=0/SFX=0 не вимикають Voice, а Master=0 вимикає приймання.
+4. Повторити після late join/reconnect, смерті або заміни персонажа,
+   повернення в меню й нового travel. Перевірити ON/OFF при 100–200 мс
+   затримки та 1–2% втрат пакетів.
+
+Якщо в Steam `requested=1`, але `active=0`/`IsRecording=0`, проблема на боці
+session, identity, пристрою запису чи його дозволів. Якщо мікрофон записує,
+але remote `Talking=0`, перевірити voice channel/handshake/мережу. Якщо remote
+`Talking=1`, а звуку все одно немає після цієї 2D-міграції, перевірити Master,
+вихідний аудіопристрій і маршрут `SC_HronoVoice`. Записати обидва логи.

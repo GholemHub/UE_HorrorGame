@@ -753,6 +753,7 @@ bool AScareDirector::IsHuntActive() const
 	switch (CurrentHuntState)
 	{
 	case EGhostHuntState::Warning:
+	case EGhostHuntState::Anticipation:
 	case EGhostHuntState::Manifestation:
 	case EGhostHuntState::Searching:
 	case EGhostHuntState::Chasing:
@@ -1612,15 +1613,23 @@ void AScareDirector::StartActualHunt()
 		return;
 	}
 
-	const bool bCompletedWarningPhase = CurrentHuntState == EGhostHuntState::Warning;
 	bPendingFalseAlarm = false;
 	++RealWarningsSinceLastFalseAlarm;
+	SetHuntState(EGhostHuntState::Anticipation, TEXT("Real hunt committed; Babai will appear in five seconds"));
+	// State listeners may cancel the hunt synchronously.
+	if (CurrentHuntState == EGhostHuntState::Anticipation)
+		GetWorldTimerManager().SetTimer(AnticipationTimerHandle, this,
+			&AScareDirector::CompleteHuntAnticipation, BabaiAnticipationSeconds, false);
+}
+
+void AScareDirector::CompleteHuntAnticipation()
+{
+	if (!HasAuthority() || CurrentHuntState != EGhostHuntState::Anticipation) return;
 	ActiveSearchOrigin = ResolveSearchOrigin();
 	SetHuntState(
 		EGhostHuntState::Manifestation,
-		bCompletedWarningPhase
-			? TEXT("Omen sequence completed and the warning resolved as a real Hunt")
-			: TEXT("Triggered Hunt was configured to skip the warning phase"));
+		TEXT("Five-second anticipation completed; spawning Babai"));
+	if (CurrentHuntState != EGhostHuntState::Manifestation) return;
 
 	// Babaj belongs to an actual Hunt, not merely to the HuntEligible aggression band.
 	// This also guarantees that scripted attacks (for example a wrong-room ritual)
@@ -1764,6 +1773,7 @@ void AScareDirector::ClearHuntTimers()
 	Timers.ClearTimer(OmenTimerHandle);
 	Timers.ClearTimer(PostOmenTimerHandle);
 	Timers.ClearTimer(ManifestationTimerHandle);
+	Timers.ClearTimer(AnticipationTimerHandle);
 	Timers.ClearTimer(HuntDurationTimerHandle);
 	Timers.ClearTimer(EndingTimerHandle);
 	Timers.ClearTimer(DebugTestPerceptionTimerHandle);

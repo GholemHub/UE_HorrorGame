@@ -781,11 +781,8 @@ void ARoom::ApplyPaintingEvidencePattern()
 	}
 
 	// A cursed room receives two selected paintings (Past + Future), while an
-	// ordinary room receives at most one. Alternate the two clue types in the
-	// cursed pair, but never enable both clues on the same actor.
-	const bool bFirstSelectedUsesEyes = RoomClockPatterns::PositiveModulo(
-		PaintingEvidenceState.PatternSeed,
-		2) == 0;
+	// ordinary room receives at most one. Draw independently from one seeded
+	// stream; the enum enforces exactly one clue on each selected painting.
 	for (int32 SelectedIndex = 0;
 		SelectedIndex < PaintingEvidenceState.SelectedPaintings.Num();
 		++SelectedIndex)
@@ -800,13 +797,14 @@ void ARoom::ApplyPaintingEvidencePattern()
 			continue;
 		}
 
-		const bool bUseEyes = bIsCursed
-			? (SelectedIndex % 2 == 0) == bFirstSelectedUsesEyes
-			: RoomClockPatterns::PositiveModulo(
-				PaintingEvidenceState.PatternSeed + SelectedIndex,
-				2) == 0;
-		NativePainting->SetPaintAnomalyType(
-			bUseEyes ? EPaintAnomalyType::Eyes : EPaintAnomalyType::Tentacles);
+		// TextureCube is evidence of the truly cursed room; ordinary rooms keep
+		// their old Eyes/Tentacles false-positive vocabulary.
+		const int32 ClueRoll = PaintingRandom.RandRange(0, bIsCursed ? 2 : 1);
+		const EPaintAnomalyType Clue = ClueRoll == 0
+			? EPaintAnomalyType::Eyes
+			: (ClueRoll == 1 ? EPaintAnomalyType::Tentacles
+				: EPaintAnomalyType::TextureCube);
+		NativePainting->SetPaintAnomalyType(Clue);
 	}
 
 	ForceNetUpdate();

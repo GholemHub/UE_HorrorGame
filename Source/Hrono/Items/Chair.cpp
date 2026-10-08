@@ -102,6 +102,15 @@ void AChair::SetSitter(AHronoCharacter* Character)
 	ForceNetUpdate();
 }
 
+void AChair::SetRitualStarted(bool bStarted)
+{
+	if (!HasAuthority() || IsRitualStarted == bStarted) return;
+	SetReplicates(true);
+	bAlwaysRelevant = true;
+	IsRitualStarted = bStarted;
+	ForceNetUpdate();
+}
+
 void AChair::MulticastSeatSound_Implementation(bool bSeated, EItemTimeline EventTimeline)
 {
 	if (HronoAudioPolicy::CanHear(this, EventTimeline))
@@ -187,4 +196,5 @@ void AChair::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimePr
     DOREPLIFETIME(AChair, bIsSit);
     DOREPLIFETIME(AChair, CurrentSitter);
 	DOREPLIFETIME(AChair, bRitualGuidanceUnlocked);
+	DOREPLIFETIME(AChair, IsRitualStarted);
 }

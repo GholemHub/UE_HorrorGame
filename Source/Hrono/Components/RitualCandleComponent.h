@@ -13,13 +13,17 @@ class HRONO_API URitualCandleComponent : public UActorComponent
 public:
 	URitualCandleComponent();
 
-	/** Existing Blueprint LightAll event calls this on the placed candle actor. */
+	/** Compatibility wrapper for older Blueprint callers. */
 	UFUNCTION(BlueprintCallable, Category="Ritual Candle", meta=(DefaultToSelf="CandleActor"))
 	static void StartLightingForActor(AActor* CandleActor);
 
-	/** Existing Blueprint OnMistake event calls this on the placed candle actor. */
+	/** Compatibility wrapper for older Blueprint callers. */
 	UFUNCTION(BlueprintCallable, Category="Ritual Candle", meta=(DefaultToSelf="CandleActor"))
 	static void ReportMistakeForActor(AActor* CandleActor);
+
+	/** Called by the native candle actor on the server. */
+	void StartLighting();
+	void ReportMistake();
 
 	UFUNCTION(BlueprintPure, Category="Ritual Candle")
 	uint8 GetLitMask() const { return static_cast<uint8>(VisualState & 0xff); }
@@ -52,8 +56,6 @@ private:
 	FTimerHandle IgnitionTimerHandle;
 	uint8 NextIgnitionIndex = 0;
 
-	void StartLighting();
-	void ReportMistake();
 	void IgniteNextFlame();
 	void SetVisualState(uint8 NewLitMask, uint8 NewHiddenBodyMask);
 	void ApplyVisualState();

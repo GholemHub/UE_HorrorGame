@@ -108,6 +108,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Hunt")
 	EGhostHuntState GetHuntState() const { return CurrentHuntState; }
 
+	/** Mandatory lead for real hunts, including triggered hunts that skip omens. */
+	static constexpr float BabaiAnticipationSeconds = 5.0f;
+
 	UFUNCTION(BlueprintPure, Category = "Hunt")
 	EGhostHuntType GetHuntType() const { return CurrentHuntType; }
 
@@ -560,6 +563,7 @@ private:
 	void ResolveWarningPhase();
 	void ResolveFalseAlarm();
 	void StartActualHunt();
+	void CompleteHuntAnticipation();
 	void EnterSearchingState();
 	void BeginCooldown();
 	void FinishCooldown();
@@ -620,6 +624,7 @@ private:
 	FTimerHandle OmenTimerHandle;
 	FTimerHandle PostOmenTimerHandle;
 	FTimerHandle ManifestationTimerHandle;
+	FTimerHandle AnticipationTimerHandle;
 	FTimerHandle HuntDurationTimerHandle;
 	FTimerHandle EndingTimerHandle;
 	FTimerHandle CooldownTimerHandle;

@@ -5,6 +5,7 @@
 #include "HronoCharacter.h"
 #include "Items/Base_Item.h"
 #include "Items/Chair.h"
+#include "Ritual/TableRitualManager.h"
 #include "UObject/Package.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogTableRitualGate, Log, All);
@@ -12,9 +13,6 @@ DEFINE_LOG_CATEGORY_STATIC(LogTableRitualGate, Log, All);
 namespace
 {
 	const FName CursedImageClassPackage(TEXT("/Game/_Alex/Paints/BP_CursedImage_Item"));
-	const FName TableRitualManagerClassName(TEXT("BP_TableRitualManager_C"));
-	constexpr float RitualChairDetectionRadius = 500.0f;
-
 	TSet<TWeakObjectPtr<const UWorld>> UnlockedWorlds;
 
 	void RemoveExpiredWorlds()
@@ -35,7 +33,7 @@ namespace
 			&& ItemClass->GetOutermost()->GetFName() == CursedImageClassPackage;
 	}
 
-	bool IsChairBesideTableRitualManager(const AChair& Chair)
+	bool IsConfiguredTableRitualChair(const AChair& Chair)
 	{
 		const UWorld* World = Chair.GetWorld();
 		if (!IsValid(World))
@@ -43,14 +41,11 @@ namespace
 			return false;
 		}
 
-		const float RadiusSquared = FMath::Square(RitualChairDetectionRadius);
-		for (TActorIterator<AActor> It(World); It; ++It)
+		for (TActorIterator<ATableRitualManager> It(World); It; ++It)
 		{
-			const AActor* Candidate = *It;
+			const ATableRitualManager* Candidate = *It;
 			if (IsValid(Candidate)
-				&& Candidate->GetClass()->GetFName() == TableRitualManagerClassName
-				&& FVector::DistSquared(Chair.GetActorLocation(), Candidate->GetActorLocation())
-					<= RadiusSquared)
+				&& (Candidate->TableChairA == &Chair || Candidate->TableChairB == &Chair))
 			{
 				return true;
 			}
@@ -89,7 +84,7 @@ void TableRitualGate::NotifySuccessfulPickup(
 	for (TActorIterator<AChair> It(World); It; ++It)
 	{
 		AChair* Chair = *It;
-		if (IsValid(Chair) && IsChairBesideTableRitualManager(*Chair))
+		if (IsValid(Chair) && IsConfiguredTableRitualChair(*Chair))
 		{
 			Chair->SetRitualGuidanceUnlocked(true);
 		}
@@ -115,12 +110,12 @@ bool TableRitualGate::IsUnlocked(const UObject* WorldContextObject)
 
 bool TableRitualGate::CanUseChair(const AChair& Chair)
 {
-	return !IsChairBesideTableRitualManager(Chair) || IsUnlocked(&Chair);
+	return !IsConfiguredTableRitualChair(Chair) || IsUnlocked(&Chair);
 }
 
 bool TableRitualGate::IsTableRitualChair(const AChair& Chair)
 {
-	return IsChairBesideTableRitualManager(Chair);
+	return IsConfiguredTableRitualChair(Chair);
 }
 
 bool TableRitualGate::IsRitualInProgress(const UObject* WorldContextObject)
@@ -136,7 +131,7 @@ bool TableRitualGate::IsRitualInProgress(const UObject* WorldContextObject)
 		const AChair* Chair = *It;
 		if (IsValid(Chair)
 			&& Chair->IsRitualStarted
-			&& IsChairBesideTableRitualManager(*Chair))
+			&& IsConfiguredTableRitualChair(*Chair))
 		{
 			return true;
 		}
@@ -166,7 +161,7 @@ bool TableRitualGate::AreAllPlayersSeatedAtRitualTable(const UObject* WorldConte
 		const AChair* Chair = Character->GetCurrentChair();
 		if (!Character->IsSittingOnChair()
 			|| !IsValid(Chair)
-			|| !IsChairBesideTableRitualManager(*Chair))
+			|| !IsConfiguredTableRitualChair(*Chair))
 		{
 			return false;
 		}

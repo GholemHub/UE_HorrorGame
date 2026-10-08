@@ -24,7 +24,9 @@ enum class EGhostHuntState : uint8
 	Searching UMETA(DisplayName = "Searching"),
 	Chasing UMETA(DisplayName = "Chasing"),
 	Ending UMETA(DisplayName = "Ending"),
-	Cooldown UMETA(DisplayName = "Cooldown")
+	Cooldown UMETA(DisplayName = "Cooldown"),
+	/** Committed real hunt: five seconds before the spawn. Appended to preserve authored enum values. */
+	Anticipation UMETA(DisplayName = "Before Babai (5 seconds)")
 };
 
 UENUM(BlueprintType)

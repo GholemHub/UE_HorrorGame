@@ -12,6 +12,8 @@ for name in (
     'test_pickup_ownership.py',
     'test_session_blueprints.py',
     'test_ritual_candles.py',
+    'test_table_ritual.py',
+    'test_paint_cube.py',
 ):
     unreal.log('HRONO_REGRESSION ' + name)
     runpy.run_path(str(scripts / name), run_name='__main__')

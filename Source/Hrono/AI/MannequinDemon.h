@@ -4,6 +4,7 @@
 #include "GameFramework/Character.h"
 #include "HronoSharedTools.h"
 #include "Hunt/GhostHuntTypes.h"
+#include "SingleAnimationPlayData.h"
 #include "MannequinDemon.generated.h"
 
 class AHronoCharacter;
@@ -13,6 +14,8 @@ class ABase_Item;
 class UStaticMesh;
 class UStaticMeshComponent;
 class USceneComponent;
+class UAnimSequence;
+class UAnimInstance;
 struct FHitResult;
 
 UENUM(BlueprintType)
@@ -45,6 +48,28 @@ enum class EMannequinSight : uint8
 	OutOfRange, OutsideView, Occluded, Visible
 };
 
+/** Persistent pose clock, not a one-shot event. Initial replication restores the current pose. */
+USTRUCT(BlueprintType)
+struct FMannequinFearPlayback
+{
+	GENERATED_BODY()
+	UPROPERTY(BlueprintReadOnly) bool bActive = false;
+	UPROPERTY(BlueprintReadOnly) bool bPaused = true;
+	/** Once Babai manifests, hold the final crouched frame for the rest of this fear state. */
+	UPROPERTY(BlueprintReadOnly) bool bHoldingPose = false;
+	UPROPERTY(BlueprintReadOnly) float Elapsed = 0.0f;
+	UPROPERTY(BlueprintReadOnly) float ServerTime = 0.0f;
+	/** Fixed authority pose also corrects clients whose movement component is already disabled. */
+	UPROPERTY(BlueprintReadOnly) FVector Location = FVector::ZeroVector;
+	UPROPERTY(BlueprintReadOnly) FRotator Rotation = FRotator::ZeroRotator;
+	UPROPERTY() uint32 Serial = 0;
+
+	float GetElapsed(float Now) const
+	{
+		return Elapsed + (bActive && !bPaused ? FMath::Max(0.0f, Now - ServerTime) : 0.0f);
+	}
+};
+
 /** One server-driven stalker. Blueprint supplies appearance, audio and authored activation. */
 UCLASS(Blueprintable)
 class HRONO_API AMannequinDemon : public ACharacter
@@ -55,6 +80,7 @@ public:
 	AMannequinDemon();
 	virtual void OnConstruction(const FTransform& Transform) override;
 	virtual void BeginPlay() override;
+	virtual void Tick(float DeltaSeconds) override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
@@ -171,6 +197,11 @@ public:
 	float StalkingSpeed = 260.0f;
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mannequin|Stalking", meta=(ClampMin="50", Units="cm/s"))
 	float MoveSpeed = 410.0f;
+	/** Server Threat from ScareDirector must be strictly greater than this to move or attack. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mannequin|Stalking", meta=(ClampMin="0"))
+	float AggressionToMoveThreshold = 20.0f;
+	/** Authority-only aggression gate; false when no Hunt Director is available. */
+	bool HasEnoughAggressionToMove() const;
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mannequin|Stalking", meta=(ClampMin="1"))
 	int32 RequiredStalkStepsBeforeGrab = 3;
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mannequin|Stalking", meta=(ClampMin="0", Units="s"))
@@ -206,6 +237,15 @@ public:
 	FName ContainmentItemTag = TEXT("MannequinContainment");
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mannequin|Babai", meta=(ClampMin="0", Units="s"))
 	float BabaiRecoveryDelay = 8.0f;
+	/** In-place startle/crouch sequence for this mesh's skeleton. Finishes within 5 seconds and holds its final crouched pose. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Mannequin|Fear")
+	TObjectPtr<UAnimSequence> FearAnimation;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Mannequin|Fear", meta=(ClampMin="0.01", ClampMax="4.0"))
+	float FearPlayRate = 1.0f;
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, ReplicatedUsing=OnRep_FearPlayback, Category="Mannequin|Fear")
+	FMannequinFearPlayback FearPlayback;
+	UFUNCTION(BlueprintPure, Category="Mannequin|Fear")
+	float GetFearAnimationElapsed() const;
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Mannequin|Debug")
 	bool bDebugEnabled = false;
 	/** Legacy Blueprint setting; local timeline audience now controls visibility. */
@@ -259,6 +299,7 @@ private:
 	UFUNCTION() void OnRep_Targets();
 	UFUNCTION() void OnRep_Mood();
 	UFUNCTION() void OnRep_CarriedItem();
+	UFUNCTION() void OnRep_FearPlayback();
 	UFUNCTION() void HandleHuntStateChanged(EGhostHuntState OldState, EGhostHuntState NewState);
 	UFUNCTION(NetMulticast, Reliable) void MulticastMoment(EMannequinState Moment, AHronoCharacter* CapturedPlayer);
 	UFUNCTION(NetMulticast, Reliable) void MulticastSpecialEvent(uint8 EventCode);
@@ -291,6 +332,8 @@ private:
 	bool IsBabaiDangerous(EGhostHuntState HuntState) const;
 	void EnterBabaiSubmissive();
 	void ResumeAfterBabai();
+	void UpdateFearPresentation();
+	void RestoreFearPresentation();
 	void EndContainment();
 	void SetMood(EMannequinMood NewMood);
 	void RefreshMask();
@@ -312,6 +355,13 @@ private:
 	bool bContainmentWasInterruptedByBabai = false;
 	bool bMeshCollisionCaptured = false;
 	bool bFactorySpawnPending = false;
+	bool bFearPresentationCaptured = false;
+	bool bFearModeOverridden = false;
+	uint8 FearSavedAnimationMode = 0;
+	uint8 FearSavedSmoothingMode = 0;
+	float FearStartedAt = 0.0f;
+	UPROPERTY(Transient) TSubclassOf<UAnimInstance> FearSavedAnimClass;
+	UPROPERTY(Transient) FSingleAnimationPlayData FearSavedSingleAnimation;
 	ECollisionEnabled::Type AuthoredMeshCollision = ECollisionEnabled::NoCollision;
 	int32 CompletedStalkSteps = 0;
 	float ActivatedAt = 0.0f;
@@ -319,6 +369,7 @@ private:
 	float LastApproachAt = -10000.0f;
 	float NextTargetSwitchAt = 0.0f;
 	float NextPartnerCheckAt = 0.0f;
+	float NextDirectorLookupAt = 0.0f;
 	UPROPERTY(Replicated)
 	float OfferStartedAt = -1.0f;
 	float NextMoodPathAt = 0.0f;

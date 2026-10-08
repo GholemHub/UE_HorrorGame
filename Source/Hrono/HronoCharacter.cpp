@@ -43,6 +43,7 @@
 #include "Items/PaintItem.h"
 #include "Items/RitualGoatSkull.h"
 #include "Ritual/TableRitualGate.h"
+#include "Ritual/TableRitualManager.h"
 
 namespace
 {
@@ -1925,6 +1926,30 @@ bool AHronoCharacter::ReturnToReservedRitualChair()
 	}
 
 	return ForceSitOnChair(ReservedRitualChair);
+}
+
+bool AHronoCharacter::CompleteTableRitualReturn()
+{
+	if (!HasAuthority())
+	{
+		if (!IsLocallyControlled()) return false;
+		Server_CompleteTableRitualReturn();
+		return true; // The server validates and resolves this asynchronous request.
+	}
+
+	for (TActorIterator<ATableRitualManager> It(GetWorld()); It; ++It)
+	{
+		if (IsValid(*It) && It->IsSelectedVictim(this))
+		{
+			return It->CompleteVictimReturn(this);
+		}
+	}
+	return false;
+}
+
+void AHronoCharacter::Server_CompleteTableRitualReturn_Implementation()
+{
+	CompleteTableRitualReturn();
 }
 
 void AHronoCharacter::OnRep_RitualPositionState()

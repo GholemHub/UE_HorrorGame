@@ -6,7 +6,6 @@
 #include "GameFramework/GameStateBase.h"
 #include "HronoCharacter.h"
 #include "Net/UnrealNetwork.h"
-#include "Ritual/RitualChairAudioReplication.h"
 #include "Ritual/TableRitualGate.h"
 
 ARitualBottle::ARitualBottle()
@@ -170,7 +169,6 @@ bool ARitualBottle::SpinBottle(AHronoCharacter* FirstVictim, AHronoCharacter* Se
 	SpinState.SelectedVictimIndex = bChooseFirst ? 0 : 1;
 
 	LastCompletedSequence = INDEX_NONE;
-	MulticastSpinStartAudio();
 	HandleSpinStarted();
 	ForceNetUpdate();
 
@@ -247,12 +245,6 @@ void ARitualBottle::OnRep_SpinState()
 		}
 		else HandleSpinCompleted();
 	}
-}
-
-void ARitualBottle::MulticastSpinStartAudio_Implementation()
-{
-	// Existing Blueprint supplies host audio; remote clients receive only the new event.
-	PlayRitualChairStartAudioForRemoteClient(this, GetActorLocation());
 }
 
 double ARitualBottle::GetSynchronizedWorldTime() const

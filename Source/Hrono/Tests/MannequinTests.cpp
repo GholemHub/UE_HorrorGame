@@ -17,6 +17,7 @@
 #include "Components/StaticMeshComponent.h"
 #include "HronoCollisionChannels.h"
 #include "Items/Base_Item.h"
+#include "ScareDirector.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMannequinContractTest, "Hrono.AI.MannequinContract",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -46,6 +47,10 @@ bool FMannequinContractTest::RunTest(const FString& Parameters)
 		TestFalse(TEXT("Legacy dormant visibility flag defaults off"), Demon->bShowDormantMeshForTesting);
 		TestFalse(TEXT("No local viewer does not select physical audience"), Demon->GetMesh()->IsVisible());
 		TestEqual(TEXT("Approach clearance is 10 cm"), Demon->ApproachClearance, 10.0f);
+		TestEqual(TEXT("Mannequin moves only above 20 aggression by default"),
+			Demon->AggressionToMoveThreshold, 20.0f);
+		TestFalse(TEXT("No Hunt Director cannot authorize movement"),
+			Demon->HasEnoughAggressionToMove());
 		TestEqual(TEXT("Sad is the initial mood"), Demon->Mood, EMannequinMood::Sad);
 		TestEqual(TEXT("Neutral offer lasts one minute by default"), Demon->OfferWaitSeconds, 60.0f);
 		TestTrue(TEXT("Native item allowlists start empty"), Demon->AllowedPickupClasses.IsEmpty()
@@ -83,6 +88,12 @@ bool FMannequinContractTest::RunTest(const FString& Parameters)
 			ECollisionEnabled::QueryAndPhysics);
 		TestEqual(TEXT("Active capsule still ignores held and dropped items"),
 			Demon->GetCapsuleComponent()->GetCollisionResponseToChannel(COLLISION_CHANNEL_ITEM), ECR_Ignore);
+		TestEqual(TEXT("Future capsule blocks Future players"),
+			Demon->GetCapsuleComponent()->GetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_FUTURE), ECR_Block);
+		TestEqual(TEXT("Future capsule ignores Past players"),
+			Demon->GetCapsuleComponent()->GetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_PAST), ECR_Ignore);
+		TestEqual(TEXT("Future mesh ignores Past players"),
+			Demon->GetMesh()->GetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_PAST), ECR_Ignore);
 		TestEqual(TEXT("Active skeletal mesh still ignores held and dropped items"),
 			Demon->GetMesh()->GetCollisionResponseToChannel(COLLISION_CHANNEL_ITEM), ECR_Ignore);
 		TestFalse(TEXT("Mood cannot be forced outside QA mode"), Demon->ForceMoodForTesting(EMannequinMood::Neutral));
@@ -92,6 +103,10 @@ bool FMannequinContractTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("Neutral occupies Past"), Demon->MannequinTimeline, EItemTimeline::Past);
 		TestEqual(TEXT("Past capsule uses Past channel"),
 			Demon->GetCapsuleComponent()->GetCollisionObjectType(), COLLISION_CHANNEL_PAWN_PAST);
+		TestEqual(TEXT("Past capsule ignores Future players"),
+			Demon->GetCapsuleComponent()->GetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_FUTURE), ECR_Ignore);
+		TestEqual(TEXT("Past mesh ignores Future players"),
+			Demon->GetMesh()->GetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_FUTURE), ECR_Ignore);
 		TestTrue(TEXT("Neutral to Sad changes dimension again"), Demon->ForceMoodForTesting(EMannequinMood::Sad));
 		TestEqual(TEXT("Returned Sad occupies Future"), Demon->MannequinTimeline, EItemTimeline::Future);
 		Demon->bDebugEnabled = false;
@@ -239,6 +254,8 @@ bool FMannequinContractTest::RunTest(const FString& Parameters)
 			AuthoredMannequinClass, FVector(400, 0, 150), FRotator::ZeroRotator, Params);
 		if (TestNotNull(TEXT("Authored mannequin spawns"), AuthoredDemon))
 		{
+			TestEqual(TEXT("Authored aggression threshold inherits 20"),
+				AuthoredDemon->AggressionToMoveThreshold, 20.0f);
 			TArray<USkeletalMeshComponent*> SkeletalMeshes;
 			AuthoredDemon->GetComponents(SkeletalMeshes);
 			TestEqual(TEXT("Authored Mannequin has exactly one skeletal mesh"), SkeletalMeshes.Num(), 1);
@@ -287,6 +304,73 @@ bool FMannequinContractTest::RunTest(const FString& Parameters)
 			TestEqual(TEXT("Thrown prop follows Happy to Future"), Prop->ItemTimeline, EItemTimeline::Future);
 		}
 	}
+	World->EndPlay(EEndPlayReason::Quit);
+	World->DestroyWorld(false);
+	GEngine->DestroyWorldContext(World);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMannequinAggressionGateTest,
+	"Hrono.AI.MannequinAggressionGate",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMannequinAggressionGateTest::RunTest(const FString& Parameters)
+{
+	const auto Settings = UWorld::InitializationValues().AllowAudioPlayback(false)
+		.CreatePhysicsScene(true).CreateNavigation(false).CreateAISystem(false)
+		.ShouldSimulatePhysics(false).SetTransactional(false);
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, NAME_None, nullptr, true,
+		ERHIFeatureLevel::Num, &Settings);
+	GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World);
+	World->InitializeActorsForPlay(FURL());
+	World->BeginPlay();
+	World->GetWorldSettings()->NotifyBeginPlay();
+
+	FActorSpawnParameters Params;
+	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	AScareDirector* Director = World->SpawnActor<AScareDirector>();
+	AMannequinDemon* Demon = World->SpawnActor<AMannequinDemon>(
+		AMannequinDemon::StaticClass(), FVector(0, 0, 150), FRotator::ZeroRotator, Params);
+	UClass* CharacterClass = LoadClass<AHronoCharacter>(nullptr,
+		TEXT("/Game/_Alex/HE_CharacterHrono1.HE_CharacterHrono1_C"));
+	AHronoCharacter* Player = CharacterClass ? World->SpawnActor<AHronoCharacter>(
+		CharacterClass, FVector(0, 300, 150), FRotator::ZeroRotator, Params) : nullptr;
+	APlayerController* Controller = World->SpawnActor<APlayerController>();
+	if (TestNotNull(TEXT("Hunt Director"), Director)
+		&& TestNotNull(TEXT("Mannequin"), Demon)
+		&& TestNotNull(TEXT("Future player"), Player)
+		&& TestNotNull(TEXT("Player controller"), Controller))
+	{
+		Controller->Possess(Player);
+		Player->TrySetPlayerTimelineOnAuthority(EItemTimeline::Future);
+		Demon->State = EMannequinState::Spawned;
+		Demon->ProcessEvent(Demon->FindFunctionChecked(TEXT("OnRep_State")), nullptr);
+		TestTrue(TEXT("Future player is eligible target"), Demon->ForceTarget(Player));
+
+		Director->SetThreat(20.0f);
+		TestFalse(TEXT("Exactly 20 aggression does not permit movement"),
+			Demon->HasEnoughAggressionToMove());
+		Demon->State = EMannequinState::Stalking;
+		Demon->ProcessEvent(Demon->FindFunctionChecked(TEXT("OnRep_State")), nullptr);
+		TestEqual(TEXT("Test starts with walking mode"),
+			Demon->GetCharacterMovement()->MovementMode, MOVE_Walking);
+		{
+			TGuardValue<uint64> RestoreFrameCounter(GFrameCounter, GFrameCounter);
+			for (int32 Frame = 0; Frame < 30; ++Frame)
+			{
+				++GFrameCounter;
+				World->Tick(LEVELTICK_All, 1.0f / 60.0f);
+			}
+		}
+		TestEqual(TEXT("Falling to 20 cancels pursuit state"),
+			Demon->State, EMannequinState::Spawned);
+		TestEqual(TEXT("Falling to 20 stops physical movement"),
+			Demon->GetCharacterMovement()->MovementMode, MOVE_None);
+		Director->SetThreat(21.0f);
+		TestTrue(TEXT("21 aggression permits pursuit again"),
+			Demon->HasEnoughAggressionToMove());
+	}
+
 	World->EndPlay(EEndPlayReason::Quit);
 	World->DestroyWorld(false);
 	GEngine->DestroyWorldContext(World);
