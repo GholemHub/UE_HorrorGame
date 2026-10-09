@@ -6,13 +6,14 @@ import unreal
 assert '-run=pythonscript' in unreal.SystemLibrary.get_command_line().lower()
 bp = unreal.load_asset('/Game/_Alex/Pickable/BP_Item_Candle')
 assert bp
+assert unreal.BlueprintEditorLibrary.get_blueprint_parent_class(bp).get_path_name() == '/Script/Hrono.RitualCandleActor'
 graph = next(g for g in unreal.BlueprintEditorLibrary.list_graphs(bp)
              if g.get_name() == 'EventGraph')
 editor = unreal.BlueprintGraphEditor.get_graph_editor(graph)
 nodes = list(editor.list_all_nodes())
 events = {n.get_node_title(): n for n in nodes if n.get_node_title() in ('LightAll', 'OnMistake')}
 assert set(events) == {'LightAll', 'OnMistake'}
-expected = {'LightAll': 'StartLightingForActor', 'OnMistake': 'ReportMistakeForActor'}
+expected = {'LightAll': 'StartRitualLighting', 'OnMistake': 'ReportRitualMistake'}
 for event, function in expected.items():
     targets = events[event].find_then_pin().list_connected_pins()
     assert len(targets) == 1 and function.lower() in targets[0].get_owning_node().get_node_title().replace(' ', '').lower()
@@ -30,13 +31,25 @@ managers = [a for a in actors if a.get_class().get_path_name() ==
             '/Game/_Alex/Room/BP_TableRitualManager.BP_TableRitualManager_C']
 assert len(candles) == 1 and len(managers) == 1
 candle = candles[0]
-assert managers[0].get_editor_property('candle') == candle
+assert managers[0].get_editor_property('ritual_candle') == candle
+manager_bp = unreal.load_asset('/Game/_Alex/Room/BP_TableRitualManager')
+assert unreal.BlueprintEditorLibrary.get_blueprint_parent_class(manager_bp).get_path_name() == '/Script/Hrono.TableRitualManager'
+manager_graph = next(g for g in unreal.BlueprintEditorLibrary.list_graphs(manager_bp)
+                     if g.get_name() == 'EventGraph')
+manager_nodes = {n.get_name(): n for n in
+                 unreal.BlueprintGraphEditor.get_graph_editor(manager_graph).list_all_nodes()}
+assert not any(n.get_node_title() in ('LightAll', 'OnMistake', 'Delay')
+               for n in manager_nodes.values())
 assert candle.get_editor_property('replicates') is True
 components = candle.get_components_by_class(unreal.RitualCandleComponent)
 assert len(components) == 1 and components[0].get_editor_property('replicates') is True
+assert [str(n) for n in components[0].get_editor_property('flame_component_names')] == [
+    'CandleFlame', 'CandleFlame1', 'CandleFlame2']
+assert abs(components[0].get_editor_property('ignition_interval') - 1.0) < 0.001
 names = {c.get_name() for c in candle.get_components_by_class(unreal.ParticleSystemComponent)}
 assert {'CandleFlame', 'CandleFlame1', 'CandleFlame2'}.issubset(names)
 report = {'passed': True, 'actor': candle.get_name(), 'replicates': True,
+          'native_parent': '/Script/Hrono.RitualCandleActor',
           'component': components[0].get_name(), 'flames': sorted(names)}
 out = Path(unreal.Paths.project_saved_dir()) / 'Tests/RitualCandles/contract.json'
 out.parent.mkdir(parents=True, exist_ok=True)

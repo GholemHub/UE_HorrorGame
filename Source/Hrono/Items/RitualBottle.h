@@ -203,8 +203,6 @@ protected:
 
 	UFUNCTION()
 	void OnRep_SpinState();
-	UFUNCTION(NetMulticast, Unreliable)
-	void MulticastSpinStartAudio();
 
 private:
 	bool bReceivedSpinSnapshot = false;

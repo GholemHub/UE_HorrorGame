@@ -798,6 +798,13 @@ public:
 		meta = (DisplayName = "Return To Reserved Ritual Chair"))
 	bool ReturnToReservedRitualChair();
 
+	/** Called after the authored death sequence; the owning client requests a validated server return. */
+	UFUNCTION(BlueprintCallable, Category = "Chair|Ritual")
+	bool CompleteTableRitualReturn();
+
+	UFUNCTION(Server, Reliable)
+	void Server_CompleteTableRitualReturn();
+
 	UFUNCTION(BlueprintPure, Category = "Chair|Ritual")
 	AChair* GetReservedRitualChair() const { return ReservedRitualChair; }
 

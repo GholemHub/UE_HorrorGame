@@ -1,6 +1,10 @@
 #include "AI/MannequinDemon.h"
 
 #include "AIController.h"
+#include "Animation/AnimSequence.h"
+#include "Animation/AnimSingleNodeInstance.h"
+#include "Animation/Skeleton.h"
+#include "Engine/SkeletalMesh.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -64,7 +68,8 @@ AMannequinDemon::AMannequinDemon()
 	SetReplicateMovement(true);
 	SetNetUpdateFrequency(20.0f);
 	SetMinNetUpdateFrequency(5.0f);
-	PrimaryActorTick.bCanEverTick = false;
+	PrimaryActorTick.bCanEverTick = true;
+	PrimaryActorTick.bStartWithTickEnabled = false;
 	AIControllerClass = AAIController::StaticClass();
 	AutoPossessAI = EAutoPossessAI::PlacedInWorldOrSpawned;
 	GetCharacterMovement()->MaxWalkSpeed = StalkingSpeed;
@@ -115,6 +120,7 @@ AMannequinDemon* AMannequinDemon::SpawnAndActivateMannequin(const UObject* World
 void AMannequinDemon::BeginPlay()
 {
 	Super::BeginPlay();
+	GetMesh()->AddTickPrerequisiteActor(this);
 	if (HasAuthority()) MannequinTimeline = EItemTimeline::Future;
 	if (GetMesh()->GetSkeletalMeshAsset())
 	{
@@ -131,7 +137,7 @@ void AMannequinDemon::BeginPlay()
 		Director = AScareDirector::GetHuntDirector(this);
 		if (Director.IsValid())
 		{
-			Director->OnHuntStateChanged.AddDynamic(this, &AMannequinDemon::HandleHuntStateChanged);
+			Director->OnHuntStateChanged.AddUniqueDynamic(this, &AMannequinDemon::HandleHuntStateChanged);
 		}
 		GetWorldTimerManager().SetTimer(EvaluationTimer, this, &AMannequinDemon::Evaluate,
 			FMath::Max(0.05f, ObservationCheckInterval), true);
@@ -145,6 +151,7 @@ void AMannequinDemon::BeginPlay()
 
 void AMannequinDemon::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	RestoreFearPresentation();
 	if (bLocalGameOverControlsApplied && GetWorld())
 	{
 		for (FConstPlayerControllerIterator It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
@@ -182,6 +189,7 @@ void AMannequinDemon::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutL
 	DOREPLIFETIME(AMannequinDemon, BlockingDoor);
 	DOREPLIFETIME(AMannequinDemon, WarningStartedAt);
 	DOREPLIFETIME(AMannequinDemon, WarningEndsAt);
+	DOREPLIFETIME(AMannequinDemon, FearPlayback);
 }
 
 void AMannequinDemon::OnRep_State()
@@ -189,6 +197,110 @@ void AMannequinDemon::OnRep_State()
 	ApplyPhysicalState();
 	RefreshLocalPresentation();
 	OnStateSnapshotApplied(State);
+	UpdateFearPresentation();
+}
+
+void AMannequinDemon::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+	UpdateFearPresentation();
+}
+
+float AMannequinDemon::GetFearAnimationElapsed() const
+{
+	const AGameStateBase* GS = GetWorld() ? GetWorld()->GetGameState() : nullptr;
+	const float Now = GS ? GS->GetServerWorldTimeSeconds() : (GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f);
+	return FearPlayback.GetElapsed(Now);
+}
+
+void AMannequinDemon::OnRep_FearPlayback()
+{
+	SetActorTickEnabled(FearPlayback.bActive);
+	ApplyPhysicalState();
+	UpdateFearPresentation();
+}
+
+void AMannequinDemon::UpdateFearPresentation()
+{
+	USkeletalMeshComponent* Body = GetMesh();
+	if (!FearPlayback.bActive)
+	{
+		RestoreFearPresentation();
+		return;
+	}
+	if (!bFearPresentationCaptured)
+	{
+		bFearPresentationCaptured = true;
+		FearSavedAnimationMode = static_cast<uint8>(Body->GetAnimationMode());
+		FearSavedSmoothingMode = static_cast<uint8>(GetCharacterMovement()->NetworkSmoothingMode);
+		GetCharacterMovement()->NetworkSmoothingMode = ENetworkSmoothingMode::Disabled;
+		FearSavedAnimClass = Body->GetAnimClass();
+		FearSavedSingleAnimation = Body->AnimationData;
+		if (UAnimSingleNodeInstance* Single = Body->GetSingleNodeInstance())
+		{
+			FearSavedSingleAnimation.AnimToPlay = Single->GetCurrentAsset();
+			FearSavedSingleAnimation.SavedPosition = Single->GetCurrentTime();
+			FearSavedSingleAnimation.bSavedPlaying = Single->IsPlaying();
+			FearSavedSingleAnimation.bSavedLooping = Single->IsLooping();
+			FearSavedSingleAnimation.SavedPlayRate = Single->GetPlayRate();
+		}
+	}
+	if (!GetActorLocation().Equals(FearPlayback.Location, 0.01f)
+		|| !GetActorRotation().Equals(FearPlayback.Rotation, 0.01f))
+		SetActorLocationAndRotation(FearPlayback.Location, FearPlayback.Rotation, false, nullptr, ETeleportType::TeleportPhysics);
+	if (GetLocalRole() == ROLE_SimulatedProxy)
+		Body->SetRelativeLocationAndRotation(GetBaseTranslationOffset(), GetBaseRotationOffset());
+	UAnimSequence* Sequence = FearAnimation;
+	const float Length = Sequence ? Sequence->GetPlayLength() : 0.0f;
+	// Finish the authored crouch within the anticipation window, regardless of gaze.
+	const float Rate = FMath::Max(FMath::Clamp(FearPlayRate, 0.01f, 4.0f),
+		Length / AScareDirector::BabaiAnticipationSeconds);
+	const float Position = FearPlayback.bHoldingPose ? Length
+		: FMath::Min(GetFearAnimationElapsed() * Rate, Length);
+	const USkeletalMesh* BodyAsset = Body->GetSkeletalMeshAsset();
+	if (!Sequence || !BodyAsset || !Sequence->GetSkeleton()
+		|| Sequence->GetSkeleton() != BodyAsset->GetSkeleton())
+	{
+		// Missing/incompatible art must never release the server's movement lock.
+		Body->bPauseAnims = true;
+		return;
+	}
+	if (Body->GetAnimationMode() != EAnimationMode::AnimationSingleNode)
+		Body->SetAnimationMode(EAnimationMode::AnimationSingleNode);
+	bFearModeOverridden = true;
+	UAnimSingleNodeInstance* Single = Body->GetSingleNodeInstance();
+	if (!Single) return;
+	if (Single->GetCurrentAsset() != Sequence) Single->SetAnimationAsset(Sequence, false, 0.0f);
+	Single->SetPlaying(false);
+	// Evaluate a pose only: no root-motion movement and no historical animation notifies.
+	Single->SetRootMotionMode(ERootMotionMode::IgnoreRootMotion);
+	Single->SetPosition(Position, false);
+	Body->bPauseAnims = false;
+}
+
+void AMannequinDemon::RestoreFearPresentation()
+{
+	if (!bFearPresentationCaptured) return;
+	USkeletalMeshComponent* Body = GetMesh();
+	if (bFearModeOverridden)
+	{
+		Body->AnimationData = FearSavedSingleAnimation;
+		Body->SetAnimInstanceClass(FearSavedAnimClass);
+		Body->SetAnimationMode(static_cast<EAnimationMode::Type>(FearSavedAnimationMode));
+		if (UAnimSingleNodeInstance* Single = Body->GetSingleNodeInstance())
+		{
+			Single->SetAnimationAsset(FearSavedSingleAnimation.AnimToPlay,
+				FearSavedSingleAnimation.bSavedLooping, FearSavedSingleAnimation.SavedPlayRate);
+			Single->SetPosition(FearSavedSingleAnimation.SavedPosition, false);
+			Single->SetPlaying(FearSavedSingleAnimation.bSavedPlaying);
+		}
+	}
+	Body->bPauseAnims = State == EMannequinState::Observing;
+	GetCharacterMovement()->NetworkSmoothingMode = static_cast<ENetworkSmoothingMode>(FearSavedSmoothingMode);
+	bFearPresentationCaptured = false;
+	bFearModeOverridden = false;
+	FearSavedAnimClass = nullptr;
+	FearSavedSingleAnimation = FSingleAnimationPlayData();
 }
 
 void AMannequinDemon::ApplyPhysicalState()
@@ -199,9 +311,11 @@ void AMannequinDemon::ApplyPhysicalState()
 		bMeshCollisionCaptured = true;
 	}
 	const bool bActive = State != EMannequinState::Dormant && State != EMannequinState::Disabled;
-	GetCapsuleComponent()->SetCollisionEnabled(bActive
+	const bool bCollisionEnabled = bActive && State != EMannequinState::SubmissiveToBabai
+		&& !FearPlayback.bActive;
+	GetCapsuleComponent()->SetCollisionEnabled(bCollisionEnabled
 		? ECollisionEnabled::QueryAndPhysics : ECollisionEnabled::NoCollision);
-	GetMesh()->SetCollisionEnabled(bActive ? AuthoredMeshCollision : ECollisionEnabled::NoCollision);
+	GetMesh()->SetCollisionEnabled(bCollisionEnabled ? AuthoredMeshCollision : ECollisionEnabled::NoCollision);
 	// BP collision defaults can override the native constructor. Item is an object
 	// channel for both held and dropped Base_Item meshes; neither body may push us.
 	GetCapsuleComponent()->SetCollisionResponseToChannel(COLLISION_CHANNEL_ITEM, ECR_Ignore);
@@ -209,14 +323,19 @@ void AMannequinDemon::ApplyPhysicalState()
 	MaskComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	if (bActive)
 	{
-		GetCapsuleComponent()->SetCollisionObjectType(MannequinTimeline == EItemTimeline::Past
+		const bool bPast = MannequinTimeline == EItemTimeline::Past;
+		GetCapsuleComponent()->SetCollisionObjectType(bPast
 			? COLLISION_CHANNEL_PAWN_PAST : COLLISION_CHANNEL_PAWN_FUTURE);
-		GetCapsuleComponent()->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_FUTURE,
-			MannequinTimeline == EItemTimeline::Future ? ECR_Block : ECR_Ignore);
-		GetCapsuleComponent()->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_PAST,
-			MannequinTimeline == EItemTimeline::Past ? ECR_Block : ECR_Ignore);
+		for (UPrimitiveComponent* Body : {static_cast<UPrimitiveComponent*>(GetCapsuleComponent()),
+			static_cast<UPrimitiveComponent*>(GetMesh())})
+		{
+			Body->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_PAST,
+				bPast ? ECR_Block : ECR_Ignore);
+			Body->SetCollisionResponseToChannel(COLLISION_CHANNEL_PAWN_FUTURE,
+				bPast ? ECR_Ignore : ECR_Block);
+		}
 	}
-	if (!bActive || (State != EMannequinState::Spawned && State != EMannequinState::Stalking
+	if (!bActive || FearPlayback.bActive || (State != EMannequinState::Spawned && State != EMannequinState::Stalking
 		&& State != EMannequinState::Approaching && State != EMannequinState::ApproachingDoor
 		&& State != EMannequinState::SeekingItem && State != EMannequinState::OfferingItem
 		&& State != EMannequinState::HappyChase))
@@ -389,7 +508,7 @@ bool AMannequinDemon::SelectTarget(AHronoCharacter* Preferred)
 
 bool AMannequinDemon::ForceTarget(AHronoCharacter* NewTarget)
 {
-	if (!HasAuthority() || !IsEligibleTarget(NewTarget)) return false;
+	if (!HasAuthority() || !IsEligibleTarget(NewTarget) || State == EMannequinState::SubmissiveToBabai) return false;
 	if (!SelectTarget(NewTarget)) return false;
 	if (State != EMannequinState::Dormant && State != EMannequinState::Disabled)
 	{
@@ -404,6 +523,7 @@ bool AMannequinDemon::ForceMoodForTesting(EMannequinMood NewMood)
 {
 	if (!HasAuthority() || !bDebugEnabled || bMannequinGameOver
 		|| State == EMannequinState::Dormant || State == EMannequinState::Disabled
+		|| State == EMannequinState::SubmissiveToBabai
 		|| Mood == NewMood) return false;
 	SetMood(NewMood);
 	return Mood == NewMood;
@@ -513,9 +633,9 @@ EMannequinSight AMannequinDemon::EvaluateSight(const AHronoCharacter* Player,
 {
 	OutBlocker = NAME_None;
 	if (!IsValid(Player)) return EMannequinSight::NoViewer;
-	if (bRequireMonocle && (Player != CurrentPartner || Player->GetTimeline() == MannequinTimeline))
+	if (bRequireMonocle && Player->GetTimeline() == MannequinTimeline)
 		return EMannequinSight::WrongTimeline;
-	if (!bRequireMonocle && (Player != CurrentTarget || Player->GetTimeline() != MannequinTimeline))
+	if (!bRequireMonocle && Player->GetTimeline() != MannequinTimeline)
 		return EMannequinSight::WrongTimeline;
 	const UCameraComponent* Camera = Player->GetFirstPersonCameraComponent();
 	const USceneCaptureComponent2D* Capture = nullptr;
@@ -854,6 +974,7 @@ bool AMannequinDemon::FindDoorApproachLocation(const FHitResult& DoorHit, FVecto
 
 bool AMannequinDemon::StartMove(const FVector& Destination, EMannequinState NewState)
 {
+	if (!HasEnoughAggressionToMove()) return false;
 	AAIController* AI = Cast<AAIController>(GetController());
 	if (!AI) return false;
 	GetCharacterMovement()->SetMovementMode(MOVE_Walking);
@@ -886,9 +1007,17 @@ void AMannequinDemon::StopMotion()
 void AMannequinDemon::SetState(EMannequinState NewState, bool bEmitMoment)
 {
 	if (!HasAuthority() || State == NewState) return;
+	if (State == EMannequinState::SubmissiveToBabai && NewState != EMannequinState::SubmissiveToBabai)
+	{
+		if (OfferStartedAt >= 0.0f) OfferStartedAt += GetWorld()->GetTimeSeconds() - FearStartedAt;
+		FearPlayback.bActive = false;
+		FearPlayback.bPaused = true;
+	}
 	State = NewState;
 	ApplyPhysicalState();
+	OnRep_FearPlayback();
 	OnStateSnapshotApplied(State);
+	UpdateFearPresentation(); // Authored snapshot hook may still write bPauseAnims.
 	RefreshLocalPresentation();
 	if (bEmitMoment && NewState != EMannequinState::Repelled && NewState != EMannequinState::Dormant
 		&& NewState != EMannequinState::Disabled) MulticastMoment(NewState, nullptr);
@@ -1181,6 +1310,20 @@ void AMannequinDemon::Evaluate()
 	if (!HasAuthority()) return;
 	if (bMannequinGameOver) return;
 	const float Now = GetWorld()->GetTimeSeconds();
+	if (!Director.IsValid() && Now >= NextDirectorLookupAt)
+	{
+		Director = AScareDirector::GetHuntDirector(this);
+		if (Director.IsValid())
+			Director->OnHuntStateChanged.AddUniqueDynamic(this, &AMannequinDemon::HandleHuntStateChanged);
+		NextDirectorLookupAt = Now + 1.0f;
+	}
+	if (Director.IsValid() && IsBabaiDangerous(Director->GetHuntState())) EnterBabaiSubmissive();
+	if (State == EMannequinState::SubmissiveToBabai)
+	{
+		// A destroyed Director cannot leave an immortal movement lock behind.
+		if (!Director.IsValid()) ResumeAfterBabai();
+		return;
+	}
 	if (bDebugEnabled)
 	{
 		DrawDebugString(GetWorld(), GetActorLocation() + FVector(0, 0, 120),
@@ -1234,12 +1377,32 @@ void AMannequinDemon::Evaluate()
 	bTargetObserved = NewFuture == EMannequinSight::Visible;
 	bPartnerObservingThroughMonocle = NewPast == EMannequinSight::Visible;
 	if (bTargetObserved || bPartnerObservingThroughMonocle) LastObservedAt = Now;
+	if (!HasEnoughAggressionToMove())
+	{
+		if (State == EMannequinState::GrabWarning || State == EMannequinState::Grab)
+		{
+			MulticastSpecialEvent(1);
+			GetWorldTimerManager().ClearTimer(StateTimer);
+		}
+		if (State != EMannequinState::Spawned && State != EMannequinState::Repelled)
+			SetState(EMannequinState::Spawned, false);
+		StopMotion();
+		BlockingDoor = nullptr;
+		NextMoodPathAt = 0.0f;
+		return;
+	}
 	EvaluateMood(Now);
+}
+
+bool AMannequinDemon::HasEnoughAggressionToMove() const
+{
+	return HasAuthority() && Director.IsValid()
+		&& Director->GetThreat() > FMath::Max(0.0f, AggressionToMoveThreshold);
 }
 
 void AMannequinDemon::EnterWarning()
 {
-	if (!HasAuthority() || !IsValid(CurrentTarget)) return;
+	if (!HasEnoughAggressionToMove() || !IsValid(CurrentTarget)) return;
 	const FVector TargetToDemon = (GetActorLocation() - CurrentTarget->GetActorLocation()).GetSafeNormal2D();
 	if (FVector::Dist2D(GetActorLocation(), CurrentTarget->GetActorLocation())
 		> GetCloseApproachCenterDistance() + 20.0f
@@ -1258,7 +1421,7 @@ void AMannequinDemon::EnterWarning()
 
 void AMannequinDemon::BeginFinalGrabWindow()
 {
-	if (!HasAuthority() || State != EMannequinState::GrabWarning) return;
+	if (!HasEnoughAggressionToMove() || State != EMannequinState::GrabWarning) return;
 	WarningStartedAt = GetWorld()->GetTimeSeconds();
 	WarningEndsAt = WarningStartedAt + RescueWindowDuration;
 	SetState(EMannequinState::Grab);
@@ -1278,7 +1441,7 @@ void AMannequinDemon::Repel(bool bRescue)
 
 void AMannequinDemon::CompleteGrab()
 {
-	if (!HasAuthority() || State != EMannequinState::Grab) return;
+	if (!HasEnoughAggressionToMove() || State != EMannequinState::Grab) return;
 	AHronoCharacter* Victim = CurrentTarget;
 	if (IsEligibleTarget(Victim) && Victim->GetTimeline() == MannequinTimeline)
 	{
@@ -1347,7 +1510,8 @@ void AMannequinDemon::EndContainment()
 
 bool AMannequinDemon::IsBabaiDangerous(EGhostHuntState HuntState) const
 {
-	return HuntState == EGhostHuntState::Manifestation || HuntState == EGhostHuntState::Searching
+	return HuntState == EGhostHuntState::Anticipation
+		|| HuntState == EGhostHuntState::Manifestation || HuntState == EGhostHuntState::Searching
 		|| HuntState == EGhostHuntState::Chasing || HuntState == EGhostHuntState::Ending;
 }
 
@@ -1365,8 +1529,20 @@ void AMannequinDemon::HandleHuntStateChanged(EGhostHuntState OldState, EGhostHun
 
 void AMannequinDemon::EnterBabaiSubmissive()
 {
-	if (!HasAuthority() || State == EMannequinState::Dormant || State == EMannequinState::Disabled
-		|| State == EMannequinState::SubmissiveToBabai) return;
+	if (!HasAuthority() || bMannequinGameOver || State == EMannequinState::Dormant
+		|| State == EMannequinState::Disabled) return;
+	GetWorldTimerManager().ClearTimer(BabaiTimer);
+	const bool bHoldingPose = Director.IsValid() && Director->GetHuntState() != EGhostHuntState::Anticipation;
+	if (State == EMannequinState::SubmissiveToBabai)
+	{
+		if (bHoldingPose && !FearPlayback.bHoldingPose)
+		{
+			FearPlayback.bHoldingPose = true;
+			OnRep_FearPlayback();
+			ForceNetUpdate();
+		}
+		return;
+	}
 	bContainmentWasInterruptedByBabai = State == EMannequinState::Contained;
 	if (State == EMannequinState::GrabWarning || State == EMannequinState::Grab)
 		MulticastSpecialEvent(1);
@@ -1374,6 +1550,15 @@ void AMannequinDemon::EnterBabaiSubmissive()
 	GetWorldTimerManager().ClearTimer(StateTimer);
 	GetWorldTimerManager().ClearTimer(ContainmentWarningTimer);
 	GetWorldTimerManager().ClearTimer(BabaiTimer);
+	FearStartedAt = GetWorld()->GetTimeSeconds();
+	++FearPlayback.Serial;
+	FearPlayback.bActive = true;
+	FearPlayback.Elapsed = 0.0f;
+	FearPlayback.ServerTime = FearStartedAt;
+	FearPlayback.Location = GetActorLocation();
+	FearPlayback.Rotation = GetActorRotation();
+	FearPlayback.bPaused = false;
+	FearPlayback.bHoldingPose = bHoldingPose;
 	SetState(EMannequinState::SubmissiveToBabai);
 }
 

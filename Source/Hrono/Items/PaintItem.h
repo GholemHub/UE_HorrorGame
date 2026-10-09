@@ -8,22 +8,23 @@ class AHronoCharacter;
 class UNiagaraComponent;
 class UStaticMeshComponent;
 
-/** The single visual clue currently exposed by a painting. */
+/** Exactly one capture-only visual clue can be active on a painting. */
 UENUM(BlueprintType)
 enum class EPaintAnomalyType : uint8
 {
 	None UMETA(DisplayName = "None"),
 	Eyes UMETA(DisplayName = "Watching Eyes"),
-	Tentacles UMETA(DisplayName = "Tentacles")
+	Tentacles UMETA(DisplayName = "Tentacles"),
+	TextureCube UMETA(DisplayName = "Texture Cube")
 };
 
 /**
  * Native replacement for BP_Paint_Item's gameplay graph.
  *
  * The frame remains an ordinary ABase_Item mesh. A painting can expose exactly
- * one anomaly at a time: either two eyes which follow the local viewer, or a
- * Niagara tentacle effect. ARoom assigns the replicated anomaly when it applies
- * its painting-evidence pattern.
+ * one anomaly at a time: eyes, a Niagara tentacle effect, or a capture-only
+ * canvas for a cubemap material. ARoom assigns the replicated anomaly when it
+ * applies its painting-evidence pattern.
  */
 UCLASS(BlueprintType, Blueprintable)
 class HRONO_API APaintItem : public ABase_Item
@@ -55,6 +56,10 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Painting|Components")
 	TObjectPtr<UNiagaraComponent> TentacleEffect;
 
+	/** Position/scale this plane over the canvas in each painting Blueprint. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Painting|Components")
+	TObjectPtr<UStaticMeshComponent> CubeAnomalyMesh;
+
 	/** Zero follows the viewer immediately, matching the old Blueprint. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Painting|Eyes",
 		meta = (ClampMin = "0.0", UIMin = "0.0"))
@@ -73,6 +78,7 @@ protected:
 
 private:
 	void ApplyAnomalyVisibility();
+	void HideCubeFromOtherSceneCaptures();
 	AHronoCharacter* FindLocalViewer() const;
 	void RotateEyeToward(UStaticMeshComponent* Eye, const FQuat& AuthoredRotationOffset,
 		const FVector& TargetLocation, float DeltaSeconds) const;
@@ -92,4 +98,5 @@ private:
 	 * burst again. Cleared only when the effect is deliberately deactivated.
 	 */
 	bool bTentacleActivationIssued = false;
+
 };

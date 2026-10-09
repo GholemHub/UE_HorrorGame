@@ -282,6 +282,15 @@ void ARoom::ConfigurePaintingEvidence(int32 PatternIndex, int32 PatternSeed)
 	ForceNetUpdate();
 }
 
+void ARoom::SetPaintingAnomalyAvailability(bool bAllowEyes, bool bAllowTentacles)
+{
+	if (HasAuthority())
+	{
+		bPaintingEyesAllowed = bAllowEyes;
+		bPaintingTentaclesAllowed = bAllowTentacles;
+	}
+}
+
 TArray<AActor*> ARoom::GetSelectedCursedPaintings() const
 {
 	TArray<AActor*> Result;
@@ -687,6 +696,8 @@ void ARoom::ApplyPaintingEvidencePattern()
 
 	TArray<ABase_Item*> PastPaintings;
 	TArray<ABase_Item*> FuturePaintings;
+	TArray<TPair<APaintItem*, APaintItem*>> ValidPairs;
+	TSet<APaintItem*> UsedPairPaintings;
 	for (AActor* PaintingActor : Paintings)
 	{
 		ABase_Item* Painting = Cast<ABase_Item>(PaintingActor);
@@ -717,6 +728,35 @@ void ARoom::ApplyPaintingEvidencePattern()
 			FuturePaintings.Add(Painting);
 		}
 	}
+	for (int32 PairIndex = 0; PairIndex < PaintingPairs.Num(); ++PairIndex)
+	{
+		const FRoomPaintingPair& Pair = PaintingPairs[PairIndex];
+		APaintItem* Past = Cast<APaintItem>(Pair.Past);
+		APaintItem* Future = Cast<APaintItem>(Pair.Future);
+		// Clear every referenced native painting, including entries in malformed pairs.
+		if (IsValid(Past))
+		{
+			Past->SetPaintAnomalyType(EPaintAnomalyType::None);
+		}
+		if (IsValid(Future))
+		{
+			Future->SetPaintAnomalyType(EPaintAnomalyType::None);
+		}
+		if (!IsValid(Past) || !IsValid(Future) || Past == Future
+			|| Past->ItemTimeline != EItemTimeline::Past
+			|| Future->ItemTimeline != EItemTimeline::Future
+			|| UsedPairPaintings.Contains(Past)
+			|| UsedPairPaintings.Contains(Future))
+		{
+			UE_LOG(LogRoom, Warning,
+				TEXT("[%s] PaintingPairs[%d] must contain unique APaintItem actors in Past and Future timelines."),
+				*GetName(), PairIndex);
+			continue;
+		}
+		ValidPairs.Emplace(Past, Future);
+		UsedPairPaintings.Add(Past);
+		UsedPairPaintings.Add(Future);
+	}
 
 	PaintingEvidenceState.SelectedPaintings.Reset();
 	// Consume a real deterministic random stream instead of taking a fixed hash
@@ -734,10 +774,40 @@ void ARoom::ApplyPaintingEvidencePattern()
 		return Candidates[PaintingRandom.RandRange(0, Candidates.Num() - 1)];
 	};
 
+	TArray<EPaintAnomalyType> AllowedTypes;
+	if (bPaintingEyesAllowed)
+	{
+		AllowedTypes.Add(EPaintAnomalyType::Eyes);
+	}
+	if (bPaintingTentaclesAllowed)
+	{
+		AllowedTypes.Add(EPaintAnomalyType::Tentacles);
+	}
 	if (bIsCursed)
 	{
-		// Exactly one random Past and one random Future entry are chosen from the
-		// BP_Room -> Contents -> Paintings list on every game configuration.
+		AllowedTypes.Add(EPaintAnomalyType::TextureCube);
+	}
+	const bool bUsePairs = !PaintingPairs.IsEmpty();
+	const bool bSelectEvidence = !AllowedTypes.IsEmpty()
+		&& (bIsCursed || RoomClockPatterns::PositiveModulo(
+			PaintingEvidenceState.PatternIndex, 3) != 0);
+	if (bUsePairs && bSelectEvidence)
+	{
+		if (!ValidPairs.IsEmpty())
+		{
+			const TPair<APaintItem*, APaintItem*>& Pair =
+				ValidPairs[PaintingRandom.RandRange(0, ValidPairs.Num() - 1)];
+			PaintingEvidenceState.SelectedPaintings.Add(Pair.Key);
+			PaintingEvidenceState.SelectedPaintings.Add(Pair.Value);
+		}
+		else
+		{
+			UE_LOG(LogRoom, Warning, TEXT("[%s] No valid PaintingPairs; no painting clue selected."), *GetName());
+		}
+	}
+	else if (!bUsePairs && bIsCursed)
+	{
+		// Compatibility with rooms whose flat Paintings list has not been migrated.
 		if (ABase_Item* PastPainting = SelectRandomPainting(PastPaintings))
 		{
 			PaintingEvidenceState.SelectedPaintings.Add(PastPainting);
@@ -754,7 +824,7 @@ void ARoom::ApplyPaintingEvidencePattern()
 				*GetName(), PastPaintings.Num(), FuturePaintings.Num());
 		}
 	}
-	else
+	else if (!bUsePairs && bSelectEvidence)
 	{
 		const int32 OrdinaryResult = RoomClockPatterns::PositiveModulo(
 			PaintingEvidenceState.PatternIndex,
@@ -780,12 +850,11 @@ void ARoom::ApplyPaintingEvidencePattern()
 		DispatchCursedPaintingEvent();
 	}
 
-	// A cursed room receives two selected paintings (Past + Future), while an
-	// ordinary room receives at most one. Alternate the two clue types in the
-	// cursed pair, but never enable both clues on the same actor.
-	const bool bFirstSelectedUsesEyes = RoomClockPatterns::PositiveModulo(
-		PaintingEvidenceState.PatternSeed,
-		2) == 0;
+	// One roll per selected pair ensures both timelines show the same anomaly.
+	const EPaintAnomalyType SharedClue = !PaintingEvidenceState.SelectedPaintings.IsEmpty()
+		&& !AllowedTypes.IsEmpty()
+		? AllowedTypes[PaintingRandom.RandRange(0, AllowedTypes.Num() - 1)]
+		: EPaintAnomalyType::None;
 	for (int32 SelectedIndex = 0;
 		SelectedIndex < PaintingEvidenceState.SelectedPaintings.Num();
 		++SelectedIndex)
@@ -800,13 +869,7 @@ void ARoom::ApplyPaintingEvidencePattern()
 			continue;
 		}
 
-		const bool bUseEyes = bIsCursed
-			? (SelectedIndex % 2 == 0) == bFirstSelectedUsesEyes
-			: RoomClockPatterns::PositiveModulo(
-				PaintingEvidenceState.PatternSeed + SelectedIndex,
-				2) == 0;
-		NativePainting->SetPaintAnomalyType(
-			bUseEyes ? EPaintAnomalyType::Eyes : EPaintAnomalyType::Tentacles);
+		NativePainting->SetPaintAnomalyType(SharedClue);
 	}
 
 	ForceNetUpdate();
@@ -818,7 +881,7 @@ void ARoom::ApplyPaintingEvidencePattern()
 	}
 	UE_LOG(LogRoom, Log,
 		TEXT("[%s] Painting evidence selected: Cursed=%s Count=%d Pattern=%d Seed=%d "
-			"Candidates(Past=%d Future=%d) Selected=[%s]."),
+			"Candidates(Past=%d Future=%d Pairs=%d) Clue=%d Selected=[%s]."),
 		*GetName(),
 		bIsCursed ? TEXT("true") : TEXT("false"),
 		PaintingEvidenceState.SelectedPaintings.Num(),
@@ -826,6 +889,8 @@ void ARoom::ApplyPaintingEvidencePattern()
 		PaintingEvidenceState.PatternSeed,
 		PastPaintings.Num(),
 		FuturePaintings.Num(),
+		ValidPairs.Num(),
+		static_cast<int32>(SharedClue),
 		*FString::Join(SelectedPaintingNames, TEXT(", ")));
 }
 

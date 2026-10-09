@@ -81,8 +81,11 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Chair")
 	USceneComponent* StandUpPoint;
 	
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Chair")
+	/** Server-owned table ritual state, available to late joiners. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Replicated, Category = "Chair")
 	bool IsRitualStarted = false;
+
+	void SetRitualStarted(bool bStarted);
 
 
 

@@ -1,6 +1,7 @@
 #include "Items/PaintItem.h"
 
 #include "Camera/CameraComponent.h"
+#include "Components/SceneCaptureComponent2D.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
@@ -9,6 +10,7 @@
 #include "NiagaraSystem.h"
 #include "Net/UnrealNetwork.h"
 #include "UObject/ConstructorHelpers.h"
+#include "UObject/UObjectIterator.h"
 
 APaintItem::APaintItem()
 {
@@ -65,6 +67,26 @@ APaintItem::APaintItem()
 	{
 		TentacleEffect->SetAsset(TentacleSystem.Object);
 	}
+
+	CubeAnomalyMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("CubeAnomalyMesh"));
+	CubeAnomalyMesh->SetupAttachment(ItemMesh);
+	CubeAnomalyMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	CubeAnomalyMesh->SetGenerateOverlapEvents(false);
+	CubeAnomalyMesh->SetCanEverAffectNavigation(false);
+	CubeAnomalyMesh->SetCastShadow(false);
+	CubeAnomalyMesh->SetVisibleInSceneCaptureOnly(true);
+	CubeAnomalyMesh->SetVisibility(false);
+	// The six painting Blueprints can adjust this plane to their canvas without
+	// changing the collision-bearing frame or its ordinary material slots.
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> CanvasPlane(
+		TEXT("/Engine/BasicShapes/Plane.Plane"));
+	if (CanvasPlane.Succeeded())
+	{
+		CubeAnomalyMesh->SetStaticMesh(CanvasPlane.Object);
+	}
+	CubeAnomalyMesh->SetRelativeLocation(FVector(1.0, 0.0, 0.0));
+	CubeAnomalyMesh->SetRelativeRotation(FRotator(90.0, 0.0, 0.0));
+	CubeAnomalyMesh->SetRelativeScale3D(FVector(0.6, 0.8, 1.0));
 }
 
 void APaintItem::BeginPlay()
@@ -76,6 +98,9 @@ void APaintItem::BeginPlay()
 	// world-space tracking rotations. Locations are never overwritten at runtime.
 	LeftEyeAuthoredRotationOffset = LeftEyeMesh->GetRelativeRotation().Quaternion();
 	RightEyeAuthoredRotationOffset = RightEyeMesh->GetRelativeRotation().Quaternion();
+	// Never allow an authored Blueprint default to reveal the cube canvas to the
+	// ordinary player camera. Visibility still depends on the replicated enum.
+	CubeAnomalyMesh->SetVisibleInSceneCaptureOnly(true);
 	ApplyAnomalyVisibility();
 }
 
@@ -159,6 +184,8 @@ void APaintItem::ApplyAnomalyVisibility()
 	const bool bShowEyes = bVisibleInTimeline && PaintAnomalyType == EPaintAnomalyType::Eyes;
 	const bool bShowTentacles = bVisibleInTimeline
 		&& PaintAnomalyType == EPaintAnomalyType::Tentacles;
+	const bool bShowCube = bVisibleInTimeline
+		&& PaintAnomalyType == EPaintAnomalyType::TextureCube;
 
 	for (UStaticMeshComponent* Eye : {LeftEyeMesh.Get(), RightEyeMesh.Get()})
 	{
@@ -190,8 +217,40 @@ void APaintItem::ApplyAnomalyVisibility()
 			bTentacleActivationIssued = false;
 		}
 	}
+	if (IsValid(CubeAnomalyMesh))
+	{
+		CubeAnomalyMesh->SetVisibility(bShowCube, false);
+		CubeAnomalyMesh->SetHiddenInGame(false);
+		if (bShowCube)
+		{
+			HideCubeFromOtherSceneCaptures();
+		}
+	}
 
 	SetActorTickEnabled(bShowEyes && GetNetMode() != NM_DedicatedServer);
+}
+
+void APaintItem::HideCubeFromOtherSceneCaptures()
+{
+	if (!IsValid(CubeAnomalyMesh) || GetNetMode() == NM_DedicatedServer) return;
+	for (TObjectIterator<USceneCaptureComponent2D> It; It; ++It)
+	{
+		USceneCaptureComponent2D* Capture = *It;
+		if (!IsValid(Capture) || Capture->GetWorld() != GetWorld())
+		{
+			continue;
+		}
+		const ABase_Item* CaptureItem = Cast<ABase_Item>(Capture->GetOwner());
+		const bool bIsMonocleCapture = IsValid(CaptureItem)
+			&& CaptureItem->bCanRepelMannequin
+			&& CaptureItem->bUseCenteredInteractionPoint;
+		if (!bIsMonocleCapture
+			&& !Capture->HiddenComponents.Contains(
+				TWeakObjectPtr<UPrimitiveComponent>(CubeAnomalyMesh)))
+		{
+			Capture->HideComponent(CubeAnomalyMesh);
+		}
+	}
 }
 
 AHronoCharacter* APaintItem::FindLocalViewer() const

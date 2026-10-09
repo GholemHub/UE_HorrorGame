@@ -15,6 +15,19 @@ class UGravityAnomalyComponent;
 class UPrimitiveComponent;
 class USceneComponent;
 
+/** One physical painting represented in both timelines. Both receive one clue type. */
+USTRUCT(BlueprintType)
+struct HRONO_API FRoomPaintingPair
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Room|Paintings")
+	TObjectPtr<AActor> Past = nullptr;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Room|Paintings")
+	TObjectPtr<AActor> Future = nullptr;
+};
+
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
 	FRoomCursedStateChangedSignature,
 	ARoom*, Room,
@@ -90,6 +103,9 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Room|Paintings")
 	void ConfigurePaintingEvidence(int32 PatternIndex, int32 PatternSeed);
 
+	/** Server-only options from Scare Director; call before ConfigurePaintingEvidence. */
+	void SetPaintingAnomalyAvailability(bool bAllowEyes, bool bAllowTentacles);
+
 	/** Returns the most recent replicated selection as a Blueprint output array. */
 	UFUNCTION(BlueprintPure, Category = "Room|Paintings")
 	TArray<AActor*> GetSelectedCursedPaintings() const;
@@ -135,12 +151,17 @@ public:
 	TObjectPtr<UGravityAnomalyComponent> GravityAnomaly;
 
 	/**
-	 * Placed painting actors. Evidence selection reads ABase_Item::ItemTimeline;
-	 * native anomaly visibility additionally requires APaintItem.
+	 * Legacy flat list retained for existing placed rooms. New rooms should use
+	 * PaintingPairs so Past and Future cannot be selected independently.
 	 */
 	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category = "Room|Contents",
-		meta = (DisplayName = "Paintings"))
+		meta = (DisplayName = "Paintings (Legacy)"))
 	TArray<TObjectPtr<AActor>> Paintings;
+
+	/** Explicit Past/Future pairs. When nonempty, these replace the legacy flat Paintings list. */
+	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category = "Room|Contents",
+		meta = (DisplayName = "Painting Pairs"))
+	TArray<FRoomPaintingPair> PaintingPairs;
 
 	/**
 	 * Placed clock actors that belong to this room.
@@ -276,4 +297,6 @@ private:
 	void ApplyPaintingEvidencePattern();
 	void DispatchCursedPaintingEvent();
 	void DispatchCursedStateChanged();
+	bool bPaintingEyesAllowed = true;
+	bool bPaintingTentaclesAllowed = true;
 };

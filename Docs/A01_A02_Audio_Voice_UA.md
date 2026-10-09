@@ -2,6 +2,10 @@
 
 Дата: 2026-09-27. Продовження аудиту після L01.
 
+Оновлення 2026-10-07: описаний нижче `SA_Voip` був історичним налаштуванням.
+Чинний `HE_CharacterHrono1` використовує 2D VOIP без attachment/attenuation
+для V/B; див. [поточний тест рації](RadioVoice_Test_UA.md).
+
 ## Аудіоналаштування
 
 `UHronoAudioSettingsSubsystem` належить GameInstance. Він читає наявний SaveGame `HronoMenuSettings` на старті, навіть якщо gameplay-мапу відкрито без меню. UI передає йому preview-значення sliders; Apply зберігає той самий формат SaveGame, а Cancel або закриття незастосованого preview повертає початкові значення. Mouse sensitivity, FOV і Show FPS збережені у старому slot разом з аудіопараметрами.

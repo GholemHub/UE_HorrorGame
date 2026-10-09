@@ -7,7 +7,7 @@
 namespace HronoSessionPolicy
 {
 	inline constexpr int32 MaxPlayers = 2;
-	inline constexpr int32 Protocol = 18;
+	inline constexpr int32 Protocol = 25;
 	inline constexpr const TCHAR* GameplayMap = TEXT("/Game/_Alex/DemoMap1");
 	inline const FName GameKey(TEXT("HRONO_GAME"));
 	inline const FName ProtocolKey(TEXT("HRONO_PROTOCOL"));

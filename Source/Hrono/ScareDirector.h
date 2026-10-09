@@ -108,6 +108,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Hunt")
 	EGhostHuntState GetHuntState() const { return CurrentHuntState; }
 
+	/** Mandatory lead for real hunts, including triggered hunts that skip omens. */
+	static constexpr float BabaiAnticipationSeconds = 5.0f;
+
 	UFUNCTION(BlueprintPure, Category = "Hunt")
 	EGhostHuntType GetHuntType() const { return CurrentHuntType; }
 
@@ -436,6 +439,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hunt|Room|Paintings")
 	bool bConfigureRoomPaintingEvidence = true;
 
+	/** Exclude eyes from the room's random painting clues. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hunt|Room|Paintings")
+	bool bAllowPaintingEyes = true;
+
+	/** Exclude tentacles from the room's random painting clues. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hunt|Room|Paintings")
+	bool bAllowPaintingTentacles = true;
+
 	// ---- Development-only controls (all are no-ops in Shipping) -----------------------------
 
 	/** Shows a timer-refreshed Print String panel. Numeric Threat is visible only on authority. */
@@ -560,6 +571,7 @@ private:
 	void ResolveWarningPhase();
 	void ResolveFalseAlarm();
 	void StartActualHunt();
+	void CompleteHuntAnticipation();
 	void EnterSearchingState();
 	void BeginCooldown();
 	void FinishCooldown();
@@ -620,6 +632,7 @@ private:
 	FTimerHandle OmenTimerHandle;
 	FTimerHandle PostOmenTimerHandle;
 	FTimerHandle ManifestationTimerHandle;
+	FTimerHandle AnticipationTimerHandle;
 	FTimerHandle HuntDurationTimerHandle;
 	FTimerHandle EndingTimerHandle;
 	FTimerHandle CooldownTimerHandle;
