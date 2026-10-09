@@ -4,7 +4,7 @@
 
 ## Виконання та джерела правди
 
-`Hrono.uproject` → `Source/Hrono` → `/Game/FirstPerson/Blueprints/BP_FirstPersonGameMode` → `/Game/_Alex/HE_CharacterHrono1`. Меню `/Game/HorrorEngine/Maps/MenuLevel`; основна карта `/Game/_Alex/DemoMap1`. Режим — один local player на процес, listen-server плюс один remote client. `HronoSessionPolicy::MaxPlayers=2`, `Protocol=24`; після зміни мережевого gameplay стану старий і новий білди не мають входити в одну сесію. Процес Steam create/search/join і admission описано в [L07](L07_Sessions_UA.md).
+`Hrono.uproject` → `Source/Hrono` → `/Game/FirstPerson/Blueprints/BP_FirstPersonGameMode` → `/Game/_Alex/HE_CharacterHrono1`. Меню `/Game/HorrorEngine/Maps/MenuLevel`; основна карта `/Game/_Alex/DemoMap1`. Режим — один local player на процес, listen-server плюс один remote client. `HronoSessionPolicy::MaxPlayers=2`, `Protocol=25`; після зміни мережевого gameplay стану старий і новий білди не мають входити в одну сесію. Процес Steam create/search/join і admission описано в [L07](L07_Sessions_UA.md).
 
 | Система | Авторитетний власник | Реплікований стан / мережевий вхід | Локальне представлення та cleanup |
 | --- | --- | --- | --- |
@@ -25,7 +25,7 @@
 
 Клавіша `1` запускає [локальний preview MI_Emboss](EmbossTransitionPreview_UA.md): `Emboss Intensity` плавно доходить до 100 і через 1,5 с миттєво скидає імпульс. Такий самий імпульс сервер посилає власнику після справжньої зміни timeline (ритуал або Babai), але не після дубльованого запиту чи при late join. `ADrag_Item` може незалежно додати локальну інтенсивність за близькістю до дверей. Ефективна сила — максимум із двох джерел; близькість і клавіша не змінюють timeline.
 
-`APaintItem` є world-only картиною: сервер ніколи не переводить її до Held-state, а локальний pickup focus не пропонує взяти її. `ARoom` у проклятій кімнаті обирає один із трьох типів аномалії (очі, щупальця, TextureCube) за серверним seed; звичайна кімната зберігає очі/щупальця як хибні підказки. Enum реплікується, а локальна видимість у своєму timeline застосовується до одного візуального компонента. Кубічне полотно є capture-only mesh без колізії й тіні; його матеріал задають `BP_PaintItem*`. [Контракт і ручний тест](PaintCubeAnomaly_UA.md).
+`APaintItem` є world-only картиною: сервер ніколи не переводить її до Held-state, а локальний pickup focus не пропонує взяти її. `ARoom::PaintingPairs` задає явні Past/Future пари на placed `BP_Rooms`; сервер обирає одну цілу пару за seed і призначає обом однаковий тип аномалії. Старий плоский `Paintings` використовується тільки якщо пари не задані. Проклята кімната може обрати очі, щупальця або TextureCube; `AScareDirector::bAllowPaintingEyes`/`bAllowPaintingTentacles` виключають відповідні типи. Звичайна кімната не обирає TextureCube; якщо обидва прапорці вимкнені, хибної підказки немає. Enum реплікується, а локальна видимість у своєму timeline застосовується до одного візуального компонента. Кубічне полотно є capture-only mesh без колізії й тіні; його матеріал задають `BP_PaintItem*`. [Контракт і ручний тест](PaintCubeAnomaly_UA.md).
 
 ## Інваріанти для рев’ю RPC
 

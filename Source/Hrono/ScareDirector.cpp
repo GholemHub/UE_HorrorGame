@@ -505,22 +505,27 @@ void AScareDirector::ConfigureRoomPaintingEvidence(const TArray<ARoom*>& Rooms)
 	const int32 FirstOrdinaryPattern = Random.RandRange(0, 2);
 	int32 OrdinaryRoomIndex = 0;
 
-	for (ARoom* Room : Rooms)
+	const auto ConfigureOneRoom = [this](ARoom* Room, int32 PatternIndex)
 	{
-		if (!IsValid(Room))
-		{
-			continue;
-		}
-
-		const bool bCursedRoom = Room == CurrentCursedRoom;
-		const int32 PatternIndex = bCursedRoom
-			? 0
-			: FirstOrdinaryPattern + OrdinaryRoomIndex++;
 		uint32 RoomSeedHash = HashCombine(GetTypeHash(PaintingPatternSeed), GetTypeHash(Room->GetPathName()));
 		RoomSeedHash = HashCombine(RoomSeedHash, GetTypeHash(PatternIndex));
+		Room->SetPaintingAnomalyAvailability(bAllowPaintingEyes, bAllowPaintingTentacles);
 		Room->ConfigurePaintingEvidence(
 			PatternIndex,
 			RoomSeedHash == 0 ? 1 : static_cast<int32>(RoomSeedHash));
+	};
+	for (ARoom* Room : Rooms)
+	{
+		if (IsValid(Room) && Room != CurrentCursedRoom)
+		{
+			ConfigureOneRoom(Room, FirstOrdinaryPattern + OrdinaryRoomIndex++);
+		}
+	}
+	// Some legacy placed rooms reference the same painting actor. Apply the actual
+	// cursed room last so an ordinary room cannot clear its replicated clue.
+	if (IsValid(CurrentCursedRoom.Get()))
+	{
+		ConfigureOneRoom(CurrentCursedRoom.Get(), 0);
 	}
 
 	ForceNetUpdate();

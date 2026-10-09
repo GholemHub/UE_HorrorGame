@@ -12,6 +12,7 @@ pentagrams = [a for a in actors if isinstance(a, unreal.RunePentagram)]
 transfers = [a for a in actors if isinstance(a, unreal.TimelineTransferItem)]
 managers = [a for a in actors if isinstance(a, unreal.RuneSpawnManager)]
 door_gates = [a for a in actors if isinstance(a, unreal.DoorLockTrigger)]
+rooms = [a for a in actors if isinstance(a, unreal.Room)]
 issues = []
 records = []
 
@@ -71,9 +72,39 @@ for actor in door_gates:
                     'death_trigger': death_trigger,
                     'doors': [door.get_name() for door in actor.get_editor_property('doors') if door]})
 
+paired_owners = {}
+for room in rooms:
+    pairs = list(room.get_editor_property('painting_pairs'))
+    if not pairs:
+        continue  # Legacy flat lists remain readable until manually migrated.
+    used_in_room = set()
+    for index, pair in enumerate(pairs):
+        past = pair.get_editor_property('past')
+        future = pair.get_editor_property('future')
+        valid = (isinstance(past, unreal.PaintItem)
+                 and isinstance(future, unreal.PaintItem)
+                 and past != future
+                 and 'PAST' in str(past.get_editor_property('item_timeline')).upper()
+                 and 'FUTURE' in str(future.get_editor_property('item_timeline')).upper())
+        if not valid:
+            issues.append(f'{room.get_name()}: invalid PaintingPairs[{index}]')
+            continue
+        for painting in (past, future):
+            if painting in used_in_room:
+                issues.append(f'{room.get_name()}: painting {painting.get_name()} used twice')
+            used_in_room.add(painting)
+            other_room = paired_owners.setdefault(painting, room)
+            if other_room != room:
+                issues.append(f'{painting.get_name()}: painting paired in both '
+                              f'{other_room.get_name()} and {room.get_name()}')
+        records.append({'actor': room.get_name(), 'kind': 'painting_pair',
+                        'past': past.get_name(), 'future': future.get_name()})
+
 report = {'map': '/Game/_Alex/DemoMap1', 'actor_count': len(actors),
           'pentagrams': len(pentagrams), 'transfers': len(transfers),
           'rune_spawn_managers': len(managers), 'door_gates': len(door_gates),
+          'rooms': len(rooms), 'painting_pairs': len([r for r in records
+                                                     if r['kind'] == 'painting_pair']),
           'records': records, 'issues': issues,
           'scope': 'Placed actor data only; no PIE, runtime spawn or cook.'}
 out = Path(unreal.Paths.project_saved_dir())/'Tests/Optimization/map_validation.json'

@@ -439,6 +439,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hunt|Room|Paintings")
 	bool bConfigureRoomPaintingEvidence = true;
 
+	/** Exclude eyes from the room's random painting clues. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hunt|Room|Paintings")
+	bool bAllowPaintingEyes = true;
+
+	/** Exclude tentacles from the room's random painting clues. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hunt|Room|Paintings")
+	bool bAllowPaintingTentacles = true;
+
 	// ---- Development-only controls (all are no-ops in Shipping) -----------------------------
 
 	/** Shows a timer-refreshed Print String panel. Numeric Threat is visible only on authority. */

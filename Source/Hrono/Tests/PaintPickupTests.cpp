@@ -139,50 +139,104 @@ bool FPaintAnomalySelectionTest::RunTest(const FString& Parameters)
 	ARoom* Room = World->SpawnActor<ARoom>();
 	APaintItem* Past = World->SpawnActor<APaintItem>();
 	APaintItem* Future = World->SpawnActor<APaintItem>();
+	APaintItem* PastAlternate = World->SpawnActor<APaintItem>();
+	APaintItem* FutureAlternate = World->SpawnActor<APaintItem>();
 	if (TestNotNull(TEXT("Test room"), Room)
 		&& TestNotNull(TEXT("Past painting"), Past)
-		&& TestNotNull(TEXT("Future painting"), Future))
+		&& TestNotNull(TEXT("Future painting"), Future)
+		&& TestNotNull(TEXT("Alternate Past painting"), PastAlternate)
+		&& TestNotNull(TEXT("Alternate Future painting"), FutureAlternate))
 	{
 		Past->ItemTimeline = EItemTimeline::Past;
 		Future->ItemTimeline = EItemTimeline::Future;
-		Room->Paintings = {Past, Future};
+		PastAlternate->ItemTimeline = EItemTimeline::Past;
+		FutureAlternate->ItemTimeline = EItemTimeline::Future;
+		FRoomPaintingPair FirstPair;
+		FirstPair.Past = Past;
+		FirstPair.Future = Future;
+		FRoomPaintingPair SecondPair;
+		SecondPair.Past = PastAlternate;
+		SecondPair.Future = FutureAlternate;
+		Room->PaintingPairs = {FirstPair, SecondPair};
 		Room->SetCursed(true);
 		TSet<EPaintAnomalyType> ObservedTypes;
+		TSet<int32> ObservedPairs;
 		for (int32 Seed = 1; Seed <= 24; ++Seed)
 		{
 			Room->ConfigurePaintingEvidence(0, Seed);
-			TestEqual(TEXT("Cursed room selects one painting per timeline"),
+			TestEqual(TEXT("Cursed room selects one complete pair"),
 				Room->GetSelectedCursedPaintings().Num(), 2);
-			const EPaintAnomalyType PastType = Past->GetPaintAnomalyType();
-			const EPaintAnomalyType FutureType = Future->GetPaintAnomalyType();
+			const TArray<AActor*> Selected = Room->GetSelectedCursedPaintings();
+			if (Selected.Num() != 2)
+			{
+				continue;
+			}
+			const int32 PairIndex = Selected[0] == Past ? 0 : 1;
+			ObservedPairs.Add(PairIndex);
+			TestTrue(TEXT("Selection cannot mix paintings from different pairs"),
+				(PairIndex == 0 && Selected[1] == Future)
+				|| (PairIndex == 1 && Selected[0] == PastAlternate
+					&& Selected[1] == FutureAlternate));
+			APaintItem* SelectedPast = CastChecked<APaintItem>(Selected[0]);
+			APaintItem* SelectedFuture = CastChecked<APaintItem>(Selected[1]);
+			const EPaintAnomalyType PastType = SelectedPast->GetPaintAnomalyType();
+			const EPaintAnomalyType FutureType = SelectedFuture->GetPaintAnomalyType();
 			TestTrue(TEXT("Past painting receives exactly one clue"),
 				PastType == EPaintAnomalyType::Eyes
 				|| PastType == EPaintAnomalyType::Tentacles
 				|| PastType == EPaintAnomalyType::TextureCube);
-			TestTrue(TEXT("Future painting receives exactly one clue"),
-				FutureType == EPaintAnomalyType::Eyes
-				|| FutureType == EPaintAnomalyType::Tentacles
-				|| FutureType == EPaintAnomalyType::TextureCube);
+			TestEqual(TEXT("Both halves of a pair have the same clue"), FutureType, PastType);
 			ObservedTypes.Add(PastType);
-			ObservedTypes.Add(FutureType);
 			Room->ConfigurePaintingEvidence(0, Seed);
-			TestEqual(TEXT("Same seed keeps Past clue stable"),
-				Past->GetPaintAnomalyType(), PastType);
-			TestEqual(TEXT("Same seed keeps Future clue stable"),
-				Future->GetPaintAnomalyType(), FutureType);
+			TestTrue(TEXT("Same seed keeps pair stable"),
+				Room->GetSelectedCursedPaintings() == Selected);
+			TestEqual(TEXT("Same seed keeps clue stable"),
+				SelectedPast->GetPaintAnomalyType(), PastType);
 		}
 		TestEqual(TEXT("Seeded selection covers all three clue types"),
 			ObservedTypes.Num(), 3);
+		TestEqual(TEXT("Seeded selection covers both pairs"), ObservedPairs.Num(), 2);
+		Room->SetPaintingAnomalyAvailability(false, false);
+		Room->ConfigurePaintingEvidence(0, 7);
+		TestEqual(TEXT("Only cubemap remains when eyes and tentacles are disabled"),
+			CastChecked<APaintItem>(Room->GetSelectedCursedPaintings()[0])->GetPaintAnomalyType(),
+			EPaintAnomalyType::TextureCube);
+		Room->SetPaintingAnomalyAvailability(true, false);
+		for (int32 Seed = 1; Seed <= 8; ++Seed)
+		{
+			Room->ConfigurePaintingEvidence(0, Seed);
+			TestTrue(TEXT("Tentacles are excluded"),
+				Past->GetPaintAnomalyType() != EPaintAnomalyType::Tentacles
+				&& Future->GetPaintAnomalyType() != EPaintAnomalyType::Tentacles
+				&& PastAlternate->GetPaintAnomalyType() != EPaintAnomalyType::Tentacles
+				&& FutureAlternate->GetPaintAnomalyType() != EPaintAnomalyType::Tentacles);
+		}
+		Room->SetPaintingAnomalyAvailability(true, true);
 		Room->SetCursed(false);
 		for (int32 Seed = 1; Seed <= 8; ++Seed)
 		{
 			Room->ConfigurePaintingEvidence(1, Seed);
-			TestEqual(TEXT("Ordinary room keeps one false-positive painting"),
-				Room->GetSelectedCursedPaintings().Num(), 1);
+			TestEqual(TEXT("Ordinary room keeps one false-positive pair"),
+				Room->GetSelectedCursedPaintings().Num(), 2);
 			TestTrue(TEXT("Ordinary room never gives the cube clue"),
 				Past->GetPaintAnomalyType() != EPaintAnomalyType::TextureCube
-				&& Future->GetPaintAnomalyType() != EPaintAnomalyType::TextureCube);
+				&& Future->GetPaintAnomalyType() != EPaintAnomalyType::TextureCube
+				&& PastAlternate->GetPaintAnomalyType() != EPaintAnomalyType::TextureCube
+				&& FutureAlternate->GetPaintAnomalyType() != EPaintAnomalyType::TextureCube);
 		}
+		Room->SetPaintingAnomalyAvailability(false, false);
+		Room->ConfigurePaintingEvidence(1, 5);
+		TestTrue(TEXT("Ordinary room has no disallowed false-positive clue"),
+			Room->GetSelectedCursedPaintings().IsEmpty());
+		Room->SetPaintingAnomalyAvailability(true, true);
+		Room->PaintingPairs.Reset();
+		Room->Paintings = {Past, Future};
+		Room->SetCursed(true);
+		Room->ConfigurePaintingEvidence(0, 11);
+		TestEqual(TEXT("Unmigrated flat painting list still selects both timelines"),
+			Room->GetSelectedCursedPaintings().Num(), 2);
+		TestEqual(TEXT("Legacy selected paintings also share one clue"),
+			Past->GetPaintAnomalyType(), Future->GetPaintAnomalyType());
 	}
 
 	World->EndPlay(EEndPlayReason::Quit);
